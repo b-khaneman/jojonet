@@ -1,4 +1,4 @@
-# JojoNet v1.1.0
+# JojoNet v1.2.0
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -6,16 +6,35 @@
 
 ---
 
+## آپدیت JojoNet (مهم)
+
+روی سرور:
+
+```bash
+sudo jojonet --check-update
+sudo jojonet --update
+```
+
+یا از منو → گزینه **13) Update JojoNet from GitHub**
+
+اجبار به نصب مجدد:
+```bash
+sudo jojonet --update --force
+```
+
+- کانفیگ‌های `/etc/jojonet/` پاک نمی‌شوند
+- بکاپ باینری قبلی: `/usr/local/bin/jojonet.bak.VERSION`
+
+---
+
 ## نصب (هر دو سرور)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
-sudo jojonet
-برای چک کردن ورژن اسکریپت : 
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.1.0`
+خروجی باید باشد: `jojonet 1.2.0`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران**.
 

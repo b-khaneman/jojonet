@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0
+- **Self-update** from GitHub: `sudo jojonet --update` / `--check-update` / menu 13
+- Keeps `/etc/jojonet` configs; backs up previous binary
+
 ## 1.1.0
 - Added **WireGuard** mode (`--wg`) — low latency / high stability
 - Added **Hysteria2** mode (`--hy2`) — high speed on filtered paths

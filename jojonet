@@ -12,9 +12,14 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.1.0"
+readonly JOJONET_VERSION="1.2.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
+JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
+JOJONET_GITHUB_REPO="${JOJONET_GITHUB_REPO:-jojonet}"
+JOJONET_GITHUB_BRANCH="${JOJONET_GITHUB_BRANCH:-main}"
+JOJONET_BIN_PATH="/usr/local/bin/jojonet"
+
 
 error_handler() {
     local exit_code=$?
@@ -216,6 +221,177 @@ download_verified() {
     verify_sha256 "$dest" "$expected"
 }
 
+# ==========================================
+# Self-update from GitHub
+# ==========================================
+
+jojonet_raw_base() {
+    printf 'https://raw.githubusercontent.com/%s/%s/%s' \
+        "$JOJONET_GITHUB_USER" "$JOJONET_GITHUB_REPO" "$JOJONET_GITHUB_BRANCH"
+}
+
+fetch_remote_jojonet_version() {
+    local url tmp ver=""
+    url="$(jojonet_raw_base)/jojonet"
+    tmp=$(mktemp /tmp/jojonet-ver.XXXXXX) || return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 20 "$url" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$tmp" --timeout=20 "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+    ver=$(grep -m1 'JOJONET_VERSION=' "$tmp" 2>/dev/null | cut -d'"' -f2 || true)
+    rm -f "$tmp"
+    [[ -n "$ver" ]] || return 1
+    printf '%s' "$ver"
+}
+
+check_jojonet_update() {
+    local remote=""
+    echo -e "${CYAN}=== JojoNet update check ===${NC}"
+    echo -e "  Installed: ${GREEN}${JOJONET_VERSION}${NC}"
+    echo -e "  Source:    $(jojonet_raw_base)/jojonet"
+    remote=$(fetch_remote_jojonet_version) || {
+        log_error "Could not fetch remote version (network / GitHub)."
+        return 1
+    }
+    echo -e "  Remote:    ${GREEN}${remote}${NC}"
+    if [[ "$remote" == "$JOJONET_VERSION" ]]; then
+        echo -e "${GREEN}[+] Already up to date.${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}[!] Update available: ${JOJONET_VERSION} -> ${remote}${NC}"
+    echo -e "  Run: ${CYAN}sudo jojonet --update${NC}"
+    return 2
+}
+
+self_update_jojonet() {
+    local base url tmp sums_tmp un_tmp backup remote_ver="" expected="" actual=""
+    local force="${1:-0}"
+
+    (( EUID == 0 )) || { log_error "Run as root: sudo jojonet --update"; return 1; }
+
+    echo -e "${CYAN}=== JojoNet self-update ===${NC}"
+    echo -e "  Current: ${GREEN}${JOJONET_VERSION}${NC}"
+    base=$(jojonet_raw_base)
+    url="${base}/jojonet"
+
+    remote_ver=$(fetch_remote_jojonet_version) || {
+        log_error "Cannot reach GitHub update source."
+        return 1
+    }
+    echo -e "  Remote:  ${GREEN}${remote_ver}${NC}"
+    echo -e "  URL:     $url"
+
+    if [[ "$remote_ver" == "$JOJONET_VERSION" && "$force" != "1" && "${JOJONET_FORCE_UPDATE:-0}" != "1" ]]; then
+        echo -e "${GREEN}[+] Already on latest (${JOJONET_VERSION}).${NC}"
+        echo -e "  Force reinstall: ${CYAN}sudo jojonet --update --force${NC}"
+        return 0
+    fi
+
+    if [[ -t 0 || -t 2 ]]; then
+        local ans=""
+        read -r -p "Update JojoNet to v${remote_ver}? [Y/n]: " ans </dev/tty 2>/dev/null || read -r -p "Update JojoNet to v${remote_ver}? [Y/n]: " ans
+        ans=$(printf '%s' "${ans:-y}" | tr '[:upper:]' '[:lower:]')
+        if [[ "$ans" == "n" || "$ans" == "no" ]]; then
+            echo -e "${YELLOW}Cancelled.${NC}"
+            return 0
+        fi
+    fi
+
+    tmp=$(mktemp /tmp/jojonet-update.XXXXXX) || return 1
+    log_note "Downloading new jojonet..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$tmp" || { rm -f "$tmp"; log_error "Download failed"; return 1; }
+    else
+        wget -qO "$tmp" "$url" || { rm -f "$tmp"; log_error "Download failed"; return 1; }
+    fi
+
+    head -1 "$tmp" | grep -q '^#!/' || { rm -f "$tmp"; log_error "Invalid downloaded script"; return 1; }
+    grep -q 'JOJONET_VERSION=' "$tmp" || { rm -f "$tmp"; log_error "Downloaded file is not jojonet"; return 1; }
+
+    # Optional checksum from repo
+    sums_tmp=$(mktemp /tmp/jojonet-sums.XXXXXX) || true
+    if [[ -n "${sums_tmp:-}" ]] && curl -fsSL "${base}/checksums.sha256" -o "$sums_tmp" 2>/dev/null; then
+        expected=$(awk '$2=="jojonet" || $2=="*jojonet" {print $1; exit}' "$sums_tmp" || true)
+        if [[ -n "$expected" ]]; then
+            actual=$(sha256_of "$tmp")
+            if [[ "$actual" != "$expected" ]]; then
+                log_error "Checksum mismatch for jojonet update"
+                log_error "  expected: $expected"
+                log_error "  actual:   $actual"
+                if [[ "${JOJONET_ALLOW_UNSIGNED:-0}" != "1" ]]; then
+                    rm -f "$tmp" "$sums_tmp"
+                    return 1
+                fi
+                log_warn "Continuing because JOJONET_ALLOW_UNSIGNED=1"
+            else
+                log_info "Checksum OK"
+            fi
+        fi
+        install -d -m755 /usr/local/share/jojonet
+        install -m644 "$sums_tmp" /usr/local/share/jojonet/checksums.sha256
+        install -d -m700 /etc/jojonet
+        install -m644 "$sums_tmp" /etc/jojonet/checksums.sha256
+    fi
+    rm -f "${sums_tmp:-}"
+
+    backup="${JOJONET_BIN_PATH}.bak.${JOJONET_VERSION}"
+    if [[ -f "$JOJONET_BIN_PATH" ]]; then
+        cp -f "$JOJONET_BIN_PATH" "$backup"
+        log_info "Backup: $backup"
+    fi
+
+    install -m755 "$tmp" "$JOJONET_BIN_PATH"
+    rm -f "$tmp"
+    log_info "Installed: $JOJONET_BIN_PATH (v${remote_ver})"
+
+    # Refresh uninstall helper if present upstream
+    un_tmp=$(mktemp /tmp/jojonet-un.XXXXXX) || true
+    if [[ -n "${un_tmp:-}" ]] && curl -fsSL "${base}/uninstall.sh" -o "$un_tmp" 2>/dev/null; then
+        install -m755 "$un_tmp" /usr/local/bin/jojonet-uninstall
+        log_info "Updated: jojonet-uninstall"
+    fi
+    rm -f "${un_tmp:-}"
+
+    # Regenerate runners/services with new code (exec new binary helpers)
+    if "$JOJONET_BIN_PATH" --refresh-templates >/dev/null 2>&1; then
+        log_info "Runtime templates refreshed"
+    else
+        log_warn "Template refresh returned a warning — run: sudo jojonet --refresh-templates"
+    fi
+
+    echo ""
+    echo -e "${GREEN}[+] Update complete.${NC}"
+    echo -e "  Old: ${JOJONET_VERSION}"
+    echo -e "  New: $($JOJONET_BIN_PATH --version 2>/dev/null || echo "v${remote_ver}")"
+    echo -e "  Configs kept in: /etc/jojonet/"
+    echo -e "  Rollback: cp -f $backup $JOJONET_BIN_PATH"
+    echo ""
+    return 0
+}
+
+menu_update_jojonet() {
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "Update JojoNet"
+    check_jojonet_update || true
+    echo ""
+    echo "  1) Update now"
+    echo "  2) Force reinstall (same or new version)"
+    echo "  0) Back"
+    local c=""
+    read -r -p "Select: " c || return 0
+    case "$c" in
+        1) self_update_jojonet 0; press_enter ;;
+        2) self_update_jojonet 1; press_enter ;;
+        *) ;;
+    esac
+}
+
+
 resolve_server_role() {
     local ip="$1" forced="${JOJONET_ROLE:-}" role="" forced_lc=""
     forced_lc=$(printf '%s' "$forced" | tr '[:upper:]' '[:lower:]')
@@ -336,7 +512,7 @@ print_banner() {
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
-v1.1.0 — WireGuard + Hysteria2
+v1.2.0 — self-update + WireGuard + Hysteria2
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -347,6 +523,9 @@ Usage:
   sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
   sudo jojonet --wg <PEER_IP>          WireGuard tunnel (low latency)
   sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed)
+  sudo jojonet --update                Update JojoNet from GitHub
+  sudo jojonet --update --force        Force reinstall from GitHub
+  sudo jojonet --check-update          Check for new version only
   sudo jojonet --stealth               Enable stealth for this session
   sudo jojonet --refresh-templates     Regenerate systemd runner scripts
   sudo jojonet --health <NAME>         Healthcheck one tunnel
@@ -4410,6 +4589,7 @@ main_menu() {
         menu_line "10) Stealth Mode (history + quiet)"
         menu_line "11) Healthcheck tunnel"
         menu_line "12) Export / Import keys (no SSH)"
+        menu_line "13) Update JojoNet from GitHub"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -4444,6 +4624,7 @@ main_menu() {
                 fi
                 press_enter
                 ;;
+            13) menu_update_jojonet || true ;;
             0) command -v clear >/dev/null && clear; opsec_scrub_history; exit 0 ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
         esac
@@ -4478,6 +4659,16 @@ if [[ "${1:-}" == "--refresh-templates" ]]; then
     refresh_runtime_templates && echo -e "${GREEN}[+] Templates updated.${NC}"
     repair_all_instances
     exit 0
+fi
+if [[ "${1:-}" == "--check-update" ]]; then
+    check_jojonet_update
+    exit $?
+fi
+if [[ "${1:-}" == "--update" ]]; then
+    _force=0
+    [[ "${2:-}" == "--force" || "${2:-}" == "-f" ]] && _force=1
+    self_update_jojonet "$_force"
+    exit $?
 fi
 if [[ "${1:-}" == "--role" && -n "${2:-}" ]]; then
     export JOJONET_ROLE="$2"

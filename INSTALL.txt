@@ -49,6 +49,13 @@ RULE: Foreign server FIRST, then Iran.
   Tip:     prefer WireGuard if UDP works
 
 
+UPDATE
+-------
+sudo jojonet --check-update
+sudo jojonet --update
+# or menu -> 13
+# force: sudo jojonet --update --force
+
 HELPERS
 -------
 sudo jojonet --health NAME
