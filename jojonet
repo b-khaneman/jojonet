@@ -14,7 +14,7 @@ IFS=$'\n\t'
 
 readonly JOJONET_VERSION="1.1.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
-readonly JOJONET_REPO="https://github.com/b-khaneman/jojobang"
+readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 
 error_handler() {
     local exit_code=$?

@@ -1,69 +1,117 @@
 # JojoNet Fixed v1.1.0
 
-Iran ↔ Foreign tunnel manager — **نسخه اصلاح‌شده و امن‌تر** بر پایه [b-khaneman/jojobang](https://github.com/b-khaneman/jojobang).
+Iran ↔ Foreign tunnel manager — نسخه اصلاح‌شده و امن‌تر
 
-## تغییرات نسبت به 1.0.0
+**Repository:** https://github.com/b-khaneman/jojonet
 
-| مورد | توضیح |
-|------|--------|
-| پارسر امن کانفیگ | دیگر `source` نمی‌شود |
-| تأیید SHA256 | دانلود LocalTun/Paqet با checksum |
-| پیشوند TUN خصوصی | `10.30.x.x` به‌جای `30.10` عمومی |
-| Subnet یکسان | Advanced GRE مثل Quick از pair-hash |
-| `rp_filter` | دیگر سراسری خاموش نمی‌شود |
-| `GOMAXPROCS` | اصلاح شد (`1`) |
-| نقش دستی | `JOJONET_ROLE` / `--role` |
-| کلید بدون SSH | `--export-keys` / `--import-keys` |
-| Healthcheck | `--health NAME` |
-| Uninstall | `uninstall.sh` |
-| نصب امن‌تر | نصب از پکیج محلی |
+---
 
-## نصب
+## نصب یک‌خطی (پیشنهادی)
 
 ```bash
-cd JojoNet-Fixed
-sudo bash install.sh
-sudo jojonet --help
+curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
 ```
+
+بعد چک کن:
+
+```bash
+sudo jojonet --version
+```
+
+باید ببینی: `jojonet 1.1.0`
+
+---
+
+## نصب از کلون
+
+```bash
+git clone https://github.com/b-khaneman/jojonet.git
+cd jojonet
+sudo bash install.sh
+```
+
+---
 
 ## شروع سریع
 
-1. **سرور خارج:** `sudo jojonet` → گزینه 1 (یا `sudo jojonet --peer IP_ایران`)
-2. **سرور ایران:** `sudo jojonet IP_خارج`
-3. نقش دستی (اختیاری): `export JOJONET_ROLE=iran`
+1. **سرور خارج:**
+   ```bash
+   sudo jojonet
+   ```
+2. **سرور ایران:**
+   ```bash
+   sudo jojonet IP_سرور_خارج
+   ```
+3. نقش دستی (اختیاری):
+   ```bash
+   export JOJONET_ROLE=iran
+   # یا
+   sudo jojonet --role iran IP_خارج
+   ```
 
-## همگام‌سازی کلید بدون SSH
+---
 
-```bash
-sudo jojonet --export-keys PEER_IP /root/keys.tar.gz
-# کپی فایل به سرور دیگر
-sudo jojonet --import-keys PEER_IP /root/keys.tar.gz
-```
-
-## حالت‌های تانل
+## دستورات مهم
 
 | دستور | کاربرد |
 |--------|--------|
-| `sudo jojonet PEER` | GRE سریع |
-| `sudo jojonet --tun-tcp PEER` | وقتی GRE بسته است |
-| `sudo jojonet --paqet PEER` | مسیر فیلتر / latency بالا |
-| `sudo jojonet --vxlan PEER` | overlay روی UDP |
+| `sudo jojonet` | منوی اصلی |
+| `sudo jojonet PEER_IP` | Quick GRE |
+| `sudo jojonet --tun-tcp PEER_IP` | TUN/TCP |
+| `sudo jojonet --paqet PEER_IP` | Paqet |
+| `sudo jojonet --vxlan PEER_IP` | VXLAN |
+| `sudo jojonet --health NAME` | بررسی سلامت |
+| `sudo jojonet --export-keys PEER [FILE]` | خروجی کلید بدون SSH |
+| `sudo jojonet --import-keys PEER FILE` | ورود کلید |
+| `sudo jojonet --help` | راهنما |
+| `sudo jojonet-uninstall` | حذف کامل |
 
-## حذف کامل
+---
+
+## تغییرات v1.1.0
+
+- پارسر امن کانفیگ (بدون `source`)
+- تأیید SHA256 برای دانلود باینری‌ها
+- پیشوند TUN خصوصی `10.30.x.x`
+- Subnet یکسان در Quick و Advanced GRE
+- `rp_filter` دیگر سراسری خاموش نمی‌شود
+- اصلاح `GOMAXPROCS`
+- نقش دستی با `JOJONET_ROLE` / `--role`
+- export/import کلید بدون SSH
+- healthcheck و uninstall
+
+---
+
+## متغیرهای محیطی
+
+| متغیر | معنی |
+|--------|------|
+| `JOJONET_ROLE=iran\|kharej` | نقش دستی |
+| `JOJONET_ALLOW_UNSIGNED=1` | قبول دانلود بدون checksum |
+| `JOJONET_QUICK_PROBE_MTU=1` | پروب MTU در Quick GRE |
+| `JOJONET_DISABLE_RP_FILTER=1` | رفتار قدیمی rp_filter |
+| `JOJONET_STEALTH=1` | حالت مخفی |
+
+---
+
+## حذف
 
 ```bash
 sudo jojonet-uninstall
 ```
 
-## متغیرهای محیطی
+یا:
 
-- `JOJONET_ROLE=iran|kharej`
-- `JOJONET_ALLOW_UNSIGNED=1` (فقط در صورت نیاز)
-- `JOJONET_QUICK_PROBE_MTU=1`
-- `JOJONET_DISABLE_RP_FILTER=1` (رفتار قدیمی)
-- `JOJONET_STEALTH=1`
+```bash
+curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/uninstall.sh | sudo bash
+```
 
-راهنمای کامل PDF: `JojoNet-Fixed-Guide.pdf`
+---
+
+## پشتیبانی
+
+- Telegram: [@B_khaneman](https://t.me/B_khaneman)
+- GitHub: https://github.com/b-khaneman/jojonet
 
 ## License
 
