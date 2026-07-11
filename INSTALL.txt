@@ -1,31 +1,60 @@
-JojoNet v1.1.0
-==============
+JojoNet v1.1.0 — Tunnel Guide (Iran / Foreign)
+==============================================
 Repo: https://github.com/b-khaneman/jojonet
 
-INSTALL
--------
+INSTALL (both servers)
+----------------------
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
 sudo jojonet --version
-# jojonet 1.1.0
 
-RUN
----
-# Foreign first, then Iran:
+RULE: Foreign server FIRST, then Iran.
 
-# Best latency (UDP):
-sudo jojonet --wg PEER_IP
 
-# High speed / filtered:
-sudo jojonet --hy2 PEER_IP
+[ GRE ]
+  Foreign:  sudo jojonet --peer IRAN_IP
+  Iran:     sudo jojonet FOREIGN_IP
+  Best for: low ping when GRE is allowed
 
-# Classic GRE:
-sudo jojonet PEER_IP
 
-# Fallbacks:
-sudo jojonet --tun-tcp PEER_IP
-sudo jojonet --paqet PEER_IP
-sudo jojonet --vxlan PEER_IP
+[ WireGuard ]  << recommended for latency
+  Foreign:  sudo jojonet --wg IRAN_IP
+  Iran:     sudo jojonet --wg FOREIGN_IP
+  Port:     UDP 51820 (default)
+  Best for: lowest ping + stable (UDP open)
 
-UNINSTALL
----------
+
+[ Hysteria2 ]  << recommended for filtered/high speed
+  Foreign:  sudo jojonet --hy2 IRAN_IP
+  Iran:     sudo jojonet --hy2 FOREIGN_IP
+  Port:     UDP 443 (default)
+  Best for: high download/upload on filtered paths
+
+
+[ TUN/TCP ]
+  Foreign:  sudo jojonet --tun-tcp IRAN_IP
+  Iran:     sudo jojonet --tun-tcp FOREIGN_IP
+  Best for: GRE blocked, TCP works
+
+
+[ Paqet ]
+  Foreign:  sudo jojonet --paqet IRAN_IP
+  Iran:     sudo jojonet --paqet FOREIGN_IP
+  Best for: hard/filtered/unstable paths
+
+
+[ VXLAN ]
+  Foreign:  sudo jojonet --vxlan IRAN_IP
+  Iran:     sudo jojonet --vxlan FOREIGN_IP
+  Best for: GRE blocked, UDP allowed
+  Tip:     prefer WireGuard if UDP works
+
+
+HELPERS
+-------
+sudo jojonet --health NAME
+sudo jojonet --export-keys PEER /root/k.tar.gz
+sudo jojonet --import-keys PEER /root/k.tar.gz
+export JOJONET_ROLE=iran   # or kharej
 sudo jojonet-uninstall
+
+Full guide: README.md
