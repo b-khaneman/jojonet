@@ -1,8 +1,4 @@
-# JojoNet Fixed v1.1.0
 
-Iran ↔ Foreign tunnel manager — **نسخه اصلاح‌شده و امن‌تر** بر پایه [b-khaneman/jojobang](https://github.com/b-khaneman/jojobang).
-
-## تغییرات نسبت به 1.0.0
 
 | مورد | توضیح |
 |------|--------|
