@@ -43,6 +43,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
+sudo jojonet
 sudo jojonet --version
 ```
 
