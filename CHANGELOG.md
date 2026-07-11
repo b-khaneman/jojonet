@@ -1,8 +1,17 @@
 # Changelog
 
-## 1.1.0 — Fixed release
+## 1.0.0 — First official public release
 
-- Security: safe config parser, checksum verification, scoped rp_filter
-- Correctness: private TUN prefix, Advanced GRE pair subnet, GOMAXPROCS
-- Features: role override, key export/import, healthcheck, uninstall
-- Docs: README + PDF guide
+اولین نسخه رسمی منتشرشده JojoNet.
+
+- GRE / TUN-TCP / Paqet / VXLAN
+- نصب یک‌خطی از GitHub
+- systemd + boot restore
+- فوروارد پورت (nftables) سمت ایران
+- نقش دستی و تشخیص خودکار
+- export/import کلید
+- healthcheck
+- uninstall
+- تأیید checksum دانلودها
+
+This is the **first published version** of JojoNet.

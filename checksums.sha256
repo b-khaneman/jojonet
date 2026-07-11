@@ -1,13 +1,3 @@
-# JojoNet Fixed v1.1.0 — pin third-party release assets here
+# JojoNet v1.0.0 — First official public release
 # Format: <sha256>  <filename>
-# After first verified download, append hashes printed by jojonet.
-#
-# LocalTun_TCP v1.7 examples (fill after you verify upstream):
-# <hash>  amd64.zip
-# <hash>  arm64.zip
-# <hash>  386.zip
-#
-# Paqet examples:
-# <hash>  paqet_linux_amd64-v2.2.0-optimize.tar.gz
-#
-442b097c2b762fa1877a12c7e37ecaa7ba5588ebea66dabaabeb3980e457d49d  jojonet
+343393e69c67fa86b9a6a7f89a0343fab2090c50a39fc49277f22fc15b60ce3d  jojonet

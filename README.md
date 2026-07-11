@@ -1,24 +1,31 @@
-# JojoNet Fixed v1.1.0
+# JojoNet
 
-Iran ↔ Foreign tunnel manager — نسخه اصلاح‌شده و امن‌تر
+**اولین نسخه رسمی منتشرشده** — مدیر تانل ایران ↔ خارج
 
-**Repository:** https://github.com/b-khaneman/jojonet
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/b-khaneman/jojonet)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+> این **اولین انتشار عمومی (v1.0.0)** پروژه JojoNet است.  
+> برای نصب و استفاده، فقط از همین ریپو و لینک‌های زیر استفاده کنید.
+
+**ریپو:** https://github.com/b-khaneman/jojonet  
+**پشتیبانی:** [@B_khaneman](https://t.me/B_khaneman)
 
 ---
 
-## نصب یک‌خطی (پیشنهادی)
+## نصب (نسخه اول — رسمی)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
 ```
 
-بعد چک کن:
+بررسی نسخه:
 
 ```bash
 sudo jojonet --version
 ```
 
-باید ببینی: `jojonet 1.1.0`
+خروجی مورد انتظار: `jojonet 1.0.0`
 
 ---
 
@@ -32,65 +39,60 @@ sudo bash install.sh
 
 ---
 
+## این نسخه چیست؟
+
+JojoNet v1.0.0 اولین نسخهٔ کامل و منتشرشده برای ساخت و مدیریت تانل بین سرور ایران و سرور خارج است، با پشتیبانی از:
+
+| حالت | پروتکل | مناسب برای |
+|------|--------|------------|
+| **GRE** | IP/GRE | پیش‌فرض سریع |
+| **TUN/TCP** | TCP | وقتی GRE بسته است |
+| **Paqet** | Raw + KCP | مسیرهای فیلتر / latency بالا |
+| **VXLAN** | UDP overlay | وقتی UDP باز است |
+
+### امکانات نسخه اول
+- تشخیص خودکار نقش سرور (ایران / خارج) با امکان تنظیم دستی
+- چند تانل همزمان روی یک سرور
+- فوروارد پورت روی سمت ایران (nftables)
+- پایداری با systemd و بازیابی بعد از ریبوت
+- همگام‌سازی کلید با SSH یا export/import دستی
+- تأیید checksum برای دانلود باینری‌ها
+- اسکریپت نصب و حذف کامل
+
+---
+
 ## شروع سریع
 
-1. **سرور خارج:**
+1. **اول روی سرور خارج:**
    ```bash
    sudo jojonet
    ```
-2. **سرور ایران:**
+2. **بعد روی سرور ایران:**
    ```bash
    sudo jojonet IP_سرور_خارج
    ```
 3. نقش دستی (اختیاری):
    ```bash
    export JOJONET_ROLE=iran
-   # یا
-   sudo jojonet --role iran IP_خارج
+   sudo jojonet IP_خارج
    ```
 
 ---
 
-## دستورات مهم
+## دستورات
 
-| دستور | کاربرد |
+| دستور | توضیح |
 |--------|--------|
 | `sudo jojonet` | منوی اصلی |
-| `sudo jojonet PEER_IP` | Quick GRE |
+| `sudo jojonet PEER_IP` | تانل GRE سریع |
 | `sudo jojonet --tun-tcp PEER_IP` | TUN/TCP |
 | `sudo jojonet --paqet PEER_IP` | Paqet |
 | `sudo jojonet --vxlan PEER_IP` | VXLAN |
-| `sudo jojonet --health NAME` | بررسی سلامت |
-| `sudo jojonet --export-keys PEER [FILE]` | خروجی کلید بدون SSH |
+| `sudo jojonet --health NAME` | بررسی سلامت تانل |
+| `sudo jojonet --export-keys PEER [FILE]` | خروجی کلید |
 | `sudo jojonet --import-keys PEER FILE` | ورود کلید |
 | `sudo jojonet --help` | راهنما |
 | `sudo jojonet-uninstall` | حذف کامل |
-
----
-
-## تغییرات v1.1.0
-
-- پارسر امن کانفیگ (بدون `source`)
-- تأیید SHA256 برای دانلود باینری‌ها
-- پیشوند TUN خصوصی `10.30.x.x`
-- Subnet یکسان در Quick و Advanced GRE
-- `rp_filter` دیگر سراسری خاموش نمی‌شود
-- اصلاح `GOMAXPROCS`
-- نقش دستی با `JOJONET_ROLE` / `--role`
-- export/import کلید بدون SSH
-- healthcheck و uninstall
-
----
-
-## متغیرهای محیطی
-
-| متغیر | معنی |
-|--------|------|
-| `JOJONET_ROLE=iran\|kharej` | نقش دستی |
-| `JOJONET_ALLOW_UNSIGNED=1` | قبول دانلود بدون checksum |
-| `JOJONET_QUICK_PROBE_MTU=1` | پروب MTU در Quick GRE |
-| `JOJONET_DISABLE_RP_FILTER=1` | رفتار قدیمی rp_filter |
-| `JOJONET_STEALTH=1` | حالت مخفی |
 
 ---
 
@@ -100,19 +102,32 @@ sudo bash install.sh
 sudo jojonet-uninstall
 ```
 
-یا:
+---
+
+## English
+
+**JojoNet v1.0.0 — First official public release**
+
+Iran ↔ Foreign tunnel manager (GRE / TUN-TCP / Paqet / VXLAN) with systemd persistence.
+
+### Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
+sudo jojonet --version
 ```
+
+Expected: `jojonet 1.0.0`
+
+### Quick start
+1. Foreign server: `sudo jojonet`
+2. Iran server: `sudo jojonet <FOREIGN_IP>`
 
 ---
 
-## پشتیبانی
-
-- Telegram: [@B_khaneman](https://t.me/B_khaneman)
-- GitHub: https://github.com/b-khaneman/jojonet
-
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
+
+**First release:** v1.0.0  
+**Author / Support:** [@B_khaneman](https://t.me/B_khaneman)

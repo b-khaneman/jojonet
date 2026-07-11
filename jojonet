@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.1.0"
+readonly JOJONET_VERSION="1.0.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 
@@ -327,6 +327,7 @@ print_banner() {
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
+First official public release
 
 Usage:
   sudo jojonet                         Interactive menu

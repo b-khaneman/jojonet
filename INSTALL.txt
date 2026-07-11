@@ -1,25 +1,23 @@
-# لینک نصب JojoNet v1.1.0
+JojoNet v1.0.0 — First official public release
+================================================
 
-ریپو: https://github.com/b-khaneman/jojonet
+Repository:
+https://github.com/b-khaneman/jojonet
 
-## نصب یک‌خطی روی سرور
+This is the FIRST published version of JojoNet.
 
+Install (official):
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
 
-## بررسی نسخه
-
+Check version:
 sudo jojonet --version
+# Expected: jojonet 1.0.0
 
-باید ببینی: jojonet 1.1.0
+Quick start:
+1) Foreign server:  sudo jojonet
+2) Iran server:     sudo jojonet FOREIGN_IP
 
-## شروع
-
-# سرور خارج
-sudo jojonet
-
-# سرور ایران
-sudo jojonet IP_سرور_خارج
-
-## حذف
-
+Uninstall:
 sudo jojonet-uninstall
+
+Support: @B_khaneman

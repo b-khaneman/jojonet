@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# JOJONET Fixed Installer v1.1.0
+# JOJONET Installer v1.0.0 — First official public release
 # https://github.com/b-khaneman/jojonet
 #
 # One-liner:
@@ -12,7 +12,7 @@
 
 set -Eeo pipefail
 
-readonly INSTALLER_VERSION="1.1.0"
+readonly INSTALLER_VERSION="1.0.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_BIN="/usr/local/bin/jojonet"
 readonly SHARE_DIR="/usr/local/share/jojonet"
@@ -37,7 +37,7 @@ resolve_dir() {
 
 usage() {
     cat <<EOF
-JOJONET Fixed Installer v${INSTALLER_VERSION}
+JOJONET Installer v${INSTALLER_VERSION} (First official release)
 
 Install (one-liner):
   curl -fsSL https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}/install.sh | sudo bash
