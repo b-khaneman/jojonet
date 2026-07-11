@@ -10,6 +10,8 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
+sudo jojonet
+برای چک کردن ورژن اسکریپت : 
 sudo jojonet --version
 ```
 
