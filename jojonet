@@ -1,0 +1,3780 @@
+#!/usr/bin/env bash
+
+# Safe Bash mode (-e omitted: interactive menu + many intentional test failures)
+set -Euo pipefail
+IFS=$'\n\t'
+
+# =========================================================
+# JOJONET — Iran ↔ Foreign Tunnel Manager
+# Modes: GRE | TUN/TCP | Paqet | VXLAN
+# Author: @B_KHANEMAN
+# Support: @B_KHANEMAN
+# License: MIT
+# =========================================================
+
+readonly JOJONET_VERSION="1.1.0"
+readonly JOJONET_SUPPORT="@B_KHANEMAN"
+readonly JOJONET_REPO="https://github.com/b-khaneman/jojobang"
+
+error_handler() {
+    local exit_code=$?
+    echo -e "${RED}[!] Unexpected error at line ${BASH_LINENO[0]} (exit: $exit_code)${NC}" >&2
+    exit "$exit_code"
+}
+trap error_handler ERR
+trap 'echo -e "\n${YELLOW}Exiting JOJONET...${NC}"; exit 0' INT TERM
+
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    CYAN='\033[0;36m'
+    BLUE='\033[1;34m'
+    MAGENTA='\033[0;35m'
+    NC='\033[0m'
+else
+    RED="" GREEN="" YELLOW="" CYAN="" BLUE="" MAGENTA="" NC=""
+fi
+
+JOJONET_ROOT="/etc/jojonet"
+INSTANCES_DIR="$JOJONET_ROOT/instances"
+TEMPLATE_SCRIPT="/usr/local/bin/jojonet-run-instance.sh"
+TUNTCP_RUNNER="/usr/local/bin/jojonet-run-tuntcp.sh"
+BOOT_RESTORE_SCRIPT="/usr/local/bin/jojonet-boot-restore.sh"
+TEMPLATE_SERVICE="/etc/systemd/system/jojonet@.service"
+TUNTCP_SERVICE="/etc/systemd/system/jojonet-tcptun@.service"
+PAQET_RUNNER="/usr/local/bin/jojonet-run-paqet.sh"
+PAQET_SERVICE="/etc/systemd/system/jojonet-paqet@.service"
+VXLAN_RUNNER="/usr/local/bin/jojonet-run-vxlan.sh"
+VXLAN_SERVICE="/etc/systemd/system/jojonet-vxlan@.service"
+PAQET_CONFIG_DIR="$JOJONET_ROOT/paqet"
+PAQET_BIN_DIR="/usr/local/bin"
+PAQET_OPTIMIZED_REPO="behzadea12/Paqet-Tunnel-Manager"
+PAQET_OPTIMIZED_TAG="PaqetOptimized"
+PAQET_OPTIMIZED_VERSION="v2.2.0-optimize"
+PAQET_CORE_REPO="hanselime/paqet"
+PAQET_CORE_VERSION="${JOJONET_PAQET_CORE_VERSION:-v1.0.0-alpha.16}"
+BOOT_SERVICE="/etc/systemd/system/jojonet-boot.service"
+LOCALTUN_RELEASE="https://github.com/Azumi67/LocalTun_TCP/releases/download/v1.7"
+TUNTCP_BIN_DIR="/usr/local/bin"
+KEYS_ROOT="/etc/jojonet/keys"
+DEFAULT_PAQET_PORT=443
+DEFAULT_PAQET_MTU=1350
+DEFAULT_PAQET_CONN_SERVER=4
+DEFAULT_PAQET_CONN_CLIENT=1
+DEFAULT_PAQET_ENCRYPTION="aes-128-gcm"
+DEFAULT_PAQET_KCP_MODE="fast"
+SYSCTL_FILE="/etc/sysctl.d/99-jojonet.conf"
+LOCK_FILE="/run/lock/jojonet.lock"
+DEFAULT_MTU_FALLBACK=1310
+TUNNEL_NET_PREFIX="172.20"
+VXLAN_NET_PREFIX="172.21"
+TUN_TCP_NET_PREFIX="10.30"
+DEFAULT_VXLAN_PORT=4789
+DEFAULT_VXLAN_MTU=1450
+DEFAULT_TCP_PORT=8443
+TUN_TCP_MTU_CLIENT=1280
+TUN_TCP_MTU_SERVER=1380
+
+STEALTH_FLAG_FILE="$JOJONET_ROOT/stealth.enabled"
+STEALTH_MODE=0
+
+
+# Safe config loader — whitelist keys only (never source shell)
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in
+            *" $key "*) ;;
+            *) return 1 ;;
+        esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+        case "$val" in
+            *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;;
+        esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+
+# ==========================================
+# Secure download helpers
+# ==========================================
+
+CHECKSUMS_FILE="${JOJONET_CHECKSUMS_FILE:-/etc/jojonet/checksums.sha256}"
+CHECKSUMS_BUNDLED="/usr/local/share/jojonet/checksums.sha256"
+
+lookup_checksum() {
+    local name="$1" line hash fname f
+    for f in "$CHECKSUMS_FILE" "$CHECKSUMS_BUNDLED"; do
+        [[ -f "$f" ]] || continue
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${line// }" ]] && continue
+            hash=$(awk '{print $1}' <<< "$line")
+            fname=$(awk '{print $2}' <<< "$line")
+            fname="${fname#\*}"
+            if [[ "$fname" == "$name" || "$fname" == */"$name" ]]; then
+                printf '%s' "$hash"
+                return 0
+            fi
+        done < "$f"
+    done
+    return 1
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    fi
+}
+
+verify_sha256() {
+    local file="$1" expected="$2" actual
+    [[ -f "$file" ]] || return 1
+    if [[ -z "$expected" ]]; then
+        actual=$(sha256_of "$file")
+        if [[ "${JOJONET_ALLOW_UNSIGNED:-0}" == "1" ]]; then
+            log_warn "UNSIGNED download accepted (JOJONET_ALLOW_UNSIGNED=1): $(basename "$file") sha256=$actual"
+            return 0
+        fi
+        log_warn "No pinned checksum for $(basename "$file")."
+        log_warn "Computed sha256=$actual"
+        log_warn "Add this line to $CHECKSUMS_FILE for next time:"
+        log_warn "  $actual  $(basename "$file")"
+        if [[ -t 0 || -t 2 ]]; then
+            local ans=""
+            read -r -p "Accept this unsigned download once? [y/N]: " ans </dev/tty 2>/dev/null || read -r -p "Accept this unsigned download once? [y/N]: " ans
+            ans=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
+            if [[ "$ans" == "y" || "$ans" == "yes" ]]; then
+                # Persist hash for future runs
+                install -d -m700 "$(dirname "$CHECKSUMS_FILE")" 2>/dev/null || true
+                echo "$actual  $(basename "$file")" >> "$CHECKSUMS_FILE" 2>/dev/null || true
+                log_info "Accepted and pinned locally."
+                return 0
+            fi
+        fi
+        log_error "Refused unsigned download. Set JOJONET_ALLOW_UNSIGNED=1 or pin checksum."
+        return 1
+    fi
+    actual=$(sha256_of "$file")
+    if [[ "$actual" != "$expected" ]]; then
+        log_error "Checksum mismatch for $(basename "$file")"
+        log_error "  expected: $expected"
+        log_error "  actual:   $actual"
+        return 1
+    fi
+    log_info "Checksum OK: $(basename "$file")"
+    return 0
+}
+
+download_verified() {
+    local url="$1" dest="$2" asset_name="$3" expected=""
+    expected=$(lookup_checksum "$asset_name" || true)
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$dest" || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$dest" "$url" || return 1
+    else
+        log_error "curl or wget required."
+        return 1
+    fi
+    verify_sha256 "$dest" "$expected"
+}
+
+resolve_server_role() {
+    local ip="$1" forced="${JOJONET_ROLE:-}" role="" forced_lc=""
+    forced_lc=$(printf '%s' "$forced" | tr '[:upper:]' '[:lower:]')
+    case "$forced_lc" in
+        iran|ir) printf '%s' "iran"; return 0 ;;
+        kharej|foreign|out|abroad) printf '%s' "kharej"; return 0 ;;
+    esac
+    if role=$(detect_server_role "$ip"); then
+        printf '%s' "$role"
+        return 0
+    fi
+    prompt_server_role
+}
+
+export_pair_keys() {
+    local peer="$1" out="${2:-}"
+    local pair_id keydir
+    pair_id=$(printf '%s' "$peer" | tr '.' '_')
+    keydir="$KEYS_ROOT/pair_${pair_id}"
+    [[ -d "$keydir" ]] || { log_error "No keys for peer $peer"; return 1; }
+    out="${out:-/root/jojonet-keys-${pair_id}.tar.gz}"
+    tar -czf "$out" -C "$keydir" . || return 1
+    chmod 600 "$out"
+    log_info "Exported keys: $out"
+    echo "$out"
+}
+
+import_pair_keys() {
+    local peer="$1" archive="$2"
+    local pair_id keydir
+    [[ -f "$archive" ]] || { log_error "Archive not found: $archive"; return 1; }
+    pair_id=$(printf '%s' "$peer" | tr '.' '_')
+    keydir="$KEYS_ROOT/pair_${pair_id}"
+    install -d -m700 "$keydir"
+    tar -xzf "$archive" -C "$keydir" || return 1
+    chmod -R go-rwx "$keydir" 2>/dev/null || true
+    log_info "Imported keys into $keydir"
+}
+
+healthcheck_tunnel() {
+    local name="$1" file="$INSTANCES_DIR/$name.conf"
+    local ok=0
+    [[ -r "$file" ]] || { log_error "Unknown tunnel: $name"; return 1; }
+    load_instance_config "$file" || return 1
+    echo -e "${CYAN}=== Health: $name (${TunnelMode:-gre}) ===${NC}"
+    local svc
+    svc=$(tunnel_service_unit "$name")
+    if systemctl is-active --quiet "$svc"; then
+        echo -e "  service: ${GREEN}active${NC}"
+        ok=$((ok + 1))
+    else
+        echo -e "  service: ${RED}inactive${NC}"
+    fi
+    case "${TunnelMode:-gre}" in
+        gre|vxlan)
+            if ip link show "$name" >/dev/null 2>&1; then
+                echo -e "  iface:   ${GREEN}present${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  iface:   ${RED}missing${NC}"
+            fi
+            if [[ -n "${Tun_Remote_IP_Raw:-}" ]]; then
+                if ping -c1 -W2 "$Tun_Remote_IP_Raw" >/dev/null 2>&1; then
+                    echo -e "  peer ping ${Tun_Remote_IP_Raw}: ${GREEN}ok${NC}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  peer ping ${Tun_Remote_IP_Raw}: ${YELLOW}fail${NC}"
+                fi
+            fi
+            ;;
+        tun_tcp)
+            if pgrep -f "tun-(server|client).*${name}" >/dev/null 2>&1; then
+                echo -e "  process: ${GREEN}running${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  process: ${RED}not running${NC}"
+            fi
+            ;;
+        paqet)
+            if pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1; then
+                echo -e "  process: ${GREEN}running${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  process: ${RED}not running${NC}"
+            fi
+            ;;
+    esac
+    (( ok > 0 ))
+}
+
+
+# Logging (always stderr — safe inside command substitutions)
+log_info()  { echo -e "${GREEN}[+]${NC} $*" >&2; }
+log_warn()  { echo -e "${YELLOW}[!]${NC} $*" >&2; }
+log_note()  { echo -e "${YELLOW}[*]${NC} $*" >&2; }
+log_error() { echo -e "${RED}[!]${NC} $*" >&2; }
+
+# UI helpers
+menu_line() { echo -e "  ${GREEN}$1${NC}"; }
+hint() {
+    if [[ -n "${1:-}" && "$STEALTH_MODE" != "1" ]]; then
+        echo -e "${YELLOW}  > $1${NC}"
+    fi
+}
+press_enter() {
+    echo ""
+    read -r -p "Press Enter..." _ || true
+}
+print_banner() {
+    local title="$1"
+    echo ""
+    echo -e "${CYAN}----------------------------------------${NC}"
+    echo -e "${CYAN}  $title${NC}"
+    echo -e "${CYAN}----------------------------------------${NC}"
+    echo ""
+}
+
+show_help() {
+    cat <<EOF
+JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
+
+Usage:
+  sudo jojonet                         Interactive menu
+  sudo jojonet <PEER_IP>               Quick GRE to peer
+  sudo jojonet --peer <PEER_IP>        Quick GRE to peer
+  sudo jojonet --tun-tcp <PEER_IP>     TUN/PrivateIP/TCP tunnel
+  sudo jojonet --paqet <PEER_IP>       Paqet (Raw/KCP) tunnel
+  sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
+  sudo jojonet --stealth               Enable stealth for this session
+  sudo jojonet --refresh-templates     Regenerate systemd runner scripts
+  sudo jojonet --health <NAME>         Healthcheck one tunnel
+  sudo jojonet --export-keys <PEER> [FILE]  Export TUN/Paqet keys (no SSH)
+  sudo jojonet --import-keys <PEER> <FILE>  Import TUN/Paqet keys
+  sudo jojonet --role iran|kharej      Force role (or set JOJONET_ROLE)
+  sudo jojonet --version               Show version
+  sudo jojonet --help                  Show this help
+
+Environment:
+  JOJONET_ROLE=iran|kharej             Skip GeoIP role detection
+  JOJONET_ALLOW_UNSIGNED=1             Allow binary downloads without checksum
+  JOJONET_DISABLE_RP_FILTER=1          Global rp_filter=0 (legacy behavior)
+  JOJONET_QUICK_PROBE_MTU=1            Probe path MTU in Quick GRE
+  JOJONET_PAQET_CORE_VERSION=...       Pin Paqet core tag
+  JOJONET_STEALTH=1                    Quiet/stealth session
+
+Quick start:
+  1) Run on FOREIGN server first (menu or CLI with peer IP)
+  2) Run on IRAN server: sudo jojonet <FOREIGN_IP>
+  3) Subnet ID and keys sync automatically from the IP pair
+  4) Prefer: sudo bash install.sh  (verify package) over curl|bash
+
+Support: ${JOJONET_SUPPORT}
+Docs: ${JOJONET_REPO}
+EOF
+}
+
+# Fast paths — no initialization side effects
+case "${1:-}" in
+    --help|-h)
+        show_help
+        exit 0
+        ;;
+    --version|-v)
+        echo "jojonet ${JOJONET_VERSION}"
+        exit 0
+        ;;
+esac
+
+if (( EUID != 0 )); then
+    echo -e "${RED}[!] Run as root.${NC}" >&2
+    exit 1
+fi
+
+check_dependencies() {
+    local deps=(ip nft awk grep systemctl journalctl sysctl ping flock mktemp curl openssl)
+    local cmd optional=(unzip scp)
+    for cmd in "${deps[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || {
+            echo -e "${RED}[!] Missing dependency: $cmd${NC}" >&2
+            echo -e "${YELLOW}    apt install -y iproute2 nftables procps iputils-ping curl openssl util-linux${NC}" >&2
+            exit 1
+        }
+    done
+    for cmd in "${optional[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || true
+    done
+}
+
+install -d -m700 "$INSTANCES_DIR"
+install -d -m755 "$(dirname "$TEMPLATE_SCRIPT")"
+install -d -m700 "$KEYS_ROOT"
+install -d -m700 "$PAQET_CONFIG_DIR"
+install -d -m755 "$(dirname "$LOCK_FILE")" 2>/dev/null || true
+check_dependencies
+
+# ==========================================
+# OpSec: quiet output + shell history cleanup
+# ==========================================
+
+load_stealth_mode() {
+    STEALTH_MODE=0
+    if [[ "${JOJONET_STEALTH:-0}" == "1" ]]; then
+        STEALTH_MODE=1
+    fi
+    if [[ -f "$STEALTH_FLAG_FILE" ]]; then
+        STEALTH_MODE=1
+    fi
+}
+
+opsec_session_start() {
+    load_stealth_mode
+    if [[ "$STEALTH_MODE" == "1" ]]; then
+        export HISTCONTROL="${HISTCONTROL:-ignorespace}"
+        set +o history 2>/dev/null || true
+    fi
+}
+
+opsec_scrub_history() {
+    if [[ "${JOJONET_CLEAR_HISTORY:-1}" == "0" ]]; then
+        return 0
+    fi
+    local histfile="" f
+    for f in "${HISTFILE:-}" "/root/.bash_history" "$HOME/.bash_history"; do
+        if [[ -n "$f" && -f "$f" && -w "$f" ]]; then
+            histfile="$f"
+            break
+        fi
+    done
+    [[ -n "$histfile" ]] || return 0
+    sed -i \
+        -e '/jojonet/d' \
+        -e '/ip tunnel/d' \
+        -e '/tun-server/d' \
+        -e '/tun-client/d' \
+        -e '/nft.*jojonet/d' \
+        -e '/GRETun/d' \
+        -e '/LocalTun/d' \
+        -e '/jojonet-run/d' \
+        -e '/paqet/d' \
+        -e '/vxlan/d' \
+        "$histfile" 2>/dev/null || true
+    history -c 2>/dev/null || true
+    history -w 2>/dev/null || true
+}
+
+toggle_stealth_mode() {
+    if [[ -f "$STEALTH_FLAG_FILE" ]]; then
+        rm -f "$STEALTH_FLAG_FILE"
+        STEALTH_MODE=0
+        echo -e "${GREEN}[+] Stealth mode OFF${NC}"
+    else
+        touch "$STEALTH_FLAG_FILE"
+        chmod 600 "$STEALTH_FLAG_FILE"
+        STEALTH_MODE=1
+        echo -e "${GREEN}[+] Stealth mode ON${NC}"
+        echo "  - Quiet output (no command dumps)"
+        echo "  - Obscure interface names"
+        echo "  - Shell history scrub on exit"
+    fi
+    sleep 2
+}
+
+generate_stealth_tunnel_name() {
+    local peer="$1" role="$2" mode="${3:-gre}" h
+    h=$(compute_gre_key "$peer" "jojonet-stealth-${role}-${mode}")
+    printf 'jx%x' $(( h % 16777215 ))
+}
+
+opsec_session_start
+trap 'opsec_scrub_history' EXIT
+
+# ==========================================
+# Core network helpers
+# ==========================================
+
+validate_interface_name() {
+    [[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,13}[a-zA-Z0-9])?$ ]] || return 1
+}
+
+validate_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+
+    local a b c d
+    IFS='.' read -r a b c d <<< "$ip"
+
+    local i
+    for i in $a $b $c $d; do
+        (( i <= 255 )) || return 1
+    done
+
+    (( a > 0 && a < 224 && a != 127 )) || return 1
+
+    if [[ "$ip" =~ ^10\. || "$ip" =~ ^192\.168\. || "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+        return 1
+    fi
+    return 0
+}
+
+validate_subnet_byte() {
+    [[ "$1" =~ ^[0-9]+$ ]] || return 1
+    (( "$1" >= 1 && "$1" <= 250 ))
+}
+
+validate_ports() {
+    local part list
+    IFS=',' read -ra list <<< "$1"
+
+    for part in "${list[@]}"; do
+        part="${part// /}"
+        [[ -n "$part" ]] || return 1
+        if [[ "$part" =~ ^([0-9]{1,5})$ ]]; then
+            (( part >= 1 && part <= 65535 )) || return 1
+        elif [[ "$part" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+            local a="${BASH_REMATCH[1]}"
+            local b="${BASH_REMATCH[2]}"
+            (( a >= 1 && a <= 65535 )) || return 1
+            (( b >= 1 && b <= 65535 )) || return 1
+            (( a <= b )) || return 1
+        else
+            return 1
+        fi
+    done
+    return 0
+}
+
+auto_detect_network() {
+    DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+    if [[ -z "$DEFAULT_IFACE" ]]; then
+        echo -e "${RED}[!] Default interface not found.${NC}" >&2
+        return 1
+    fi
+
+    DETECTED_IP=$(ip -4 -o addr show dev "$DEFAULT_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)
+    if [[ -z "$DETECTED_IP" ]]; then
+        echo -e "${RED}[!] No IPv4 on $DEFAULT_IFACE.${NC}" >&2
+        return 1
+    fi
+}
+
+calculate_mtu() {
+    local target="${1:-1.1.1.1}"
+    local min=1200 max=1472 size best=0
+
+    echo -e "${YELLOW}[*] Probing path MTU via ping to $target...${NC}" >&2
+
+    while (( min <= max )); do
+        size=$(( (min + max) / 2 ))
+        if ping -M do -c1 -W2 -s "$size" "$target" >/dev/null 2>&1; then
+            best=$size
+            min=$(( size + 1 ))
+        else
+            max=$(( size - 1 ))
+        fi
+    done
+
+    if (( best == 0 )); then
+        echo "$DEFAULT_MTU_FALLBACK"
+        return
+    fi
+
+    # GRE overhead: IP(20) + GRE(24) vs ICMP probe size
+    local mtu=$(( best + 28 - 24 ))
+    (( mtu > 1500 )) && mtu=1500
+    if (( mtu < 1280 )); then
+        mtu=$DEFAULT_MTU_FALLBACK
+    fi
+    # Prefer stable 1310 when probe is close (common GRE setup)
+    if (( mtu > DEFAULT_MTU_FALLBACK )); then
+        mtu=$DEFAULT_MTU_FALLBACK
+    fi
+    echo "$mtu"
+}
+
+generate_unique_subnet() {
+    touch "$LOCK_FILE" 2>/dev/null || true
+    exec 200>"$LOCK_FILE"
+    flock -x 200
+
+    local used=""
+    shopt -s nullglob
+    local conf_files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+
+    if (( ${#conf_files[@]} > 0 )); then
+        used=$(awk -F'"' '/Subnet_Byte/ {print $2}' "${conf_files[@]}" 2>/dev/null || true)
+    fi
+
+    local byte
+    for byte in $(seq 1 250); do
+        if ! grep -qx "$byte" <<< "$used" 2>/dev/null; then
+            echo "$byte"
+            flock -u 200
+            exec 200>&-
+            return
+        fi
+    done
+
+    flock -u 200
+    exec 200>&-
+    echo 0
+}
+
+subnet_byte_in_use() {
+    local byte="$1"
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    (( ${#files[@]} > 0 )) || return 1
+    awk -F'"' -v b="$byte" '$0 ~ /Subnet_Byte/ && $2 == b { found=1 } END { exit !found }' "${files[@]}"
+}
+
+apply_global_sysctl() {
+    if [[ ! -f "$SYSCTL_FILE" ]]; then
+        echo -e "${YELLOW}[*] Applying global network tuning (BBR + forwarding)...${NC}"
+        cat <<EOF > "$SYSCTL_FILE"
+# JojoNet network profile (v1.1+)
+# rp_filter is NOT disabled globally anymore (anti-spoofing preserved).
+# GRE/VXLAN runners set rp_filter=0 only on the tunnel interface when needed.
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+net.ipv4.ip_forward=1
+net.ipv4.tcp_fastopen=3
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.core.netdev_max_backlog=250000
+net.core.somaxconn=65535
+net.ipv4.tcp_max_syn_backlog=65535
+net.ipv4.ip_local_port_range=1024 65535
+net.ipv4.tcp_fin_timeout=15
+fs.file-max=2097152
+EOF
+        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
+            cat <<EOF >> "$SYSCTL_FILE"
+# Explicitly requested via JOJONET_DISABLE_RP_FILTER=1
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+EOF
+        fi
+        sysctl --system >/dev/null 2>&1 || true
+    fi
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
+        # Prefer interface-scoped rp_filter disable (keeps global anti-spoofing)
+        # Fallback to global only if JOJONET_DISABLE_RP_FILTER=1
+        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
+            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+            sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
+clamp_mtu() {
+    local mtu="$1"
+    if ! [[ "$mtu" =~ ^[0-9]+$ ]]; then
+        echo "$DEFAULT_MTU_FALLBACK"
+        return
+    fi
+    (( mtu < 576 )) && mtu=$DEFAULT_MTU_FALLBACK
+    (( mtu > 9000 )) && mtu=$DEFAULT_MTU_FALLBACK
+    echo "$mtu"
+}
+
+ipv4_to_uint() {
+    local a b c d
+    IFS='.' read -r a b c d <<< "$1"
+    echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+}
+
+# Same subnet on both servers — derived from the IP pair (no manual Subnet ID)
+compute_pair_subnet_byte() {
+    local ip1="$1" ip2="$2" u1 u2 key h
+    u1=$(ipv4_to_uint "$ip1")
+    u2=$(ipv4_to_uint "$ip2")
+    if (( u1 < u2 )); then
+        key="${ip1}|${ip2}"
+    else
+        key="${ip2}|${ip1}"
+    fi
+    if command -v cksum >/dev/null 2>&1; then
+        h=$(printf '%s' "$key" | cksum | awk '{print $1}')
+    elif command -v md5sum >/dev/null 2>&1; then
+        h=$(( 16#$(printf '%s' "$key" | md5sum | awk '{print $1}' | cut -c1-7) ))
+    else
+        h=$(( u1 ^ u2 ))
+    fi
+    echo $(( (h % 250) + 1 ))
+}
+
+# Unique GRE key per IP pair (required for multiple GRE tunnels on one server)
+compute_gre_key() {
+    local ip1="$1" ip2="$2" u1 u2 pair h
+    u1=$(ipv4_to_uint "$ip1")
+    u2=$(ipv4_to_uint "$ip2")
+    if (( u1 < u2 )); then
+        pair="${ip1}|${ip2}"
+    else
+        pair="${ip2}|${ip1}"
+    fi
+    if command -v cksum >/dev/null 2>&1; then
+        h=$(printf '%s' "$pair" | cksum | awk '{print $1}')
+    elif command -v md5sum >/dev/null 2>&1; then
+        h=$(( 16#$(printf '%s' "$pair" | md5sum | awk '{print $1}' | cut -c1-7) ))
+    else
+        h=$(( u1 ^ u2 ))
+    fi
+    h=$(( (h % 2147483646) + 1 ))
+    echo "$h"
+}
+
+# Unique VXLAN VNI per IP pair (1..16777215)
+compute_vxlan_vni() {
+    local vni
+    vni=$(compute_gre_key "$1" "$2")
+    (( vni > 16777215 )) && vni=$(( vni % 16777214 + 1 ))
+    echo "$vni"
+}
+
+detect_server_role() {
+    local ip="$1" cc=""
+    if command -v curl >/dev/null 2>&1; then
+        cc=$(curl -fsSL --max-time 8 "https://ip-api.com/json/${ip}?fields=countryCode" 2>/dev/null \
+            | grep -oE '"countryCode":"[A-Z]{2}"' | head -1 | cut -d'"' -f4 || true)
+    fi
+    if [[ "$cc" == "IR" ]]; then
+        printf '%s' "iran"
+        return 0
+    elif [[ -n "$cc" ]]; then
+        printf '%s' "kharej"
+        return 0
+    fi
+    return 1
+}
+
+prompt_server_role() {
+    local choice=""
+    log_warn "Could not auto-detect server country."
+    echo -e "  ${GREEN}1)${NC} Iran (Port Forwarder)" >&2
+    echo -e "  ${GREEN}2)${NC} Foreign (Gateway only)" >&2
+    read -r -p "Choose [1/2]: " choice </dev/tty
+    case "$choice" in
+        1) printf '%s' "iran" ;;
+        2) printf '%s' "kharej" ;;
+        *) return 1 ;;
+    esac
+}
+
+find_tunnel_for_peer() {
+    local peer="$1" want_mode="${2:-}" f n r m
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    for f in "${files[@]}"; do
+        n=$(grep -E '^Name=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        r=$(grep -E '^Remote_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        m=$(grep -E '^TunnelMode=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        m=${m:-gre}
+        if [[ -n "$n" && "$r" == "$peer" ]]; then
+            if [[ -n "$want_mode" && "$m" != "$want_mode" ]]; then
+                continue
+            fi
+            echo "$n"
+            return 0
+        fi
+    done
+    return 1
+}
+
+tunnel_name_taken() {
+    local name="$1"
+    if [[ -f "$INSTANCES_DIR/$name.conf" ]]; then
+        return 0
+    fi
+    ip link show "$name" >/dev/null 2>&1
+}
+
+generate_unique_tunnel_name() {
+    local base="$1" candidate="" i max_base
+    if ! tunnel_name_taken "$base"; then
+        echo "$base"
+        return 0
+    fi
+    for i in $(seq 2 99); do
+        max_base=$((15 - ${#i}))
+        (( max_base < 1 )) && max_base=1
+        candidate="${base:0:max_base}${i}"
+        if ! tunnel_name_taken "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Unique interface per peer — e.g. ir195158230128 (foreign) / kh575200210 (iran)
+generate_tunnel_name_from_peer() {
+    local peer="$1" role="$2" mode="${3:-gre}"
+    local digits prefix base
+    digits=$(echo "$peer" | tr -d '.')
+    if [[ "$mode" == "tun_tcp" ]]; then
+        prefix="tc"
+    elif [[ "$mode" == "paqet" ]]; then
+        prefix="pq"
+    elif [[ "$mode" == "vxlan" ]]; then
+        prefix="vx"
+    elif [[ "$role" == "kharej" ]]; then
+        prefix="ir"
+    else
+        prefix="kh"
+    fi
+    base="${prefix}${digits}"
+    if (( ${#base} > 15 )); then
+        base="${prefix}${digits: -$((15 - ${#prefix}))}"
+    fi
+    generate_unique_tunnel_name "$base"
+}
+
+any_gre_present() {
+    ip -o link show type gre 2>/dev/null | grep -q .
+}
+
+allocate_tunnel_name() {
+    local peer="$1" role="$2" mode="${3:-gre}" base=""
+    load_stealth_mode
+    if [[ "$STEALTH_MODE" == "1" ]]; then
+        base=$(generate_stealth_tunnel_name "$peer" "$role" "$mode")
+        generate_unique_tunnel_name "$base"
+        return 0
+    fi
+    generate_tunnel_name_from_peer "$peer" "$role" "$mode"
+}
+
+wait_for_tunnel_up() {
+    local name="$1" mode="$2" max_wait="${3:-60}"
+    local i
+    for ((i = 1; i <= max_wait; i++)); do
+        if [[ "$mode" == "tun_tcp" ]]; then
+            ip link show "$name" >/dev/null 2>&1 && return 0
+        elif [[ "$mode" == "paqet" ]]; then
+            pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 && return 0
+        elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+verify_tunnel_ping() {
+    local target_ip="$1"
+    [[ -n "$target_ip" ]] || return 0
+    if ping -c 2 -W 3 "$target_ip" >/dev/null 2>&1; then
+        echo -e "${GREEN}[+] Ping OK: $target_ip${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}[!] Ping to $target_ip failed (check peer server / firewall).${NC}"
+    return 1
+}
+
+repair_single_config() {
+    local conf="$1" loc rem gre mode name changed=0
+    [[ -f "$conf" ]] || return 0
+    mode=$(conf_get_field "$conf" "TunnelMode")
+    name=$(conf_get_field "$conf" "Name")
+    [[ -n "$name" ]] || return 0
+
+    if [[ "${mode:-gre}" == "gre" ]]; then
+        gre=$(conf_get_field "$conf" "GreKey")
+        if [[ -z "$gre" ]]; then
+            loc=$(conf_get_field "$conf" "Local_IP")
+            rem=$(conf_get_field "$conf" "Remote_IP")
+            gre=$(compute_gre_key "$loc" "$rem")
+            if grep -q '^GreKey=' "$conf"; then
+                sed -i "s/^GreKey=.*/GreKey=\"$gre\"/" "$conf"
+            else
+                echo "GreKey=\"$gre\"" >> "$conf"
+            fi
+            changed=1
+            echo -e "${YELLOW}[*] Repaired GreKey for [$name] -> $gre${NC}"
+        fi
+    elif [[ "${mode:-gre}" == "vxlan" ]]; then
+        local vni port
+        vni=$(conf_get_field "$conf" "VxlanVni")
+        if [[ -z "$vni" ]]; then
+            loc=$(conf_get_field "$conf" "Local_IP")
+            rem=$(conf_get_field "$conf" "Remote_IP")
+            vni=$(compute_vxlan_vni "$loc" "$rem")
+            if grep -q '^VxlanVni=' "$conf"; then
+                sed -i "s/^VxlanVni=.*/VxlanVni=\"$vni\"/" "$conf"
+            else
+                echo "VxlanVni=\"$vni\"" >> "$conf"
+            fi
+            changed=1
+            echo -e "${YELLOW}[*] Repaired VxlanVni for [$name] -> $vni${NC}"
+        fi
+        port=$(conf_get_field "$conf" "VxlanPort")
+        if [[ -z "$port" ]]; then
+            if grep -q '^VxlanPort=' "$conf"; then
+                sed -i "s/^VxlanPort=.*/VxlanPort=\"$DEFAULT_VXLAN_PORT\"/" "$conf"
+            else
+                echo "VxlanPort=\"$DEFAULT_VXLAN_PORT\"" >> "$conf"
+            fi
+            changed=1
+        fi
+    elif [[ "${mode:-gre}" == "paqet" ]]; then
+        local yaml tcp_port key_dir role rem fwd proto
+        yaml=$(conf_get_field "$conf" "PaqetYaml")
+        tcp_port=$(conf_get_field "$conf" "TcpPort")
+        key_dir=$(conf_get_field "$conf" "KeyDir")
+        role=$(conf_get_field "$conf" "Role")
+        rem=$(conf_get_field "$conf" "Remote_IP")
+        fwd=$(conf_get_field "$conf" "Ports")
+        proto=$(conf_get_field "$conf" "ForwardProto")
+        proto=${proto:-tcp}
+        if [[ -n "$yaml" && ( ! -f "$yaml" || ! -s "$yaml" ) && -n "$key_dir" ]]; then
+            build_paqet_runtime_config "$name" "$role" "$rem" "${tcp_port:-$DEFAULT_PAQET_PORT}" \
+                "$key_dir" "$fwd" "$proto" && changed=1
+            echo -e "${YELLOW}[*] Repaired Paqet YAML for [$name]${NC}"
+        fi
+    fi
+
+    if (( changed )); then
+        systemctl restart "$(tunnel_service_unit "$name")" 2>/dev/null || true
+    fi
+}
+
+repair_all_instances() {
+    shopt -s nullglob
+    local f
+    for f in "$INSTANCES_DIR"/*.conf; do
+        repair_single_config "$f"
+    done
+    shopt -u nullglob
+}
+
+refresh_runtime_templates() {
+    create_template_script || return 1
+    create_template_service || return 1
+    create_tuntcp_runner_script || return 1
+    create_tuntcp_service || return 1
+    create_paqet_runner_script || return 1
+    create_paqet_service || return 1
+    create_vxlan_runner_script || return 1
+    create_vxlan_service || return 1
+    return 0
+}
+
+count_configured_tunnels() {
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    echo "${#files[@]}"
+}
+
+show_existing_tunnels_summary() {
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    if (( ${#files[@]} == 0 )); then
+        return 0
+    fi
+        echo -e "\n${CYAN}Active tunnels:${NC}"
+    local f n r t
+    for f in "${files[@]}"; do
+        n=$(grep -E '^Name=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        r=$(grep -E '^Remote_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        t=$(grep -E '^Tun_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        local mode_disp
+        mode_disp=$(grep -E '^TunnelMode=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        if [[ "${mode_disp:-gre}" == "paqet" ]]; then
+            t=$(grep -E '^TcpPort=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+            t=":${t:-?}"
+        elif [[ "${mode_disp:-gre}" == "vxlan" ]]; then
+            t=$(grep -E '^Tun_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+            t=$(echo "$t" | awk -F'/' '{print $1}')
+        fi
+        if systemctl is-active --quiet "$(tunnel_service_unit "$n")" 2>/dev/null; then
+            echo -e "  ${BLUE}$n${NC} -> peer ${CYAN}$r${NC} | $t | ${GREEN}UP${NC}"
+        else
+            echo -e "  ${BLUE}$n${NC} -> peer ${CYAN}$r${NC} | $t | ${RED}DOWN${NC}"
+        fi
+    done
+    echo ""
+}
+
+resolve_tunnel_ips() {
+    local role="$1" subnet_byte="$2" mode="${3:-gre}"
+    local net_prefix="$TUNNEL_NET_PREFIX"
+    [[ "$mode" == "tun_tcp" ]] && net_prefix="$TUN_TCP_NET_PREFIX"
+    [[ "$mode" == "vxlan" ]] && net_prefix="$VXLAN_NET_PREFIX"
+
+    Tun_Server_IP="${net_prefix}.$subnet_byte.1"
+    Tun_Client_IP="${net_prefix}.$subnet_byte.2"
+
+    if [[ "$role" == "iran" ]]; then
+        if [[ "$mode" == "tun_tcp" ]]; then
+            Tun_IP="${Tun_Client_IP}/24"
+            Tun_Remote_IP_Raw="$Tun_Server_IP"
+        else
+            Tun_IP="${net_prefix}.$subnet_byte.1/30"
+            Tun_Remote_IP_Raw="${net_prefix}.$subnet_byte.2"
+        fi
+    else
+        if [[ "$mode" == "tun_tcp" ]]; then
+            Tun_IP="${Tun_Server_IP}/24"
+        else
+            Tun_IP="${net_prefix}.$subnet_byte.2/30"
+        fi
+        Tun_Remote_IP_Raw=""
+    fi
+}
+
+detect_cpu_arch_zip() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64.zip" ;;
+        aarch64|arm64) echo "arm64.zip" ;;
+        i386|i686) echo "386.zip" ;;
+        *) return 1 ;;
+    esac
+}
+
+install_tun_tcp_binaries() {
+    if [[ -x "$TUNTCP_BIN_DIR/tun-server" && -x "$TUNTCP_BIN_DIR/tun-client" ]]; then
+        return 0
+    fi
+    command -v unzip >/dev/null 2>&1 || {
+        log_error "unzip required for TUN/TCP mode."
+        return 1
+    }
+    local zip arch_zip tmpdir url
+    arch_zip=$(detect_cpu_arch_zip) || {
+        log_error "Unsupported CPU for TUN/TCP binaries."
+        return 1
+    }
+    tmpdir=$(mktemp -d /tmp/jojonet-tun.XXXXXX) || return 1
+    url="${LOCALTUN_RELEASE}/${arch_zip}"
+    log_note "Downloading LocalTun TCP ($arch_zip)..."
+    if ! download_verified "$url" "$tmpdir/$arch_zip" "$arch_zip"; then
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    unzip -oq "$tmpdir/$arch_zip" -d "$tmpdir" || { rm -rf "$tmpdir"; return 1; }
+    install -m755 "$tmpdir/tun-server" "$TUNTCP_BIN_DIR/tun-server"
+    install -m755 "$tmpdir/tun-client" "$TUNTCP_BIN_DIR/tun-client"
+    rm -rf "$tmpdir"
+    log_info "tun-server / tun-client installed."
+    return 0
+}
+
+try_pull_tun_tcp_keys() {
+    local peer="$1" pair_id="$2" keydir="$3"
+    command -v scp >/dev/null 2>&1 || return 1
+    install -d -m700 "$keydir"
+    if scp -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -q \
+        "root@${peer}:${keydir}/private_key.pem" \
+        "root@${peer}:${keydir}/public_key.pem" \
+        "$keydir/" 2>/dev/null; then
+        chmod 600 "$keydir/private_key.pem" 2>/dev/null || true
+        chmod 644 "$keydir/public_key.pem" 2>/dev/null || true
+        [[ -f "$keydir/private_key.pem" && -f "$keydir/public_key.pem" ]] && return 0
+    fi
+    return 1
+}
+
+try_push_tun_tcp_keys() {
+    local peer="$1" keydir="$2"
+    command -v scp >/dev/null 2>&1 || return 1
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+        "root@${peer}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || return 1
+    scp -o ConnectTimeout=10 -q "$keydir/private_key.pem" "$keydir/public_key.pem" \
+        "root@${peer}:${keydir}/" 2>/dev/null
+}
+
+ensure_tun_tcp_keys() {
+    local pair_id="$1" peer_ip="${2:-}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}"
+    install -d -m700 "$keydir"
+
+    if [[ -f "$keydir/private_key.pem" && -f "$keydir/public_key.pem" ]]; then
+        printf '%s' "$keydir"
+        return 0
+    fi
+
+    if [[ -n "$peer_ip" ]] && try_pull_tun_tcp_keys "$peer_ip" "$pair_id" "$keydir"; then
+        log_info "Keys synced from peer $peer_ip"
+        printf '%s' "$keydir"
+        return 0
+    fi
+
+    command -v openssl >/dev/null 2>&1 || return 1
+    log_note "Generating RSA keys (pair_${pair_id})..."
+    openssl genrsa -out "$keydir/private_key.pem" 2048 >/dev/null 2>&1
+    chmod 600 "$keydir/private_key.pem"
+    openssl rsa -pubout -in "$keydir/private_key.pem" -out "$keydir/public_key.pem" >/dev/null 2>&1
+    chmod 644 "$keydir/public_key.pem"
+
+    if [[ -n "$peer_ip" ]]; then
+        if try_push_tun_tcp_keys "$peer_ip" "$keydir"; then
+            log_info "Keys pushed to peer $peer_ip via SSH"
+        else
+            log_warn "Auto key sync failed. Copy manually:"
+            echo "    scp -r $keydir root@${peer_ip}:${KEYS_ROOT}/" >&2
+        fi
+    fi
+
+    printf '%s' "$keydir"
+}
+
+show_tun_tcp_key_sync_hint() {
+    local pair_id="$1" keydir="$2" peer_ip="${3:-}"
+    echo -e "\n${YELLOW}=== TUN/PrivateIP/TCP Keys ===${NC}"
+    echo -e "  Folder:  ${CYAN}$keydir${NC}"
+    echo -e "  Pair ID: ${CYAN}$pair_id${NC}"
+    [[ -n "$peer_ip" ]] && echo -e "  Peer:    ${CYAN}$peer_ip${NC}"
+    echo -e "  ${YELLOW}Keys auto-sync via SSH when possible.${NC}"
+    echo -e "  ${CYAN}Or without SSH:${NC} sudo jojonet --export-keys PEER /root/k.tar.gz"
+    echo -e "                 sudo jojonet --import-keys PEER /root/k.tar.gz"
+    echo ""
+}
+
+# ==========================================
+# Paqet (Raw/KCP) helpers
+# ==========================================
+
+PAQET_IFACE="" PAQET_LOCAL_IP="" PAQET_GATEWAY_MAC=""
+
+detect_cpu_arch_paqet() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
+paqet_optimized_download_name() {
+    local arch="$1"
+    if [[ "$arch" == "arm64" ]]; then
+        echo "paqet_linux_arm64-${PAQET_OPTIMIZED_VERSION}.tar.gz"
+    else
+        echo "paqet-linux-${arch}-${PAQET_OPTIMIZED_VERSION}.tar.gz"
+    fi
+}
+
+install_paqet_binary() {
+    if [[ -x "$PAQET_BIN_DIR/paqet" ]]; then
+        return 0
+    fi
+    command -v tar >/dev/null 2>&1 || {
+        echo -e "${RED}[!] tar required for Paqet install.${NC}" >&2
+        return 1
+    }
+    local arch tmpdir url fname ok=0
+    arch=$(detect_cpu_arch_paqet) || {
+        echo -e "${RED}[!] Unsupported CPU for Paqet.${NC}" >&2
+        return 1
+    }
+    tmpdir=$(mktemp -d /tmp/jojonet-paqet.XXXXXX) || return 1
+    fname=$(paqet_optimized_download_name "$arch")
+    url="https://github.com/${PAQET_OPTIMIZED_REPO}/releases/download/${PAQET_OPTIMIZED_TAG}/${fname}"
+    echo -e "${YELLOW}[*] Downloading Paqet ($fname)...${NC}" >&2
+    if download_verified "$url" "$tmpdir/paqet.tar.gz" "$fname"; then
+        ok=1
+    else
+        local latest core_file
+        latest="${PAQET_CORE_VERSION:-v1.0.0-alpha.16}"
+        core_file="paqet-linux-${arch}-${latest}.tar.gz"
+        url="https://github.com/${PAQET_CORE_REPO}/releases/download/${latest}/${core_file}"
+        echo -e "${YELLOW}[*] Optimized build unavailable — trying pinned core: $core_file${NC}" >&2
+        if download_verified "$url" "$tmpdir/paqet.tar.gz" "$core_file"; then
+            ok=1
+        fi
+    fi
+    if (( ok == 0 )); then
+        echo -e "${RED}[!] Paqet download failed (or checksum missing — set JOJONET_ALLOW_UNSIGNED=1 once).${NC}" >&2
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    tar -xzf "$tmpdir/paqet.tar.gz" -C "$tmpdir" 2>/dev/null || { rm -rf "$tmpdir"; return 1; }
+    local bin_path=""
+    if [[ -f "$tmpdir/paqet" ]]; then
+        bin_path="$tmpdir/paqet"
+    else
+        bin_path=$(find "$tmpdir" -maxdepth 2 -type f -name paqet 2>/dev/null | head -1)
+    fi
+    [[ -n "$bin_path" && -f "$bin_path" ]] || {
+        echo -e "${RED}[!] paqet binary not found in archive.${NC}" >&2
+        rm -rf "$tmpdir"
+        return 1
+    }
+    install -m755 "$bin_path" "$PAQET_BIN_DIR/paqet"
+    rm -rf "$tmpdir"
+    log_info "Paqet installed: $PAQET_BIN_DIR/paqet"
+    return 0
+}
+
+get_paqet_network_info() {
+    PAQET_IFACE="" PAQET_LOCAL_IP="" PAQET_GATEWAY_MAC=""
+    local gw_ip=""
+    PAQET_IFACE=$(ip route | awk '/default/ {print $5; exit}')
+    [[ -n "$PAQET_IFACE" ]] || PAQET_IFACE="eth0"
+    PAQET_LOCAL_IP=$(ip -4 addr show "$PAQET_IFACE" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -1)
+    gw_ip=$(ip route | awk '/default/ {print $3; exit}')
+    if [[ -n "$gw_ip" ]]; then
+        ping -c 1 -W 1 "$gw_ip" >/dev/null 2>&1 || true
+        PAQET_GATEWAY_MAC=$(ip neigh show "$gw_ip" 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | head -1)
+        if [[ -z "$PAQET_GATEWAY_MAC" ]] && command -v arp >/dev/null 2>&1; then
+            PAQET_GATEWAY_MAC=$(arp -n "$gw_ip" 2>/dev/null | awk "/^$gw_ip/ {print \$3}" | head -1)
+        fi
+    fi
+    [[ -n "$PAQET_LOCAL_IP" && -n "$PAQET_GATEWAY_MAC" ]] || {
+        echo -e "${RED}[!] Cannot detect network interface/MAC for Paqet.${NC}" >&2
+        return 1
+    }
+    return 0
+}
+
+paqet_configure_iptables() {
+    local port="$1" protocol="${2:-tcp}"
+    command -v iptables >/dev/null 2>&1 || {
+        echo -e "${YELLOW}[!] iptables not found — Paqet may need manual firewall rules.${NC}"
+        return 0
+    }
+    local protos=()
+    if [[ "$protocol" == "both" ]]; then
+        protos=("tcp" "udp")
+    else
+        protos=("$protocol")
+    fi
+    local proto
+    for proto in "${protos[@]}"; do
+        iptables -t raw -C PREROUTING -p "$proto" --dport "$port" -j NOTRACK 2>/dev/null || \
+            iptables -t raw -A PREROUTING -p "$proto" --dport "$port" -j NOTRACK
+        iptables -t raw -C OUTPUT -p "$proto" --sport "$port" -j NOTRACK 2>/dev/null || \
+            iptables -t raw -A OUTPUT -p "$proto" --sport "$port" -j NOTRACK
+        if [[ "$proto" == "tcp" ]]; then
+            iptables -t mangle -C OUTPUT -p tcp --sport "$port" --tcp-flags RST RST -j DROP 2>/dev/null || \
+                iptables -t mangle -A OUTPUT -p tcp --sport "$port" --tcp-flags RST RST -j DROP
+        fi
+    done
+    return 0
+}
+
+try_pull_paqet_secret() {
+    local peer="$1" keydir="$2"
+    command -v scp >/dev/null 2>&1 || return 1
+    install -d -m700 "$keydir"
+    scp -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -q \
+        "root@${peer}:${keydir}/paqet.secret" "$keydir/" 2>/dev/null || return 1
+    chmod 600 "$keydir/paqet.secret" 2>/dev/null || true
+    [[ -f "$keydir/paqet.secret" ]]
+}
+
+try_push_paqet_secret() {
+    local peer="$1" keydir="$2"
+    command -v scp >/dev/null 2>&1 || return 1
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+        "root@${peer}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || return 1
+    scp -o ConnectTimeout=10 -q "$keydir/paqet.secret" "root@${peer}:${keydir}/" 2>/dev/null
+}
+
+ensure_paqet_secret() {
+    local pair_id="$1" peer_ip="${2:-}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}"
+    install -d -m700 "$keydir"
+
+    if [[ -f "$keydir/paqet.secret" ]]; then
+        printf '%s' "$keydir"
+        return 0
+    fi
+
+    if [[ -n "$peer_ip" ]] && try_pull_paqet_secret "$peer_ip" "$keydir"; then
+        log_info "Paqet secret synced from peer $peer_ip"
+        printf '%s' "$keydir"
+        return 0
+    fi
+
+    openssl rand -hex 16 > "$keydir/paqet.secret"
+    chmod 600 "$keydir/paqet.secret"
+
+    if [[ -n "$peer_ip" ]]; then
+        if try_push_paqet_secret "$peer_ip" "$keydir"; then
+            log_info "Paqet secret pushed to peer $peer_ip via SSH"
+        else
+            log_warn "Auto secret sync failed. Copy manually:"
+            echo "    scp $keydir/paqet.secret root@${peer_ip}:${keydir}/" >&2
+        fi
+    fi
+    printf '%s' "$keydir"
+}
+
+show_paqet_secret_hint() {
+    local pair_id="$1" keydir="$2" peer_ip="${3:-}"
+    echo -e "\n${YELLOW}=== Paqet Secret Key ===${NC}"
+    echo -e "  Folder:  ${CYAN}$keydir/paqet.secret${NC}"
+    echo -e "  Pair ID: ${CYAN}$pair_id${NC}"
+    [[ -n "$peer_ip" ]] && echo -e "  Peer:    ${CYAN}$peer_ip${NC}"
+    echo -e "  ${YELLOW}Secret auto-syncs via SSH when possible.${NC}"
+    echo ""
+}
+
+write_paqet_server_yaml() {
+    local name="$1" port="$2" secret="$3" conn="$4" mtu="$5" yaml="$6"
+    get_paqet_network_info || return 1
+    cat > "$yaml" <<EOF
+# JojoNet Paqet Server
+role: "server"
+log:
+  level: "info"
+listen:
+  addr: ":$port"
+network:
+  interface: "$PAQET_IFACE"
+  ipv4:
+    addr: "$PAQET_LOCAL_IP:$port"
+    router_mac: "$PAQET_GATEWAY_MAC"
+  tcp:
+    local_flag: ["PA"]
+transport:
+  protocol: "kcp"
+  conn: $conn
+  kcp:
+    key: "$secret"
+    mode: "$DEFAULT_PAQET_KCP_MODE"
+    block: "$DEFAULT_PAQET_ENCRYPTION"
+    mtu: $mtu
+EOF
+    chmod 600 "$yaml"
+}
+
+write_paqet_client_yaml() {
+    local name="$1" server_ip="$2" port="$3" secret="$4" conn="$5" mtu="$6"
+    local forward_ports="$7" forward_proto="$8" yaml="$9"
+    get_paqet_network_info || return 1
+    {
+        echo "# JojoNet Paqet Client"
+        echo "role: \"client\""
+        echo "log:"
+        echo "  level: \"info\""
+        if [[ -n "$forward_ports" ]]; then
+            echo "forward:"
+            local p protos=() proto
+            IFS=',' read -ra _ports <<< "$forward_ports"
+            for p in "${_ports[@]}"; do
+                p="${p// /}"
+                [[ -n "$p" ]] || continue
+                case "$forward_proto" in
+                    udp) protos=("udp") ;;
+                    both) protos=("tcp" "udp") ;;
+                    *) protos=("tcp") ;;
+                esac
+                for proto in "${protos[@]}"; do
+                    echo "  - listen: \"0.0.0.0:$p\""
+                    echo "    target: \"127.0.0.1:$p\""
+                    echo "    protocol: \"$proto\""
+                    paqet_configure_iptables "$p" "$proto"
+                done
+            done
+        fi
+        cat <<EOF
+network:
+  interface: "$PAQET_IFACE"
+  ipv4:
+    addr: "$PAQET_LOCAL_IP:0"
+    router_mac: "$PAQET_GATEWAY_MAC"
+  tcp:
+    local_flag: ["PA"]
+    remote_flag: ["PA"]
+server:
+  addr: "$server_ip:$port"
+transport:
+  protocol: "kcp"
+  conn: $conn
+  kcp:
+    key: "$secret"
+    mode: "$DEFAULT_PAQET_KCP_MODE"
+    block: "$DEFAULT_PAQET_ENCRYPTION"
+    mtu: $mtu
+EOF
+    } > "$yaml"
+    chmod 600 "$yaml"
+}
+
+build_paqet_runtime_config() {
+    local ins_name="$1" role_conf="$2" rem_ip="$3" tcp_port="$4" key_dir="$5"
+    local fwd_port="$6" forward_proto="${7:-tcp}" yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml"
+    local secret="" conn="$DEFAULT_PAQET_CONN_CLIENT"
+
+    [[ -f "$key_dir/paqet.secret" ]] || return 1
+    secret=$(tr -d '\r\n' < "$key_dir/paqet.secret")
+
+    if [[ "$role_conf" == "kharej" ]]; then
+        conn="$DEFAULT_PAQET_CONN_SERVER"
+        paqet_configure_iptables "$tcp_port" "tcp"
+        write_paqet_server_yaml "$ins_name" "$tcp_port" "$secret" "$conn" "$DEFAULT_PAQET_MTU" "$yaml"
+    else
+        write_paqet_client_yaml "$ins_name" "$rem_ip" "$tcp_port" "$secret" "$conn" \
+            "$DEFAULT_PAQET_MTU" "$fwd_port" "$forward_proto" "$yaml"
+    fi
+}
+
+conf_get_field() {
+    local conf="$1" field="$2"
+    grep -E "^${field}=" "$conf" 2>/dev/null | head -1 | cut -d'"' -f2
+}
+
+tunnel_mode_from_name() {
+    local name="$1" conf="$INSTANCES_DIR/$name.conf"
+    local mode=""
+    [[ -f "$conf" ]] && mode=$(conf_get_field "$conf" "TunnelMode")
+    echo "${mode:-gre}"
+}
+
+deploy_tunnel() {
+    local ins_name="$1" role_conf="$2" loc_ip="$3" rem_ip="$4" subnet_byte="$5"
+    local tun_ip="$6" tun_remote="$7" ins_mtu="$8" fwd_port="$9"
+    local tunnel_mode="${10:-gre}" tcp_port="${11:-$DEFAULT_TCP_PORT}" key_dir="${12:-}"
+    local tun_server_ip="${13:-}" tun_client_ip="${14:-}" forward_proto="${15:-tcp}"
+    local conf_file="$INSTANCES_DIR/$ins_name.conf" tmp_conf="" svc_unit="" gre_key=""
+    local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port=""
+
+    apply_global_sysctl || return 1
+
+    if [[ "$tunnel_mode" == "gre" ]]; then
+        gre_key=$(compute_gre_key "$loc_ip" "$rem_ip")
+    elif [[ "$tunnel_mode" == "vxlan" ]]; then
+        vxlan_vni=$(compute_vxlan_vni "$loc_ip" "$rem_ip")
+        vxlan_port="${tcp_port:-$DEFAULT_VXLAN_PORT}"
+    fi
+
+    if [[ "$tunnel_mode" == "tun_tcp" ]]; then
+        install_tun_tcp_binaries || return 1
+        create_tuntcp_runner_script || return 1
+        create_tuntcp_service || return 1
+        svc_unit="jojonet-tcptun@${ins_name}.service"
+    elif [[ "$tunnel_mode" == "paqet" ]]; then
+        install_paqet_binary || return 1
+        create_paqet_runner_script || return 1
+        create_paqet_service || return 1
+        build_paqet_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
+            "$fwd_port" "${forward_proto:-tcp}" || return 1
+        svc_unit="jojonet-paqet@${ins_name}.service"
+    elif [[ "$tunnel_mode" == "vxlan" ]]; then
+        create_vxlan_runner_script || return 1
+        create_vxlan_service || return 1
+        svc_unit="jojonet-vxlan@${ins_name}.service"
+    else
+        create_template_script || return 1
+        create_template_service || return 1
+        svc_unit="jojonet@${ins_name}.service"
+    fi
+
+    tmp_conf="${conf_file}.tmp"
+    cat > "$tmp_conf" <<EOF
+Name="$ins_name"
+TunnelMode="$tunnel_mode"
+Role="$role_conf"
+Local_IP="$loc_ip"
+Remote_IP="$rem_ip"
+Subnet_Byte="$subnet_byte"
+Tun_IP="$tun_ip"
+Tun_Remote_IP_Raw="$tun_remote"
+Tun_Server_IP="$tun_server_ip"
+Tun_Client_IP="$tun_client_ip"
+Suggested_MTU="$ins_mtu"
+Ports="$fwd_port"
+TcpPort="$tcp_port"
+KeyDir="$key_dir"
+GreKey="$gre_key"
+PaqetYaml="$paqet_yaml"
+ForwardProto="$forward_proto"
+VxlanVni="$vxlan_vni"
+VxlanPort="$vxlan_port"
+EOF
+
+    chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; return 1; }
+    mv -f "$tmp_conf" "$conf_file" || { rm -f "$tmp_conf"; return 1; }
+
+    echo -e "${YELLOW}[*] Enabling systemd service...${NC}"
+    if ! systemctl enable "$svc_unit" >/dev/null 2>&1; then
+        rollback_new_tunnel "$ins_name" "$conf_file"
+        return 1
+    fi
+
+    echo -e "${YELLOW}[*] Starting tunnel ($tunnel_mode)...${NC}"
+    if ! systemctl start "$svc_unit" >/dev/null 2>&1; then
+        echo -e "${RED}[!] Start failed. Logs:${NC}"
+        journalctl -u "$svc_unit" -b --no-pager | tail -n 20 || true
+        rollback_new_tunnel "$ins_name" "$conf_file"
+        return 1
+    fi
+
+    if ! wait_for_tunnel_up "$ins_name" "$tunnel_mode" 90; then
+        echo -e "${RED}[!] Tunnel interface did not come up in time.${NC}"
+        journalctl -u "$svc_unit" -b --no-pager | tail -n 25 || true
+        rollback_new_tunnel "$ins_name" "$conf_file"
+        return 1
+    fi
+
+    if systemctl is-active --quiet "$svc_unit"; then
+        local iface_ok=0
+        if [[ "$tunnel_mode" == "tun_tcp" ]]; then
+            ip link show "$ins_name" >/dev/null 2>&1 && iface_ok=1
+        elif [[ "$tunnel_mode" == "paqet" ]]; then
+            pgrep -f "paqet run -c.*/${ins_name}\\.yaml" >/dev/null 2>&1 && iface_ok=1
+        elif ip link show "$ins_name" 2>/dev/null | grep -qE 'state UP|UP,'; then
+            iface_ok=1
+        fi
+        if (( iface_ok == 1 )); then
+            echo -e "${GREEN}[+] Tunnel [$ins_name] ($tunnel_mode) is ACTIVE!${NC}"
+            if [[ "$tunnel_mode" == "paqet" ]]; then
+                echo -e "  Listen/peer port: $tcp_port  |  Config: $paqet_yaml"
+            elif [[ "$tunnel_mode" == "vxlan" ]]; then
+                echo -e "  VNI: $vxlan_vni  |  UDP: $vxlan_port  |  Interface: $ins_name"
+            else
+                echo -e "  GreKey: ${gre_key:-n/a}  |  Interface: $ins_name"
+            fi
+            if systemctl is-enabled --quiet "$svc_unit" 2>/dev/null; then
+                hint "Enabled on boot."
+            fi
+            create_boot_restore_service || true
+            systemctl enable jojonet-boot.service >/dev/null 2>&1 || true
+            local ping_target=""
+            if [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "vxlan" ]]; then
+                if [[ "$role_conf" == "iran" ]]; then
+                    ping_target="${tun_remote:-$tun_client_ip}"
+                else
+                    ping_target="${tun_server_ip:-}"
+                fi
+            elif [[ "$tunnel_mode" == "tun_tcp" ]]; then
+                if [[ "$role_conf" == "iran" ]]; then
+                    ping_target="${tun_server_ip:-}"
+                else
+                    ping_target="${tun_client_ip:-}"
+                fi
+            fi
+            verify_tunnel_ping "$ping_target" || true
+            return 0
+        fi
+        echo -e "${RED}[!] Service active but runtime check failed.${NC}"
+    else
+        echo -e "${RED}[!] Service not active.${NC}"
+    fi
+
+    journalctl -u "$svc_unit" -b --no-pager | tail -n 20 || true
+    rollback_new_tunnel "$ins_name" "$conf_file"
+    return 1
+}
+
+quick_add_tunnel() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local tun_ip="" tun_remote="" ins_mtu="$DEFAULT_MTU_FALLBACK" fwd_port="" gre_key=""
+    local existing="" tunnel_count=0 rc=0
+
+    set +e
+
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "Quick GRE Setup"
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    loc_ip="$DETECTED_IP"
+    tunnel_count=$(count_configured_tunnels)
+    echo -e "\n${GREEN}Your IP:${NC} ${CYAN}$loc_ip${NC}  ${YELLOW}(${tunnel_count} tunnel(s))${NC}"
+    if any_gre_present && (( tunnel_count == 0 )); then
+        echo -e "${YELLOW}[!] Existing GRE interface(s) found (outside JojoNet).${NC}"
+        echo -e "${YELLOW}    New tunnel will use a unique interface name.${NC}"
+        ip -o link show type gre 2>/dev/null | awk '{print "    - " $2}' | sed 's/:$//' || true
+    fi
+    show_existing_tunnels_summary
+
+    if [[ -z "$peer_ip" ]]; then
+        read -r -p "Peer server IP (other side): " peer_ip
+    fi
+    peer_ip="${peer_ip// /}"
+
+    if [[ -z "$peer_ip" ]] || ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    if [[ "$peer_ip" == "$loc_ip" ]]; then
+        echo -e "${RED}[!] Peer IP cannot be the same as local IP.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip"); then
+        echo -e "${YELLOW}[!] Tunnel to $rem_ip already exists as [$existing]. Restarting...${NC}"
+        restart_tunnel "$existing"
+        sleep 2
+        return $?
+    fi
+
+    if role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${GREEN}[*] Role:${NC} $role_conf  ${YELLOW}(override: JOJONET_ROLE / --role)${NC}"
+    else
+        echo -e "${RED}[!] Role detection failed. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2
+        return 1
+    fi
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "gre") || {
+        echo -e "${RED}[!] Could not allocate unique interface name.${NC}"
+        sleep 3
+        return 1
+    }
+
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port="443"
+    else
+        fwd_port=""
+    fi
+
+    if [[ "${JOJONET_QUICK_PROBE_MTU:-0}" == "1" ]]; then
+        ins_mtu=$(calculate_mtu "$rem_ip")
+        ins_mtu=$(clamp_mtu "$ins_mtu")
+    else
+        ins_mtu=$DEFAULT_MTU_FALLBACK
+    fi
+
+    gre_key=$(compute_gre_key "$loc_ip" "$rem_ip")
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+
+    if subnet_byte_in_use "$subnet_byte"; then
+        local other_peer=""
+        other_peer=$(awk -F'"' -v b="$subnet_byte" '
+            $0 ~ /Subnet_Byte/ && $2 == b { in_b=1 }
+            in_b && $0 ~ /Remote_IP/ { print $2; exit }
+        ' "$INSTANCES_DIR"/*.conf 2>/dev/null || true)
+        if [[ -n "$other_peer" && "$other_peer" != "$rem_ip" ]]; then
+            echo -e "${RED}[!] Subnet collision with another tunnel (peer: $other_peer).${NC}"
+            sleep 3
+            return 1
+        fi
+    fi
+
+    resolve_tunnel_ips "$role_conf" "$subnet_byte" "gre"
+    tun_ip="$Tun_IP"
+    tun_remote="$Tun_Remote_IP_Raw"
+
+    echo -e "\n${CYAN}--- New isolated GRE tunnel ---${NC}"
+    echo -e "  Interface:     ${GREEN}$ins_name${NC}  ${YELLOW}(unique)${NC}"
+    echo -e "  Role:          $role_conf"
+    echo -e "  Local IP:      $loc_ip"
+    echo -e "  Peer IP:       $rem_ip"
+    echo -e "  Tunnel subnet: ${TUNNEL_NET_PREFIX}.$subnet_byte.0/30"
+    echo -e "  Tunnel IP:     $tun_ip"
+    echo -e "  GRE key:       $gre_key"
+    echo -e "  MTU:           $ins_mtu"
+    [[ -n "$fwd_port" ]] && echo -e "  Forward ports: $fwd_port"
+    hint "Run same on peer: sudo jojonet $loc_ip"
+    echo ""
+
+    show_tunnel_plan "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$tun_ip" "$tun_remote" "$ins_mtu" "$fwd_port" "$gre_key"
+
+    echo -e "${YELLOW}[*] Applying automatically...${NC}"
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$tun_ip" "$tun_remote" "$ins_mtu" "$fwd_port" "gre" "$DEFAULT_TCP_PORT" "" \
+        "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] Multi-tunnel OK. Total tunnels: $(count_configured_tunnels)${NC}"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+quick_add_tunnel_tun_tcp() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local tun_ip="" tun_remote="" fwd_port="" key_dir="" tcp_port="$DEFAULT_TCP_PORT"
+    local existing="" tunnel_count=0
+
+    set +e
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "TUN/PrivateIP/TCP (Backhaul-style)"
+
+    install_tun_tcp_binaries || { sleep 2; set -e; return 1; }
+
+    if ! auto_detect_network; then
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    loc_ip="$DETECTED_IP"
+    tunnel_count=$(count_configured_tunnels)
+    echo -e "\n${GREEN}Your IP:${NC} ${CYAN}$loc_ip${NC}  ${YELLOW}(${tunnel_count} tunnel(s))${NC}"
+    hint "Step 1: Foreign server  |  Step 2: Iran server (auto key sync via SSH)"
+    show_existing_tunnels_summary
+
+    [[ -z "$peer_ip" ]] && read -r -p "Peer server IP: " peer_ip
+    peer_ip="${peer_ip// /}"
+    if [[ -z "$peer_ip" ]] || ! validate_ipv4 "$peer_ip"; then
+        sleep 2
+        set -e
+        return 1
+    fi
+    [[ "$peer_ip" == "$loc_ip" ]] && { echo -e "${RED}[!] Same IP.${NC}"; sleep 2; set -e; return 1; }
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip"); then
+        restart_tunnel "$existing"
+        sleep 2
+        set -e
+        return $?
+    fi
+
+    if role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${GREEN}[*] Role:${NC} $role_conf  ${YELLOW}(override: JOJONET_ROLE / --role)${NC}"
+    else
+        echo -e "${RED}[!] Role detection failed. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "tun_tcp") || { set -e; return 1; }
+    [[ "$role_conf" == "iran" ]] && fwd_port="443" || fwd_port=""
+
+    if [[ "$role_conf" == "kharej" ]]; then
+        read -r -p "TCP listen port [$tcp_port]: " _tp
+        tcp_port=${_tp:-$tcp_port}
+    else
+        read -r -p "TCP server port on peer [$tcp_port]: " _tp
+        tcp_port=${_tp:-$tcp_port}
+    fi
+    if ! [[ "$tcp_port" =~ ^[0-9]+$ ]] || (( tcp_port < 1 || tcp_port > 65535 )); then
+        echo -e "${RED}[!] Invalid TCP port.${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+    key_dir=$(ensure_tun_tcp_keys "$subnet_byte" "$rem_ip") || {
+        echo -e "${RED}[!] Key setup failed (need openssl).${NC}"
+        sleep 2
+        set -e
+        return 1
+    }
+
+    show_tun_tcp_key_sync_hint "$subnet_byte" "$key_dir" "$rem_ip"
+
+    resolve_tunnel_ips "$role_conf" "$subnet_byte" "tun_tcp"
+    tun_ip="$Tun_IP"
+    tun_remote="$Tun_Remote_IP_Raw"
+
+    echo -e "\n${CYAN}--- TUN/PrivateIP/TCP plan ---${NC}"
+    echo -e "  Mode:      tun_tcp (TUN + private IP over TCP)"
+    echo -e "  Interface: $ins_name"
+    echo -e "  Role:      $role_conf ($([[ "$role_conf" == "kharej" ]] && echo tun-server || echo tun-client))"
+    echo -e "  TCP port:  $tcp_port"
+    echo -e "  Private:   $Tun_Server_IP (foreign) <-> $Tun_Client_IP (iran)"
+    echo -e "  Keys:      $key_dir"
+    [[ "$role_conf" == "kharej" ]] && hint "Now run on Iran: sudo jojonet --tun-tcp $loc_ip"
+
+    echo -e "${YELLOW}[*] Applying TUN/PrivateIP/TCP...${NC}"
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$tun_ip" "$tun_remote" "$TUN_TCP_MTU_CLIENT" "$fwd_port" "tun_tcp" "$tcp_port" "$key_dir" \
+        "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] TUN/PrivateIP/TCP tunnel [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --tun-tcp $loc_ip"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+quick_add_tunnel_paqet() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local fwd_port="" key_dir="" tcp_port="$DEFAULT_PAQET_PORT" forward_proto="both"
+    local existing="" tunnel_count=0
+
+    set +e
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "Paqet Tunnel (Raw/KCP)"
+
+    install_paqet_binary || { sleep 2; set -e; return 1; }
+
+    if ! command -v iptables >/dev/null 2>&1; then
+        echo -e "${YELLOW}[!] iptables recommended for Paqet (apt install iptables).${NC}"
+    fi
+
+    if ! auto_detect_network; then
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    loc_ip="$DETECTED_IP"
+    tunnel_count=$(count_configured_tunnels)
+    echo -e "\n${GREEN}Your IP:${NC} ${CYAN}$loc_ip${NC}  ${YELLOW}(${tunnel_count} tunnel(s))${NC}"
+    hint "Step 1: Foreign (server)  |  Step 2: Iran (client + port forward)"
+    show_existing_tunnels_summary
+
+    [[ -z "$peer_ip" ]] && read -r -p "Peer server IP: " peer_ip
+    peer_ip="${peer_ip// /}"
+    if [[ -z "$peer_ip" ]] || ! validate_ipv4 "$peer_ip"; then
+        sleep 2
+        set -e
+        return 1
+    fi
+    [[ "$peer_ip" == "$loc_ip" ]] && { echo -e "${RED}[!] Same IP.${NC}"; sleep 2; set -e; return 1; }
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip"); then
+        local ex_mode
+        ex_mode=$(tunnel_mode_from_name "$existing")
+        if [[ "$ex_mode" == "paqet" ]]; then
+            restart_tunnel "$existing"
+            sleep 2
+            set -e
+            return $?
+        fi
+        echo -e "${YELLOW}[!] Non-Paqet tunnel exists for $rem_ip [$existing]. Use Manage to delete first.${NC}"
+        sleep 3
+        set -e
+        return 1
+    fi
+
+    if role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${GREEN}[*] Role:${NC} $role_conf  ${YELLOW}(override: JOJONET_ROLE / --role)${NC}"
+    else
+        echo -e "${RED}[!] Role detection failed. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "paqet") || { set -e; return 1; }
+
+    if [[ "$role_conf" == "kharej" ]]; then
+        read -r -p "Listen port [$tcp_port]: " _tp
+        tcp_port=${_tp:-$tcp_port}
+        fwd_port=""
+    else
+        fwd_port="443"
+        read -r -p "Forward ports on Iran [$fwd_port]: " _fp
+        fwd_port=${_fp:-$fwd_port}
+        fwd_port=$(normalize_port_list "$fwd_port")
+        read -r -p "Server port on foreign [$tcp_port]: " _tp
+        tcp_port=${_tp:-$tcp_port}
+        echo -e "${CYAN}Forward protocol:${NC} 1=tcp  2=udp  3=tcp+udp (default 3)"
+        read -r -p "Protocol [1-3]: " _proto
+        case "${_proto:-3}" in
+            1) forward_proto="tcp" ;;
+            2) forward_proto="udp" ;;
+            *) forward_proto="both" ;;
+        esac
+    fi
+
+    if ! [[ "$tcp_port" =~ ^[0-9]+$ ]] || (( tcp_port < 1 || tcp_port > 65535 )); then
+        echo -e "${RED}[!] Invalid port.${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    if [[ "$role_conf" == "iran" && -n "$fwd_port" ]]; then
+        local _p
+        IFS=',' read -ra _ports <<< "$fwd_port"
+        for _p in "${_ports[@]}"; do
+            _p="${_p// /}"
+            if [[ "$_p" == "$tcp_port" ]]; then
+                echo -e "${RED}[!] Forward port cannot match Paqet server port ($tcp_port).${NC}"
+                sleep 3
+                set -e
+                return 1
+            fi
+        done
+    fi
+
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+    key_dir=$(ensure_paqet_secret "$subnet_byte" "$rem_ip") || {
+        echo -e "${RED}[!] Secret setup failed (need openssl).${NC}"
+        sleep 2
+        set -e
+        return 1
+    }
+    show_paqet_secret_hint "$subnet_byte" "$key_dir" "$rem_ip"
+
+    echo -e "\n${CYAN}--- Paqet plan ---${NC}"
+    echo -e "  Mode:      paqet (Raw socket + KCP)"
+    echo -e "  Instance:  $ins_name"
+    echo -e "  Role:      $role_conf ($([[ "$role_conf" == "kharej" ]] && echo server || echo client))"
+    echo -e "  Port:      $tcp_port"
+    echo -e "  KCP:       $DEFAULT_PAQET_KCP_MODE | $DEFAULT_PAQET_ENCRYPTION | MTU $DEFAULT_PAQET_MTU"
+    [[ -n "$fwd_port" ]] && echo -e "  Forward:   $fwd_port ($forward_proto)"
+    echo -e "  Secret:    $key_dir/paqet.secret"
+    [[ "$role_conf" == "kharej" ]] && hint "Now run on Iran: sudo jojonet --paqet $loc_ip"
+
+    echo -e "${YELLOW}[*] Applying Paqet tunnel...${NC}"
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "" "" "$DEFAULT_PAQET_MTU" "$fwd_port" "paqet" "$tcp_port" "$key_dir" \
+        "" "" "$forward_proto"; then
+        echo -e "${GREEN}[+] Paqet tunnel [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --paqet $loc_ip"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+quick_add_tunnel_vxlan() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local tun_ip="" tun_remote="" ins_mtu="$DEFAULT_VXLAN_MTU" fwd_port=""
+    local vxlan_vni="" vxlan_port="$DEFAULT_VXLAN_PORT"
+    local existing="" tunnel_count=0
+
+    set +e
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "VXLAN Tunnel Setup"
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2
+        return 1
+    fi
+
+    loc_ip="$DETECTED_IP"
+    tunnel_count=$(count_configured_tunnels)
+    echo -e "\n${GREEN}Your IP:${NC} ${CYAN}$loc_ip${NC}  ${YELLOW}(${tunnel_count} tunnel(s))${NC}"
+    hint "VXLAN over UDP — useful when GRE is blocked but UDP works"
+    show_existing_tunnels_summary
+
+    [[ -z "$peer_ip" ]] && read -r -p "Peer server IP: " peer_ip
+    peer_ip="${peer_ip// /}"
+    if [[ -z "$peer_ip" ]] || ! validate_ipv4 "$peer_ip"; then
+        sleep 2
+        return 1
+    fi
+    [[ "$peer_ip" == "$loc_ip" ]] && { echo -e "${RED}[!] Same IP.${NC}"; sleep 2; return 1; }
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip"); then
+        local ex_mode
+        ex_mode=$(tunnel_mode_from_name "$existing")
+        if [[ "$ex_mode" == "vxlan" ]]; then
+            restart_tunnel "$existing"
+            sleep 2
+            set -e
+            return $?
+        fi
+        echo -e "${YELLOW}[!] Non-VXLAN tunnel exists for $rem_ip [$existing]. Delete it first.${NC}"
+        sleep 3
+        set -e
+        return 1
+    fi
+
+    if role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${GREEN}[*] Role:${NC} $role_conf  ${YELLOW}(override: JOJONET_ROLE / --role)${NC}"
+    else
+        echo -e "${RED}[!] Role detection failed. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "vxlan") || { set -e; return 1; }
+    [[ "$role_conf" == "iran" ]] && fwd_port="443" || fwd_port=""
+
+    read -r -p "VXLAN UDP port [$vxlan_port]: " _vp
+    vxlan_port=${_vp:-$vxlan_port}
+    if ! [[ "$vxlan_port" =~ ^[0-9]+$ ]] || (( vxlan_port < 1 || vxlan_port > 65535 )); then
+        echo -e "${RED}[!] Invalid UDP port.${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    vxlan_vni=$(compute_vxlan_vni "$loc_ip" "$rem_ip")
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+
+    if subnet_byte_in_use "$subnet_byte"; then
+        local other_peer=""
+        other_peer=$(awk -F'"' -v b="$subnet_byte" '
+            $0 ~ /Subnet_Byte/ && $2 == b { in_b=1 }
+            in_b && $0 ~ /Remote_IP/ { print $2; exit }
+        ' "$INSTANCES_DIR"/*.conf 2>/dev/null || true)
+        if [[ -n "$other_peer" && "$other_peer" != "$rem_ip" ]]; then
+            echo -e "${YELLOW}[!] Subnet ID $subnet_byte used by peer $other_peer (continuing — VXLAN uses 172.21.x).${NC}"
+        fi
+    fi
+
+    resolve_tunnel_ips "$role_conf" "$subnet_byte" "vxlan"
+    tun_ip="$Tun_IP"
+    tun_remote="$Tun_Remote_IP_Raw"
+
+    echo -e "\n${CYAN}--- VXLAN plan ---${NC}"
+    echo -e "  Mode:      vxlan (UDP encapsulation)"
+    echo -e "  Interface: $ins_name"
+    echo -e "  Role:      $role_conf"
+    echo -e "  VNI:       $vxlan_vni"
+    echo -e "  UDP port:  $vxlan_port"
+    echo -e "  Tunnel IP: $tun_ip"
+    [[ -n "$fwd_port" ]] && echo -e "  Forward:   $fwd_port -> $tun_remote"
+    [[ "$role_conf" == "kharej" ]] && hint "Now run on Iran: sudo jojonet --vxlan $loc_ip"
+
+    echo -e "${YELLOW}[*] Applying VXLAN tunnel...${NC}"
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$tun_ip" "$tun_remote" "$ins_mtu" "$fwd_port" "vxlan" "$vxlan_port" "" \
+        "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] VXLAN tunnel [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --vxlan $loc_ip"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+create_template_script() {
+    if ! cat << 'EOF' > "$TEMPLATE_SCRIPT"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Safe config loader — whitelist keys only (never source shell)
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in
+            *" $key "*) ;;
+            *) return 1 ;;
+        esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+        case "$val" in
+            *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;;
+        esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+DEFAULT_MTU_FALLBACK=1310
+
+if [[ -z "$CONFIG_FILE" || ! -f "$CONFIG_FILE" ]]; then
+    echo "Config file missing" >&2
+    exit 1
+fi
+
+# Safe whitelist loader (no shell source)
+if ! load_safe_config "$CONFIG_FILE"; then
+    echo "Invalid or unsafe config: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+table_name="jojonet_$Name"
+
+cleanup() {
+    trap - ERR
+    ip link delete "$Name" >/dev/null 2>&1 || true
+    nft delete table ip "$table_name" >/dev/null 2>&1 || true
+}
+
+case "$ACTION" in
+    start)
+        trap cleanup ERR
+
+        log() { echo "[jojonet:${Name}] $*"; }
+
+        log "Starting tunnel instance..."
+        modprobe ip_gre 2>/dev/null || true
+        # Prefer interface-scoped rp_filter disable (keeps global anti-spoofing)
+        # Fallback to global only if JOJONET_DISABLE_RP_FILTER=1
+        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
+            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+            sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+        fi
+
+        if ip link show "$Name" >/dev/null 2>&1; then
+            log "Removing stale interface $Name"
+            ip link delete "$Name" || { log "ERROR: failed to delete old interface"; exit 1; }
+        fi
+
+        log "GRE add: remote=$Remote_IP local=$Local_IP key=$GreKey"
+        if ! [[ "${GreKey:-}" =~ ^[0-9]+$ ]] || (( GreKey == 0 )); then
+            log "ERROR: GreKey missing or invalid"
+            exit 1
+        fi
+        ip tunnel add "$Name" mode gre remote "$Remote_IP" local "$Local_IP" key "$GreKey" ttl 255 \
+            || { log "ERROR: GRE creation failed"; exit 1; }
+        ip tunnel change "$Name" keepalive 10 3 || true
+
+        ip addr flush dev "$Name" >/dev/null 2>&1
+        log "Assign IP $Tun_IP on $Name"
+        ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assignment failed"; exit 1; }
+
+        if ! [[ "$Suggested_MTU" =~ ^[0-9]+$ ]]; then Suggested_MTU=$DEFAULT_MTU_FALLBACK; fi
+        (( Suggested_MTU < 576 )) && Suggested_MTU=$DEFAULT_MTU_FALLBACK
+        (( Suggested_MTU > 9000 )) && Suggested_MTU=$DEFAULT_MTU_FALLBACK
+
+        log "Set MTU=$Suggested_MTU and bring interface UP"
+        ip link set "$Name" mtu "$Suggested_MTU"
+        ip link set "$Name" up || { log "ERROR: interface up failed"; exit 1; }
+        sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+
+        if ! ip link show "$Name" 2>/dev/null | grep -qE '<.*UP.*>|state UP'; then
+            log "ERROR: interface not in UP state after start"
+            exit 1
+        fi
+
+        if [[ "$Role" == "iran" ]]; then
+            log "Iran role: enabling ip_forward and nftables NAT"
+            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+
+            DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+            [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default interface not found"; exit 1; }
+            [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tunnel IP missing"; exit 1; }
+
+            NFT_CONF="table ip $table_name {
+            chain prerouting {
+                type nat hook prerouting priority dstnat; policy accept;"
+
+            if [[ -n "$Ports" ]]; then
+                IFS=',' read -ra PORT_LIST <<< "$Ports"
+                for p in "${PORT_LIST[@]}"; do
+                    p="${p// /}"
+                    [[ -n "$p" ]] || continue
+                    log "NAT rule: dport $p -> $Tun_Remote_IP_Raw"
+                    if [[ "$p" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+                        NFT_CONF="$NFT_CONF
+                tcp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw
+                udp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw"
+                    else
+                        NFT_CONF="$NFT_CONF
+                tcp dport $p dnat ip to $Tun_Remote_IP_Raw
+                udp dport $p dnat ip to $Tun_Remote_IP_Raw"
+                    fi
+                done
+            fi
+
+            NFT_CONF="$NFT_CONF
+            }
+            chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"$DEFAULT_IFACE\" masquerade
+            }
+        }"
+
+            nft delete table ip "$table_name" >/dev/null 2>&1 || true
+            echo "$NFT_CONF" | nft -f - || { log "ERROR: nft table creation failed"; exit 1; }
+        else
+            log "Foreign role: GRE only (no NAT)"
+        fi
+
+        log "SUCCESS: tunnel $Name is UP with $Tun_IP"
+        ;;
+    stop)
+        echo "[jojonet:${Name:-?}] Stopping tunnel..."
+        cleanup
+        echo "[jojonet:${Name:-?}] Stopped."
+        exit 0
+        ;;
+    *)
+        echo "Invalid action: $ACTION" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        echo -e "${RED}[!] Failed to write template script.${NC}" >&2
+        return 1
+    fi
+
+    chmod +x "$TEMPLATE_SCRIPT" || {
+        echo -e "${RED}[!] Failed to chmod template script.${NC}" >&2
+        return 1
+    }
+}
+
+create_template_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_service.XXXXXX) || {
+        echo -e "${RED}[!] Failed to create temp file.${NC}" >&2
+        return 1
+    }
+
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet GRE Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-%i
+ExecStart=/usr/local/bin/jojonet-run-instance.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-instance.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        echo -e "${RED}[!] Failed to write service template.${NC}" >&2
+        return 1
+    fi
+
+    if [[ -f "$TEMPLATE_SERVICE" ]] && cmp -s "$tmp_file" "$TEMPLATE_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$TEMPLATE_SERVICE" || {
+            rm -f "$tmp_file"
+            echo -e "${RED}[!] Failed to install service template.${NC}" >&2
+            return 1
+        }
+        systemctl daemon-reload || {
+            echo -e "${RED}[!] systemctl daemon-reload failed.${NC}" >&2
+            return 1
+        }
+    fi
+}
+
+create_tuntcp_runner_script() {
+    if ! cat << 'EOF' > "$TUNTCP_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Safe config loader — whitelist keys only (never source shell)
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in
+            *" $key "*) ;;
+            *) return 1 ;;
+        esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+        case "$val" in
+            *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;;
+        esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+
+if [[ -z "$CONFIG_FILE" || ! -f "$CONFIG_FILE" ]]; then
+    echo "Config missing" >&2
+    exit 1
+fi
+
+# Safe whitelist loader (no shell source)
+if ! load_safe_config "$CONFIG_FILE"; then
+    echo "Invalid or unsafe config: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+table_name="jojonet_$Name"
+TUNTCP_BIN_DIR="/usr/local/bin"
+
+log() { echo "[jojonet-tcptun:${Name}] $*"; }
+
+stop_tuntcp() {
+    pkill -f "tun-server.*-device ${Name}" >/dev/null 2>&1 || true
+    pkill -f "tun-client.*-device ${Name}" >/dev/null 2>&1 || true
+    ip link delete "$Name" >/dev/null 2>&1 || true
+    nft delete table ip "$table_name" >/dev/null 2>&1 || true
+}
+
+apply_iran_nat() {
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+    [[ -n "$DEFAULT_IFACE" && -n "$Tun_Remote_IP_Raw" ]] || return 1
+
+    local NFT_CONF="table ip $table_name {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;"
+    if [[ -n "${Ports:-}" ]]; then
+        IFS=',' read -ra PORT_LIST <<< "$Ports"
+        local p
+        for p in "${PORT_LIST[@]}"; do
+            p="${p// /}"
+            [[ -n "$p" ]] || continue
+            if [[ "$p" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+                NFT_CONF="$NFT_CONF
+        tcp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw
+        udp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw"
+            else
+                NFT_CONF="$NFT_CONF
+        tcp dport $p dnat ip to $Tun_Remote_IP_Raw
+        udp dport $p dnat ip to $Tun_Remote_IP_Raw"
+            fi
+        done
+    fi
+    NFT_CONF="$NFT_CONF
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname \"$DEFAULT_IFACE\" masquerade
+    }
+}"
+    nft delete table ip "$table_name" >/dev/null 2>&1 || true
+    echo "$NFT_CONF" | nft -f -
+}
+
+wait_for_iface() {
+    local i
+    for i in $(seq 1 40); do
+        ip link show "$Name" >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
+case "$ACTION" in
+    start)
+        stop_tuntcp
+        [[ -x "$TUNTCP_BIN_DIR/tun-server" && -x "$TUNTCP_BIN_DIR/tun-client" ]] || {
+            log "ERROR: tun-server/tun-client not installed"; exit 1
+        }
+        [[ -f "${KeyDir}/public_key.pem" && -f "${KeyDir}/private_key.pem" ]] || {
+            log "ERROR: key files missing in $KeyDir"; exit 1
+        }
+
+        if [[ "$Role" == "kharej" ]]; then
+            log "Starting tun-server on TCP port $TcpPort"
+            exec "$TUNTCP_BIN_DIR/tun-server" \
+                -server-port "$TcpPort" \
+                -pub-key="${KeyDir}/public_key.pem" \
+                -server-private "$Tun_Server_IP" \
+                -client-private "$Tun_Client_IP" \
+                -subnet 24 \
+                -device "$Name" \
+                -mtu 1380 \
+                -tcpnodelay \
+                -keepalive 1m \
+                -worker default
+        elif [[ "$Role" == "iran" ]]; then
+            log "Starting tun-client -> $Remote_IP:$TcpPort"
+            "$TUNTCP_BIN_DIR/tun-client" \
+                -server-addr "$Remote_IP" \
+                -server-port "$TcpPort" \
+                -priv-key="${KeyDir}/private_key.pem" \
+                -client-private "$Tun_Client_IP" \
+                -server-private "$Tun_Server_IP" \
+                -subnet 24 \
+                -device "$Name" \
+                -mtu 1280 \
+                -tcpnodelay \
+                -keepalive 1m \
+                -worker default &
+            client_pid=$!
+            trap 'kill "$client_pid" 2>/dev/null; stop_tuntcp' EXIT TERM INT
+
+            wait_for_iface || { log "ERROR: TUN interface not created"; exit 1; }
+            log "Interface $Name is up — applying NAT"
+            apply_iran_nat || { log "ERROR: NAT setup failed"; exit 1; }
+            log "SUCCESS: TUN/TCP client running (pid $client_pid)"
+            wait "$client_pid"
+        else
+            log "ERROR: unknown role $Role"; exit 1
+        fi
+        ;;
+    stop)
+        log "Stopping TUN/TCP tunnel"
+        stop_tuntcp
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$TUNTCP_RUNNER"
+}
+
+create_tuntcp_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_tuntcp_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet TUN/TCP Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-tcptun-%i
+ExecStart=/usr/local/bin/jojonet-run-tuntcp.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-tuntcp.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=90
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$TUNTCP_SERVICE" ]] && cmp -s "$tmp_file" "$TUNTCP_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$TUNTCP_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+create_paqet_runner_script() {
+    if ! cat << 'EOF' > "$PAQET_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Safe config loader — whitelist keys only (never source shell)
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in
+            *" $key "*) ;;
+            *) return 1 ;;
+        esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+        case "$val" in
+            *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;;
+        esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+
+if [[ -z "$CONFIG_FILE" || ! -f "$CONFIG_FILE" ]]; then
+    echo "Config missing" >&2
+    exit 1
+fi
+
+# Safe whitelist loader (no shell source)
+if ! load_safe_config "$CONFIG_FILE"; then
+    echo "Invalid or unsafe config: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+PAQET_BIN="/usr/local/bin/paqet"
+yaml="${PaqetYaml:-/etc/jojonet/paqet/${Name}.yaml}"
+
+log() { echo "[jojonet-paqet:${Name}] $*"; }
+
+stop_paqet() {
+    pkill -f "paqet run -c ${yaml}" >/dev/null 2>&1 || true
+}
+
+case "$ACTION" in
+    start)
+        stop_paqet
+        [[ -x "$PAQET_BIN" ]] || { log "ERROR: paqet binary missing"; exit 1; }
+        [[ -f "$yaml" ]] || { log "ERROR: yaml missing: $yaml"; exit 1; }
+        log "Starting paqet ($Role) -> $yaml"
+        exec "$PAQET_BIN" run -c "$yaml"
+        ;;
+    stop)
+        log "Stopping paqet"
+        stop_paqet
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$PAQET_RUNNER"
+}
+
+create_paqet_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_paqet_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet Paqet Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-paqet-%i
+Environment="GOMAXPROCS=1"
+ExecStart=/usr/local/bin/jojonet-run-paqet.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-paqet.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=90
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$PAQET_SERVICE" ]] && cmp -s "$tmp_file" "$PAQET_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$PAQET_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+create_vxlan_runner_script() {
+    if ! cat << 'EOF' > "$VXLAN_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Safe config loader — whitelist keys only (never source shell)
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in
+            *" $key "*) ;;
+            *) return 1 ;;
+        esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+            val="${BASH_REMATCH[1]}"
+        fi
+        case "$val" in
+            *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;;
+        esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+DEFAULT_VXLAN_MTU=1450
+DEFAULT_VXLAN_PORT=4789
+
+if [[ -z "$CONFIG_FILE" || ! -f "$CONFIG_FILE" ]]; then
+    echo "Config missing" >&2
+    exit 1
+fi
+
+# Safe whitelist loader (no shell source)
+if ! load_safe_config "$CONFIG_FILE"; then
+    echo "Invalid or unsafe config: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+table_name="jojonet_$Name"
+
+cleanup() {
+    trap - ERR
+    ip link delete "$Name" >/dev/null 2>&1 || true
+    nft delete table ip "$table_name" >/dev/null 2>&1 || true
+}
+
+case "$ACTION" in
+    start)
+        trap cleanup ERR
+        log() { echo "[jojonet-vxlan:${Name}] $*"; }
+
+        log "Starting VXLAN tunnel..."
+        modprobe vxlan 2>/dev/null || true
+        # Prefer interface-scoped rp_filter disable (keeps global anti-spoofing)
+        # Fallback to global only if JOJONET_DISABLE_RP_FILTER=1
+        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
+            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+            sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+        fi
+
+        DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+        [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default interface not found"; exit 1; }
+
+        if ! [[ "${VxlanVni:-}" =~ ^[0-9]+$ ]] || (( VxlanVni < 1 || VxlanVni > 16777215 )); then
+            log "ERROR: VxlanVni missing or invalid"
+            exit 1
+        fi
+        VxlanPort="${VxlanPort:-$DEFAULT_VXLAN_PORT}"
+        if ! [[ "$VxlanPort" =~ ^[0-9]+$ ]]; then
+            log "ERROR: VxlanPort invalid"
+            exit 1
+        fi
+
+        if ip link show "$Name" >/dev/null 2>&1; then
+            log "Removing stale interface $Name"
+            ip link delete "$Name" || { log "ERROR: failed to delete old interface"; exit 1; }
+        fi
+
+        log "VXLAN add: vni=$VxlanVni remote=$Remote_IP local=$Local_IP udp=$VxlanPort dev=$DEFAULT_IFACE"
+        ip link add "$Name" type vxlan id "$VxlanVni" dev "$DEFAULT_IFACE" \
+            remote "$Remote_IP" local "$Local_IP" dstport "$VxlanPort" srcport "$VxlanPort" \
+            || { log "ERROR: VXLAN creation failed"; exit 1; }
+
+        ip addr flush dev "$Name" >/dev/null 2>&1
+        log "Assign IP $Tun_IP on $Name"
+        ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assignment failed"; exit 1; }
+
+        Suggested_MTU="${Suggested_MTU:-$DEFAULT_VXLAN_MTU}"
+        if ! [[ "$Suggested_MTU" =~ ^[0-9]+$ ]]; then Suggested_MTU=$DEFAULT_VXLAN_MTU; fi
+        (( Suggested_MTU < 576 )) && Suggested_MTU=$DEFAULT_VXLAN_MTU
+        (( Suggested_MTU > 9000 )) && Suggested_MTU=$DEFAULT_VXLAN_MTU
+
+        log "Set MTU=$Suggested_MTU and bring interface UP"
+        ip link set "$Name" mtu "$Suggested_MTU"
+        ip link set "$Name" up || { log "ERROR: interface up failed"; exit 1; }
+
+        if ! ip link show "$Name" 2>/dev/null | grep -qE '<.*UP.*>|state UP'; then
+            log "ERROR: interface not in UP state after start"
+            exit 1
+        fi
+
+        if [[ "$Role" == "iran" ]]; then
+            log "Iran role: enabling ip_forward and nftables NAT"
+            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+            [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tunnel IP missing"; exit 1; }
+
+            NFT_CONF="table ip $table_name {
+            chain prerouting {
+                type nat hook prerouting priority dstnat; policy accept;"
+
+            if [[ -n "$Ports" ]]; then
+                IFS=',' read -ra PORT_LIST <<< "$Ports"
+                for p in "${PORT_LIST[@]}"; do
+                    p="${p// /}"
+                    [[ -n "$p" ]] || continue
+                    log "NAT rule: dport $p -> $Tun_Remote_IP_Raw"
+                    if [[ "$p" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+                        NFT_CONF="$NFT_CONF
+                tcp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw
+                udp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw"
+                    else
+                        NFT_CONF="$NFT_CONF
+                tcp dport $p dnat ip to $Tun_Remote_IP_Raw
+                udp dport $p dnat ip to $Tun_Remote_IP_Raw"
+                    fi
+                done
+            fi
+
+            NFT_CONF="$NFT_CONF
+            }
+            chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"$DEFAULT_IFACE\" masquerade
+            }
+        }"
+
+            nft delete table ip "$table_name" >/dev/null 2>&1 || true
+            echo "$NFT_CONF" | nft -f - || { log "ERROR: nft table creation failed"; exit 1; }
+        else
+            log "Foreign role: VXLAN only (no NAT)"
+        fi
+
+        log "SUCCESS: VXLAN $Name is UP with $Tun_IP (VNI $VxlanVni)"
+        ;;
+    stop)
+        echo "[jojonet-vxlan:${Name:-?}] Stopping tunnel..."
+        cleanup
+        echo "[jojonet-vxlan:${Name:-?}] Stopped."
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$VXLAN_RUNNER"
+}
+
+create_vxlan_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_vxlan_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet VXLAN Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-vxlan-%i
+ExecStart=/usr/local/bin/jojonet-run-vxlan.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-vxlan.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$VXLAN_SERVICE" ]] && cmp -s "$tmp_file" "$VXLAN_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$VXLAN_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+create_boot_restore_service() {
+    if ! cat << 'EOF' > "$BOOT_RESTORE_SCRIPT"
+#!/usr/bin/env bash
+# Restore all JojoNet tunnels after reboot
+set -euo pipefail
+INSTANCES_DIR="/etc/jojonet/instances"
+shopt -s nullglob
+for conf in "$INSTANCES_DIR"/*.conf; do
+    name=$(grep -E '^Name=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2)
+    [[ -n "$name" ]] || continue
+    mode=$(grep -E '^TunnelMode=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2)
+    mode=${mode:-gre}
+    if [[ "$mode" == "tun_tcp" ]]; then
+        svc="jojonet-tcptun@${name}.service"
+    elif [[ "$mode" == "paqet" ]]; then
+        svc="jojonet-paqet@${name}.service"
+    elif [[ "$mode" == "vxlan" ]]; then
+        svc="jojonet-vxlan@${name}.service"
+    else
+        svc="jojonet@${name}.service"
+    fi
+    echo "[jojonet-boot] Ensuring $svc"
+    systemctl enable "$svc" >/dev/null 2>&1 || true
+    if ! systemctl is-active --quiet "$svc"; then
+        systemctl start "$svc" >/dev/null 2>&1 || \
+            echo "[jojonet-boot] WARN: failed to start $svc" >&2
+    fi
+done
+exit 0
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$BOOT_RESTORE_SCRIPT" || return 1
+
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_boot.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet - Restore all tunnels on boot
+After=network-online.target
+Wants=network-online.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-boot
+ExecStart=/usr/local/bin/jojonet-boot-restore.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    if [[ -f "$BOOT_SERVICE" ]] && cmp -s "$tmp_file" "$BOOT_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$BOOT_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+    return 0
+}
+
+tunnel_service_unit() {
+    local name="$1" mode=""
+    mode=$(tunnel_mode_from_name "$name")
+    if [[ "$mode" == "tun_tcp" ]]; then
+        echo "jojonet-tcptun@${name}.service"
+    elif [[ "$mode" == "paqet" ]]; then
+        echo "jojonet-paqet@${name}.service"
+    elif [[ "$mode" == "vxlan" ]]; then
+        echo "jojonet-vxlan@${name}.service"
+    else
+        echo "jojonet@${name}.service"
+    fi
+}
+
+tunnel_boot_enabled() {
+    systemctl is-enabled --quiet "$(tunnel_service_unit "$1")" 2>/dev/null
+}
+
+show_tunnel_logs() {
+    local name="$1" mode="${2:-recent}"
+    local unit
+    unit=$(tunnel_service_unit "$name")
+
+    echo -e "${CYAN}=== Logs: $name ($mode) ===${NC}"
+    case "$mode" in
+        status)
+            systemctl status "$unit" --no-pager -l 2>/dev/null || true ;;
+        recent)
+            journalctl -u "$unit" -b --no-pager -n 50 2>/dev/null || true ;;
+        boot)
+            journalctl -u "$unit" -b --no-pager 2>/dev/null || true ;;
+        full)
+            journalctl -u "$unit" --no-pager -n 500 2>/dev/null || true ;;
+        all)
+            journalctl -u "$unit" --no-pager 2>/dev/null || true ;;
+        export)
+            local out="/var/log/jojonet_${name}.log"
+            journalctl -u "$unit" --no-pager > "$out" 2>/dev/null || true
+            echo -e "${GREEN}[+] Logs saved: $out${NC}" ;;
+        *)
+            journalctl -u "$unit" -b --no-pager -n 50 2>/dev/null || true ;;
+    esac
+}
+
+tunnel_logs_menu() {
+    local name="$1" choice=""
+    while true; do
+        command -v clear >/dev/null && clear
+        echo -e "${CYAN}Logs: $name${NC}"
+        menu_line "1) Service status (systemctl)"
+        menu_line "2) Recent logs (50 lines)"
+        menu_line "3) Full boot logs"
+        menu_line "4) Extended logs (500 lines)"
+        menu_line "5) All logs (complete)"
+        menu_line "6) Export to /var/log/"
+        menu_line "0) Back"
+        read -r -p "Choice: " choice || break
+        case "$choice" in
+            1) show_tunnel_logs "$name" status; press_enter ;;
+            2) show_tunnel_logs "$name" recent; press_enter ;;
+            3) show_tunnel_logs "$name" boot; press_enter ;;
+            4) show_tunnel_logs "$name" full; press_enter ;;
+            5) show_tunnel_logs "$name" all; press_enter ;;
+            6) show_tunnel_logs "$name" export; press_enter ;;
+            0) break ;;
+            *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+restart_tunnel() {
+    local name="$1"
+    local unit
+    unit=$(tunnel_service_unit "$name")
+
+    echo -e "${YELLOW}[*] Restarting [$name]...${NC}"
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    if ! systemctl restart "$unit" 2>/dev/null; then
+        echo -e "${RED}[!] systemctl restart failed.${NC}"
+        show_tunnel_logs "$name" recent
+        return 1
+    fi
+    sleep 2
+    local mode unit_active=0
+    mode=$(tunnel_mode_from_name "$name")
+    unit=$(tunnel_service_unit "$name")
+    if systemctl is-active --quiet "$unit"; then
+        if [[ "$mode" == "paqet" ]]; then
+            pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 && unit_active=1
+        elif [[ "$mode" == "tun_tcp" ]]; then
+            ip link show "$name" >/dev/null 2>&1 && unit_active=1
+        elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
+            unit_active=1
+        fi
+    fi
+    if (( unit_active == 1 )); then
+        echo -e "${GREEN}[+] Tunnel [$name] restarted successfully.${NC}"
+        return 0
+    fi
+    echo -e "${RED}[!] Restart completed but tunnel may be down.${NC}"
+    show_tunnel_logs "$name" recent
+    return 1
+}
+
+restart_all_tunnels() {
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    if (( ${#files[@]} == 0 )); then
+        echo -e "${YELLOW}No tunnels to restart.${NC}"
+        return 0
+    fi
+    local f n ok=0 fail=0
+    echo -e "${YELLOW}[*] Restarting all tunnels...${NC}"
+    for f in "${files[@]}"; do
+        n=$(grep -E '^Name=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        [[ -n "$n" ]] || continue
+        if restart_tunnel "$n"; then
+            ok=$((ok + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    done
+    echo -e "${GREEN}Done: $ok OK, $fail failed.${NC}"
+    sleep 2
+}
+
+ensure_boot_persistence() {
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    local f n enabled=0 started=0
+
+    create_boot_restore_service || true
+    if systemctl enable jojonet-boot.service >/dev/null 2>&1; then
+        echo -e "${GREEN}[+] jojonet-boot.service enabled for reboot.${NC}"
+    fi
+
+    for f in "${files[@]}"; do
+        n=$(grep -E '^Name=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
+        [[ -n "$n" ]] || continue
+        if ! systemctl is-enabled --quiet "$(tunnel_service_unit "$n")" 2>/dev/null; then
+            systemctl enable "$(tunnel_service_unit "$n")" >/dev/null 2>&1 && enabled=$((enabled + 1))
+        fi
+        if ! systemctl is-active --quiet "$(tunnel_service_unit "$n")" 2>/dev/null; then
+            systemctl start "$(tunnel_service_unit "$n")" >/dev/null 2>&1 && started=$((started + 1)) || true
+        fi
+    done
+    echo -e "${GREEN}[+] Boot persistence OK.${NC} Enabled: $enabled | Started: $started"
+    sleep 2
+}
+
+# ==========================================
+# Instance management
+# ==========================================
+
+load_instance_config() {
+    load_safe_config "$1"
+}
+
+normalize_port_list() {
+    local raw="$1" part list normalized=()
+    IFS=',' read -ra list <<< "$raw"
+    for part in "${list[@]}"; do
+        part="${part// /}"
+        [[ -n "$part" ]] && normalized+=("$part")
+    done
+    (IFS=','; echo "${normalized[*]}")
+}
+
+show_tunnel_plan() {
+    local name="$1" role="$2" local_ip="$3" remote_ip="$4" tun_ip="$5" tun_remote="$6" mtu="$7" ports="$8" gre_key="${9:-}"
+    load_stealth_mode
+    if [[ "$STEALTH_MODE" == "1" ]]; then
+        return 0
+    fi
+
+    echo -e "\n${CYAN}========== Tunnel Plan${NC}"
+    echo -e "${YELLOW}Commands equivalent to manual GRE setup:${NC}"
+
+    echo ""
+    if [[ -n "$gre_key" ]]; then
+        echo "  ip tunnel add $name mode gre remote $remote_ip local $local_ip key $gre_key"
+    else
+        echo "  ip tunnel add $name mode gre remote $remote_ip local $local_ip"
+    fi
+    echo "  ip addr add $tun_ip dev $name"
+    echo "  ip link set $name mtu $mtu"
+    echo "  ip link set $name up"
+
+    if [[ "$role" == "iran" ]]; then
+        echo "  sysctl -w net.ipv4.ip_forward=1"
+        if [[ -n "$ports" && -n "$tun_remote" ]]; then
+            IFS=',' read -ra _ports <<< "$ports"
+            local p
+            for p in "${_ports[@]}"; do
+                p="${p// /}"
+                [[ -n "$p" ]] || continue
+                echo "  # nft: dnat tcp/udp dport $p -> $tun_remote"
+            done
+        fi
+        echo "  # nft: masquerade on default outbound interface"
+    fi
+    echo -e "${CYAN}============================================${NC}\n"
+}
+
+rollback_new_tunnel() {
+    local name="$1" conf="$2" unit="" mode=""
+    mode=$(tunnel_mode_from_name "$name" 2>/dev/null || echo "gre")
+    case "$mode" in
+        tun_tcp) unit="jojonet-tcptun@${name}.service" ;;
+        paqet)   unit="jojonet-paqet@${name}.service" ;;
+        vxlan)   unit="jojonet-vxlan@${name}.service" ;;
+        *)       unit="jojonet@${name}.service" ;;
+    esac
+    echo -e "${RED}[*] Rolling back tunnel [$name]...${NC}"
+    set +e
+    systemctl stop "$unit" >/dev/null 2>&1
+    systemctl disable "$unit" >/dev/null 2>&1
+    systemctl reset-failed "$unit" >/dev/null 2>&1
+    pkill -f "tun-server.*-device ${name}" >/dev/null 2>&1
+    pkill -f "tun-client.*-device ${name}" >/dev/null 2>&1
+    pkill -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1
+    rm -f "$PAQET_CONFIG_DIR/${name}.yaml" >/dev/null 2>&1
+    rm -f "$conf" "${conf}.tmp" >/dev/null 2>&1
+    ip link delete "$name" >/dev/null 2>&1
+    nft delete table ip "jojonet_$name" >/dev/null 2>&1
+    set -e
+}
+
+add_new_tunnel() {
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "Advanced GRE Setup"
+
+    local INS_NAME="" CONF_FILE="" SERVER_ROLE="" LOC_IP="" REM_IP="" FWD_PORT=""
+    local ROLE_CONF="" subnet_byte="" INS_TUN_IP="" INS_TUN_REMOTE_IP_RAW="" INS_MTU="" tmp_conf=""
+    local DEFAULT_IFACE="" DETECTED_IP="" mtu_choice="" subnet_input="" existing=""
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect primary network.${NC}"
+        sleep 2
+        return
+    fi
+
+    echo -e "\n${YELLOW}Detected public IP:${NC} ${CYAN}$DETECTED_IP${NC}"
+    show_existing_tunnels_summary
+
+    echo -e "\n${CYAN}Server role:${NC}"
+        menu_line "1) Iran Server (Port Forwarder / DNAT)"
+        menu_line "2) Foreign Server (GRE Gateway only)"
+    read -r -p "Choose [1/2]: " SERVER_ROLE
+
+    if [[ "$SERVER_ROLE" == "1" ]]; then
+        ROLE_CONF="iran"
+        read -r -p "Iran public IP (local) [$DETECTED_IP]: " LOC_IP
+        LOC_IP=${LOC_IP:-$DETECTED_IP}
+        if ! validate_ipv4 "$LOC_IP"; then
+            echo -e "${RED}[!] Invalid Iran IP.${NC}"
+            sleep 2; return
+        fi
+
+        read -r -p "Foreign public IP (remote peer): " REM_IP
+        if [[ -z "$REM_IP" ]] || ! validate_ipv4 "$REM_IP"; then
+            echo -e "${RED}[!] Invalid foreign IP.${NC}"
+            sleep 2; return
+        fi
+
+        read -r -p "Ports to forward (e.g. 443, 80,443 or 1000-2000): " FWD_PORT
+        if [[ -z "$FWD_PORT" ]] || ! validate_ports "$FWD_PORT"; then
+            echo -e "${RED}[!] Invalid port format.${NC}"
+            sleep 2; return
+        fi
+        FWD_PORT=$(normalize_port_list "$FWD_PORT")
+    elif [[ "$SERVER_ROLE" == "2" ]]; then
+        ROLE_CONF="kharej"
+        FWD_PORT=""
+        read -r -p "Foreign public IP (local) [$DETECTED_IP]: " LOC_IP
+        LOC_IP=${LOC_IP:-$DETECTED_IP}
+        if ! validate_ipv4 "$LOC_IP"; then
+            echo -e "${RED}[!] Invalid foreign IP.${NC}"
+            sleep 2; return
+        fi
+
+        read -r -p "Iran public IP (remote peer): " REM_IP
+        if [[ -z "$REM_IP" ]] || ! validate_ipv4 "$REM_IP"; then
+            echo -e "${RED}[!] Invalid Iran IP.${NC}"
+            sleep 2; return
+        fi
+    else
+        echo -e "${RED}[!] Invalid choice.${NC}"
+        sleep 1; return
+    fi
+
+    if existing=$(find_tunnel_for_peer "$REM_IP"); then
+        echo -e "${YELLOW}[!] Tunnel to $REM_IP exists as [$existing]. Use Manage menu to restart.${NC}"
+        sleep 2; return
+    fi
+
+    local suggested
+    suggested=$(allocate_tunnel_name "$REM_IP" "$ROLE_CONF" "gre") || suggested="gre1"
+    while true; do
+        read -r -p "Tunnel interface name (unique) [$suggested]: " INS_NAME
+        INS_NAME=${INS_NAME:-$suggested}
+        if ! validate_interface_name "$INS_NAME"; then
+            echo -e "${RED}[!] Invalid name (max 15 chars).${NC}"
+            continue
+        fi
+        if [[ -f "$INSTANCES_DIR/$INS_NAME.conf" ]] || ip link show "$INS_NAME" >/dev/null 2>&1; then
+            echo -e "${RED}[!] Name already in use — try another.${NC}"
+            suggested=$(generate_tunnel_name_from_peer "$REM_IP" "$ROLE_CONF") || true
+            continue
+        fi
+        break
+    done
+    CONF_FILE="$INSTANCES_DIR/$INS_NAME.conf"
+
+    local auto_subnet
+    # Pair-hash keeps Iran/Foreign in sync (same as Quick GRE). Unique local only as fallback.
+    auto_subnet=$(compute_pair_subnet_byte "$LOC_IP" "$REM_IP")
+    if subnet_byte_in_use "$auto_subnet"; then
+        log_warn "Pair subnet $auto_subnet already used locally; you may pick another (both sides must match)."
+    fi
+    echo -e "\n${CYAN}Tunnel subnet ID (3rd octet -> ${TUNNEL_NET_PREFIX}.X.0/30)${NC}"
+    echo -e "${YELLOW}Default is pair-derived ($auto_subnet) so both servers match automatically.${NC}"
+    read -r -p "Subnet ID [pair: $auto_subnet]: " subnet_input
+    subnet_input=${subnet_input:-$auto_subnet}
+
+    if ! validate_subnet_byte "$subnet_input"; then
+        echo -e "${RED}[!] Subnet ID must be 1-250.${NC}"
+        sleep 2; return
+    fi
+    subnet_byte=$subnet_input
+
+    if subnet_byte_in_use "$subnet_byte"; then
+        echo -e "${YELLOW}[!] Warning: subnet $subnet_byte already used by another tunnel on THIS server.${NC}"
+        read -r -p "Continue anyway? [y/N]: " confirm_dup
+        confirm_dup=$(echo "$confirm_dup" | tr '[:upper:]' '[:lower:]')
+        [[ "$confirm_dup" == "y" ]] || return
+    fi
+
+    if [[ "$ROLE_CONF" == "iran" ]]; then
+        resolve_tunnel_ips "iran" "$subnet_byte" "gre"
+        INS_TUN_IP="$Tun_IP"
+        INS_TUN_REMOTE_IP_RAW="$Tun_Remote_IP_Raw"
+    else
+        resolve_tunnel_ips "kharej" "$subnet_byte" "gre"
+        INS_TUN_IP="$Tun_IP"
+        INS_TUN_REMOTE_IP_RAW=""
+    fi
+
+    echo -e "\n${CYAN}MTU settings${NC}"
+        menu_line "1) Auto-detect (recommended)"
+        menu_line "2) Fixed $DEFAULT_MTU_FALLBACK (common GRE value)"
+    read -r -p "Choose [1/2, default 1]: " mtu_choice
+
+    if [[ "$mtu_choice" == "2" ]]; then
+        INS_MTU=$DEFAULT_MTU_FALLBACK
+    else
+        INS_MTU=$(calculate_mtu "$REM_IP")
+        INS_MTU=$(clamp_mtu "$INS_MTU")
+    fi
+
+    show_tunnel_plan "$INS_NAME" "$ROLE_CONF" "$LOC_IP" "$REM_IP" "$INS_TUN_IP" "$INS_TUN_REMOTE_IP_RAW" "$INS_MTU" "$FWD_PORT" "$(compute_gre_key "$LOC_IP" "$REM_IP")"
+
+    read -r -p "Apply this configuration? [Y/n]: " confirm_apply
+    confirm_apply=$(echo "$confirm_apply" | tr '[:upper:]' '[:lower:]')
+    if [[ "$confirm_apply" == "n" ]]; then
+        echo -e "${YELLOW}Cancelled.${NC}"
+        sleep 1
+        return
+    fi
+
+    if deploy_tunnel "$INS_NAME" "$ROLE_CONF" "$LOC_IP" "$REM_IP" "$subnet_byte" \
+        "$INS_TUN_IP" "$INS_TUN_REMOTE_IP_RAW" "$INS_MTU" "$FWD_PORT" "gre" \
+        "$DEFAULT_TCP_PORT" "" "$Tun_Server_IP" "$Tun_Client_IP"; then
+        sleep 2
+    else
+        sleep 3
+    fi
+}
+
+manage_tunnels() {
+    while true; do
+        command -v clear >/dev/null && clear
+        logo
+        print_banner "Manage Tunnels"
+
+        shopt -s nullglob
+        local conf_files=("$INSTANCES_DIR"/*.conf)
+        shopt -u nullglob
+
+        if (( ${#conf_files[@]} == 0 )); then
+            echo -e "${RED}[!] No tunnels configured.${NC}"
+            press_enter
+            return
+        fi
+
+        printf "${BLUE}%-11s | %-6s | %-13s | %-13s | %-7s | %-5s | %-5s${NC}\n" \
+            "Name" "Mode" "Peer IP" "Tunnel IP" "Status" "Boot" "Ports"
+        echo "------------------------------------------------------------------------------------------------"
+
+        local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+        local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports=""
+        local file
+
+        for file in "${conf_files[@]}"; do
+            if ! load_instance_config "$file"; then
+                echo -e "${RED}[!] Invalid config: $file${NC}"
+                continue
+            fi
+
+            local status_raw="Unknown" status_color="${NC}" svc=""
+            svc=$(tunnel_service_unit "$Name")
+            if systemctl is-active --quiet "$svc"; then
+                status_raw="Active"; status_color="${GREEN}"
+            elif systemctl is-failed --quiet "$svc"; then
+                status_raw="Failed"; status_color="${RED}"
+            else
+                status_raw="Inactive"; status_color="${YELLOW}"
+            fi
+
+            local mode_disp="${TunnelMode:-gre}"
+
+            local boot_raw="no" boot_color="${RED}"
+            if tunnel_boot_enabled "$Name"; then
+                boot_raw="yes"; boot_color="${GREEN}"
+            fi
+
+            local display_port="-"
+            if [[ -n "${Ports:-}" ]]; then
+                display_port="$Ports"
+                ((${#display_port} > 10)) && display_port="${display_port:0:7}..."
+            fi
+
+            local base_tun_ip=""
+            if [[ "${TunnelMode:-gre}" == "paqet" ]]; then
+                base_tun_ip=":${TcpPort:-?}"
+            elif [[ "${TunnelMode:-gre}" == "vxlan" ]]; then
+                base_tun_ip=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
+                [[ -n "${VxlanPort:-}" ]] && base_tun_ip="${base_tun_ip:-?}:udp${VxlanPort}"
+            elif [[ -n "${Tun_IP:-}" ]]; then
+                base_tun_ip=$(echo "$Tun_IP" | awk -F'/' '{print $1}')
+            fi
+            printf "%-11s | %-6s | %-13s | %-13s | ${status_color}%-7s${NC} | ${boot_color}%-5s${NC} | %-5s\n" \
+                "$Name" "$mode_disp" "$Remote_IP" "$base_tun_ip" "$status_raw" "$boot_raw" "$display_port"
+        done
+
+        echo ""
+        menu_line "1) Troubleshoot, Logs & Restart"
+        menu_line "2) Restart ALL Tunnels"
+        menu_line "3) Enable Boot Persistence"
+        menu_line "4) Delete Tunnel"
+        menu_line "0) Back to Main Menu"
+        echo ""
+
+        local ins_choice
+        read -r -p "Choice: " ins_choice || break
+
+        case "$ins_choice" in
+            1)
+                local TGT_NAME
+                read -r -p "Tunnel name: " TGT_NAME
+                local tgt_conf="$INSTANCES_DIR/$TGT_NAME.conf"
+
+                if [[ -r "$tgt_conf" ]]; then
+                    while true; do
+                        command -v clear >/dev/null && clear
+                        echo -e "${CYAN}Troubleshoot: $TGT_NAME${NC}"
+                        menu_line "1) View logs (full menu)"
+                        menu_line "2) Interface status (ip addr)"
+                        menu_line "3) Firewall rules (nftables)"
+                        menu_line "4) Restart this tunnel"
+                        menu_line "5) Boot enabled? (systemctl)"
+                        menu_line "0) Back"
+
+                        local diag_choice
+                        read -r -p "Choice: " diag_choice || break
+
+                        case "$diag_choice" in
+                            1) tunnel_logs_menu "$TGT_NAME" ;;
+                            2)
+                                if [[ "$(tunnel_mode_from_name "$TGT_NAME")" == "paqet" ]]; then
+                                    echo -e "${CYAN}Paqet process (no TUN iface):${NC}"
+                                    pgrep -af "paqet run" 2>/dev/null | grep "$TGT_NAME" || \
+                                        echo -e "${YELLOW}No matching paqet process.${NC}"
+                                elif ip link show "$TGT_NAME" >/dev/null 2>&1; then
+                                    ip -c -d addr show dev "$TGT_NAME" || true
+                                    ip -d link show dev "$TGT_NAME" || true
+                                else
+                                    echo -e "${RED}[!] Interface not found.${NC}"
+                                fi
+                                press_enter ;;
+                            3)
+                                if nft list table ip "jojonet_$TGT_NAME" >/dev/null 2>&1; then
+                                    nft list table ip "jojonet_$TGT_NAME" || true
+                                else
+                                    echo -e "${YELLOW}No nft table (normal on Foreign server).${NC}"
+                                fi
+                                press_enter ;;
+                            4) restart_tunnel "$TGT_NAME"; sleep 2 ;;
+                            5)
+                                systemctl is-enabled "$(tunnel_service_unit "$TGT_NAME")" 2>/dev/null || echo "disabled"
+                                systemctl is-active "$(tunnel_service_unit "$TGT_NAME")" 2>/dev/null || echo "inactive"
+                                press_enter ;;
+                            0) break ;;
+                            *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+                        esac
+                    done
+                else
+                    echo -e "${RED}[!] Tunnel not found.${NC}"
+                    sleep 2
+                fi
+                ;;
+            2) restart_all_tunnels ;;
+            3) ensure_boot_persistence ;;
+            4)
+                local REM_NAME
+                read -r -p "Tunnel name to delete: " REM_NAME
+                local rem_conf="$INSTANCES_DIR/$REM_NAME.conf"
+
+                if [[ -r "$rem_conf" ]]; then
+                    read -r -p "Confirm delete [$REM_NAME]? [y/N]: " del_confirm
+                    del_confirm=$(echo "$del_confirm" | tr '[:upper:]' '[:lower:]')
+                    [[ "$del_confirm" == "y" ]] || continue
+
+                    local partial_fail=0 svc=""
+                    svc=$(tunnel_service_unit "$REM_NAME")
+                    systemctl stop "$svc" >/dev/null 2>&1 || partial_fail=1
+                    pkill -f "tun-server.*-device ${REM_NAME}" >/dev/null 2>&1 || true
+                    pkill -f "tun-client.*-device ${REM_NAME}" >/dev/null 2>&1 || true
+                    pkill -f "paqet run -c.*/${REM_NAME}\\.yaml" >/dev/null 2>&1 || true
+                    rm -f "$PAQET_CONFIG_DIR/${REM_NAME}.yaml" 2>/dev/null || true
+                    ip link show "$REM_NAME" >/dev/null 2>&1 && ip link delete "$REM_NAME" >/dev/null 2>&1 || true
+                    nft list table ip "jojonet_$REM_NAME" >/dev/null 2>&1 && \
+                        nft delete table ip "jojonet_$REM_NAME" >/dev/null 2>&1 || true
+                    systemctl disable "$svc" >/dev/null 2>&1 || partial_fail=1
+                    systemctl reset-failed "$svc" >/dev/null 2>&1 || true
+                    # Capture keydir before removing conf
+                    local keydir_del="" peer_del=""
+                    keydir_del=$(grep -E '^KeyDir=' "$rem_conf" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+                    peer_del=$(grep -E '^Remote_IP=' "$rem_conf" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
+                    rm -f "$rem_conf" || partial_fail=1
+                    if [[ -n "$keydir_del" && -d "$keydir_del" ]]; then
+                        # Remove keydir only if no other instance references it
+                        if ! grep -Rql --include='*.conf' "KeyDir=\"$keydir_del\"" "$INSTANCES_DIR" 2>/dev/null; then
+                            rm -rf "$keydir_del" 2>/dev/null || true
+                            echo -e "${GREEN}[+] Removed unused keys: $keydir_del${NC}"
+                        fi
+                    fi
+
+                    if (( partial_fail == 0 )); then
+                        echo -e "${GREEN}[+] Deleted.${NC}"
+                    else
+                        echo -e "${YELLOW}[!] Partial delete - check logs.${NC}"
+                    fi
+                else
+                    echo -e "${RED}[!] Tunnel not found.${NC}"
+                fi
+                sleep 3
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+show_live_status() {
+    command -v clear >/dev/null && clear
+    logo
+        echo -e "${CYAN}=== Network Status ===${NC}"
+
+    local default_iface local_ip bbr_state tables
+    default_iface=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+    if [[ -z "$default_iface" ]]; then
+        echo -e "${RED}[!] Default interface not found.${NC}"
+        press_enter
+        return
+    fi
+
+    local_ip=$(ip -o -4 addr show dev "$default_iface" 2>/dev/null | awk '{print $4}' || true)
+    [[ -z "$local_ip" ]] && local_ip="Unknown"
+
+    echo -e "${YELLOW}Default iface:${NC} $default_iface ($local_ip)"
+    bbr_state=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "N/A")
+    echo -e "${YELLOW}TCP congestion:${NC} ${GREEN}$bbr_state${NC}"
+    local fwd
+    fwd=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+    echo -e "${YELLOW}ip_forward:${NC} $fwd"
+
+    echo -e "\n${CYAN}=== Boot Services ===${NC}"
+    if systemctl is-enabled jojonet-boot.service >/dev/null 2>&1; then
+        echo -e "${GREEN}jojonet-boot.service: enabled${NC}"
+    else
+        echo -e "${YELLOW}jojonet-boot.service: not enabled (use Manage -> Boot Persistence)${NC}"
+    fi
+
+    echo -e "\n${CYAN}=== GRE Tunnels ===${NC}"
+    if ip -d link show type gre >/dev/null 2>&1; then
+        ip -c -d addr show type gre 2>/dev/null || echo "No GRE interfaces."
+    else
+        echo "No GRE tunnel loaded."
+    fi
+
+    echo -e "\n${CYAN}=== nftables (jojonet_*) ===${NC}"
+    if tables=$(nft list tables 2>/dev/null | grep '^table ip jojonet_'); then
+        [[ -n "$tables" ]] && echo "$tables" || echo "No jojonet firewall tables."
+    else
+        echo "No jojonet firewall tables."
+    fi
+
+    echo -e "\n${CYAN}=== VXLAN Tunnels ===${NC}"
+    if ip -d link show type vxlan >/dev/null 2>&1; then
+        ip -c -d addr show type vxlan 2>/dev/null || echo "No VXLAN interfaces."
+    else
+        echo "No VXLAN tunnel loaded."
+    fi
+
+    echo -e "\n${CYAN}=== Paqet Tunnels ===${NC}"
+    if pgrep -af "paqet run" >/dev/null 2>&1; then
+        pgrep -af "paqet run" 2>/dev/null || true
+    else
+        echo "No Paqet process running."
+    fi
+
+    press_enter
+}
+
+# Logo glyphs: each letter fixed-width so J O J O NET never overlaps
+_logo_glyph() {
+    local ch="$1" row="$2"
+    case "$ch" in
+        J)
+            case "$row" in
+                0) printf '%-8s' '   ██╗  ' ;;
+                1) printf '%-8s' '   ██║  ' ;;
+                2) printf '%-8s' '   ██║  ' ;;
+                3) printf '%-8s' '   ██║  ' ;;
+                4) printf '%-8s' '█ ██║  ' ;;
+                5) printf '%-8s' ' ███╔╝ ' ;;
+            esac
+            ;;
+        O)
+            case "$row" in
+                0) printf '%-9s' ' ██████╗ ' ;;
+                1) printf '%-9s' '██╔═══██╗' ;;
+                2) printf '%-9s' '██║   ██║' ;;
+                3) printf '%-9s' '██║   ██║' ;;
+                4) printf '%-9s' '╚██████╔╝' ;;
+                5) printf '%-9s' ' ╚═════╝ ' ;;
+            esac
+            ;;
+        N)
+            case "$row" in
+                0) printf '%-10s' '███╗   ██╗' ;;
+                1) printf '%-10s' '████╗  ██║' ;;
+                2) printf '%-10s' '██╔██╗ ██║' ;;
+                3) printf '%-10s' '██║╚██╗██║' ;;
+                4) printf '%-10s' '██║ ╚████║' ;;
+                5) printf '%-10s' '╚═╝  ╚═══╝' ;;
+            esac
+            ;;
+        E)
+            case "$row" in
+                0) printf '%-9s' '███████╗ ' ;;
+                1) printf '%-9s' '██╔════╝ ' ;;
+                2) printf '%-9s' '█████╗   ' ;;
+                3) printf '%-9s' '██╔══╝   ' ;;
+                4) printf '%-9s' '███████╗ ' ;;
+                5) printf '%-9s' '╚══════╝ ' ;;
+            esac
+            ;;
+        T)
+            case "$row" in
+                0) printf '%-9s' '████████╗' ;;
+                1) printf '%-9s' '╚══██╔══╝' ;;
+                2) printf '%-9s' '   ██║   ' ;;
+                3) printf '%-9s' '   ██║   ' ;;
+                4) printf '%-9s' '   ██║   ' ;;
+                5) printf '%-9s' '   ╚═╝   ' ;;
+            esac
+            ;;
+    esac
+}
+
+_logo_art_row() {
+    local row="$1"
+    _logo_glyph J "$row"
+    printf '     '   # gap between J O J O
+    _logo_glyph O "$row"
+    printf '     '
+    _logo_glyph J "$row"
+    printf '     '
+    _logo_glyph O "$row"
+    printf '    '    # gap before NET
+    _logo_glyph N "$row"
+    printf ' '
+    _logo_glyph E "$row"
+    printf ' '
+    _logo_glyph T "$row"
+    echo
+}
+
+_logo_box_edge() {
+    local kind="$1" inner_w="$2"
+    local bar="" end i
+    for (( i=0; i<inner_w + 4; i++ )); do bar+='═'; done
+    [[ "$kind" == '╔' ]] && end='╗' || end='╝'
+    echo -e "${CYAN}  ${kind}${bar}${end}${NC}"
+}
+
+_logo_box_blank() {
+    local inner_w="$1"
+    printf "${CYAN}  ║${NC}%*s${CYAN}║${NC}\n" "$((inner_w + 4))" ""
+}
+
+logo() {
+    [[ -t 1 ]] || return 0
+
+    local -a art=()
+    local row len inner_w=0 left right sub sup
+
+    for row in 0 1 2 3 4 5; do
+        art[$row]=$(_logo_art_row "$row")
+        len=${#art[$row]}
+        (( len > inner_w )) && inner_w=$len
+    done
+
+    echo ""
+    _logo_box_edge '╔' "$inner_w"
+    _logo_box_blank "$inner_w"
+
+    for row in "${art[@]}"; do
+        printf "${CYAN}  ║${NC}  ${YELLOW}%-*s${NC}  ${CYAN}║${NC}\n" "$inner_w" "$row"
+    done
+
+    _logo_box_blank "$inner_w"
+
+    sub="v${JOJONET_VERSION}  |  Iran ↔ Foreign Tunnel Manager"
+    left=$(( (inner_w - ${#sub}) / 2 ))
+    right=$(( inner_w - ${#sub} - left ))
+    printf "${CYAN}  ║${NC}  %*s${BLUE}v${JOJONET_VERSION}${NC}  ${MAGENTA}|${NC}  Iran ↔ Foreign Tunnel Manager%*s  ${CYAN}║${NC}\n" \
+        "$left" "" "$right" ""
+
+    sup="Support: ${JOJONET_SUPPORT}"
+    left=$(( (inner_w - ${#sup}) / 2 ))
+    right=$(( inner_w - ${#sup} - left ))
+    printf "${CYAN}  ║${NC}  %*s${GREEN}Support:${NC} ${JOJONET_SUPPORT}%*s  ${CYAN}║${NC}\n" \
+        "$left" "" "$right" ""
+
+    _logo_box_blank "$inner_w"
+    _logo_box_edge '╚' "$inner_w"
+    echo ""
+}
+
+main_menu() {
+    local choice
+    while true; do
+        command -v clear >/dev/null && clear
+        logo
+        menu_line "1) Quick GRE Tunnel"
+        menu_line "2) TUN/PrivateIP/TCP (Backhaul-style)"
+        menu_line "3) Paqet Tunnel (Raw/KCP)"
+        menu_line "4) VXLAN Tunnel (UDP overlay)"
+        menu_line "5) Advanced GRE Setup"
+        menu_line "6) Manage Tunnels"
+        menu_line "7) Network Status"
+        menu_line "8) Stealth Mode (history + quiet)"
+        menu_line "9) Healthcheck tunnel"
+        menu_line "10) Export / Import keys (no SSH)"
+        menu_line "0) Exit"
+        echo ""
+        read -r -p "  Select: " choice || break
+
+        case "$choice" in
+            1) quick_add_tunnel || true ;;
+            2) quick_add_tunnel_tun_tcp || true ;;
+            3) quick_add_tunnel_paqet || true ;;
+            4) quick_add_tunnel_vxlan || true ;;
+            5) add_new_tunnel || true ;;
+            6) manage_tunnels || true ;;
+            7) show_live_status || true ;;
+            8) toggle_stealth_mode ;;
+            9)
+                read -r -p "Tunnel name: " _hn || true
+                [[ -n "${_hn:-}" ]] && healthcheck_tunnel "$_hn"
+                press_enter
+                ;;
+            10)
+                echo "  1) Export keys"
+                echo "  2) Import keys"
+                read -r -p "Choose [1/2]: " _kc || true
+                if [[ "$_kc" == "1" ]]; then
+                    read -r -p "Peer public IP: " _peer || true
+                    [[ -n "${_peer:-}" ]] && export_pair_keys "$_peer"
+                elif [[ "$_kc" == "2" ]]; then
+                    read -r -p "Peer public IP: " _peer || true
+                    read -r -p "Archive path: " _arc || true
+                    [[ -n "${_peer:-}" && -n "${_arc:-}" ]] && import_pair_keys "$_peer" "$_arc"
+                fi
+                press_enter
+                ;;
+            0) command -v clear >/dev/null && clear; opsec_scrub_history; exit 0 ;;
+            *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+create_template_script || echo -e "${RED}[!] Startup: GRE template warning.${NC}" >&2
+create_template_service || echo -e "${RED}[!] Startup: GRE service warning.${NC}" >&2
+create_tuntcp_runner_script >/dev/null 2>&1 || true
+create_tuntcp_service >/dev/null 2>&1 || true
+create_paqet_runner_script >/dev/null 2>&1 || true
+create_paqet_service >/dev/null 2>&1 || true
+create_vxlan_runner_script >/dev/null 2>&1 || true
+create_vxlan_service >/dev/null 2>&1 || true
+repair_all_instances
+if (( $(count_configured_tunnels) > 0 )); then
+    create_boot_restore_service >/dev/null 2>&1 || true
+    systemctl enable jojonet-boot.service >/dev/null 2>&1 || true
+fi
+
+# CLI shortcuts
+if [[ "${1:-}" == "--stealth" ]]; then
+    export JOJONET_STEALTH=1
+    shift
+fi
+if [[ "${1:-}" == "--refresh-templates" ]]; then
+    refresh_runtime_templates && echo -e "${GREEN}[+] Templates updated.${NC}"
+    repair_all_instances
+    exit 0
+fi
+if [[ "${1:-}" == "--role" && -n "${2:-}" ]]; then
+    export JOJONET_ROLE="$2"
+    shift 2
+fi
+if [[ "${1:-}" == "--health" && -n "${2:-}" ]]; then
+    healthcheck_tunnel "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--export-keys" && -n "${2:-}" ]]; then
+    export_pair_keys "$2" "${3:-}"
+    exit $?
+fi
+if [[ "${1:-}" == "--import-keys" && -n "${2:-}" && -n "${3:-}" ]]; then
+    import_pair_keys "$2" "$3"
+    exit $?
+fi
+if [[ "${1:-}" == "--tun-tcp" && -n "${2:-}" ]]; then
+    quick_add_tunnel_tun_tcp "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--paqet" && -n "${2:-}" ]]; then
+    quick_add_tunnel_paqet "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--vxlan" && -n "${2:-}" ]]; then
+    quick_add_tunnel_vxlan "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--peer" && -n "${2:-}" ]]; then
+    quick_add_tunnel "$2"
+    exit $?
+fi
+if [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    quick_add_tunnel "$1"
+    exit $?
+fi
+
+main_menu
