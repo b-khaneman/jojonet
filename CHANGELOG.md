@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+- Self-update runs **before** tunnel init (no more silent fail)
+- Multi-mirror download (jsDelivr / gitmirror / ghproxy) for Iran networks
+- CLI `--update` no longer asks Y/n
+- Installer uses the same mirrors
+
 ## 1.2.0
 - **Self-update** from GitHub: `sudo jojonet --update` / `--check-update` / menu 13
 - Keeps `/etc/jojonet` configs; backs up previous binary

@@ -55,6 +55,8 @@ sudo jojonet --check-update
 sudo jojonet --update
 # or menu -> 13
 # force: sudo jojonet --update --force
+# if --update missing (old install):
+curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo bash
 
 HELPERS
 -------

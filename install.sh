@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
-# JojoNet Installer v1.2.0 — self-update + WireGuard + Hysteria2
+# JojoNet Installer v1.2.1 — self-update + mirrors + WireGuard + Hysteria2
 # https://github.com/b-khaneman/jojonet
 #
 # One-liner:
 #   curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
+# Mirror (if GitHub blocked):
+#   curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo bash
 #
 # Local:
 #   sudo bash install.sh
@@ -12,7 +14,7 @@
 
 set -Eeo pipefail
 
-readonly INSTALLER_VERSION="1.2.0"
+readonly INSTALLER_VERSION="1.2.1"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_BIN="/usr/local/bin/jojonet"
 readonly SHARE_DIR="/usr/local/share/jojonet"
@@ -25,6 +27,41 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 fail() { echo -e "${RED}[!]${NC} $*" >&2; exit 1; }
+
+mirror_urls() {
+    local file="$1" u="$GITHUB_USER" r="$GITHUB_REPO" b="$GITHUB_BRANCH"
+    printf '%s\n' \
+        "https://raw.githubusercontent.com/${u}/${r}/${b}/${file}" \
+        "https://cdn.jsdelivr.net/gh/${u}/${r}@${b}/${file}" \
+        "https://raw.gitmirror.com/${u}/${r}/${b}/${file}" \
+        "https://ghproxy.net/https://raw.githubusercontent.com/${u}/${r}/${b}/${file}" \
+        "https://mirror.ghproxy.com/https://raw.githubusercontent.com/${u}/${r}/${b}/${file}"
+}
+
+download_file() {
+    local url="$1" dest="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 8 --max-time 45 "$url" -o "$dest" || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$dest" --timeout=45 "$url" || return 1
+    else
+        return 1
+    fi
+    [[ -s "$dest" ]]
+}
+
+download_with_mirrors() {
+    local file="$1" dest="$2" url=""
+    while IFS= read -r url; do
+        [[ -z "$url" ]] && continue
+        warn "Trying: $url"
+        if download_file "$url" "$dest"; then
+            log "OK: $url"
+            return 0
+        fi
+    done < <(mirror_urls "$file")
+    return 1
+}
 
 resolve_dir() {
     local src="${BASH_SOURCE[0]:-}"
@@ -80,17 +117,6 @@ check_deps() {
     fi
 }
 
-download_file() {
-    local url="$1" dest="$2"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$dest" || return 1
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$dest" "$url" || return 1
-    else
-        return 1
-    fi
-}
-
 install_jojonet_file() {
     local src="$1"
     [[ -f "$src" ]] || fail "Source not found: $src"
@@ -120,15 +146,14 @@ install_extras_from_dir() {
 }
 
 install_extras_from_github() {
-    local base="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
     local tmp
     tmp=$(mktemp /tmp/jojonet-extra.XXXXXX) || return 0
-    if download_file "$base/checksums.sha256" "$tmp" 2>/dev/null; then
+    if download_with_mirrors "checksums.sha256" "$tmp"; then
         install -m644 "$tmp" "$SHARE_DIR/checksums.sha256"
         install -m644 "$tmp" /etc/jojonet/checksums.sha256
         log "Checksums downloaded"
     fi
-    if download_file "$base/uninstall.sh" "$tmp" 2>/dev/null; then
+    if download_with_mirrors "uninstall.sh" "$tmp"; then
         install -m755 "$tmp" /usr/local/bin/jojonet-uninstall
         log "Uninstaller downloaded"
     fi
@@ -204,10 +229,8 @@ if [[ "$mode" == "local" ]]; then
     install_extras_from_dir "$PKG_DIR"
 else
     check_deps 1
-    remote_url="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}/jojonet"
-    warn "Downloading: $remote_url"
     tmp=$(mktemp /tmp/jojonet.XXXXXX) || fail "mktemp failed"
-    download_file "$remote_url" "$tmp" || fail "Download failed: $remote_url"
+    download_with_mirrors "jojonet" "$tmp" || fail "Download failed (GitHub + all mirrors)"
     install_jojonet_file "$tmp"
     rm -f "$tmp"
     install_extras_from_github

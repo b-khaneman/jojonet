@@ -1,4 +1,4 @@
-# JojoNet v1.2.0
+# JojoNet v1.2.1
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -22,6 +22,18 @@ sudo jojonet --update
 sudo jojonet --update --force
 ```
 
+اگر نسخهٔ قدیمی داری و `--update` کار نمی‌کند، یک‌بار نصب مجدد:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
+```
+
+اگر GitHub فیلتر است:
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo bash
+```
+
 - کانفیگ‌های `/etc/jojonet/` پاک نمی‌شوند
 - بکاپ باینری قبلی: `/usr/local/bin/jojonet.bak.VERSION`
 
@@ -34,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh 
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.2.0`
+خروجی باید باشد: `jojonet 1.2.1`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران**.
 
