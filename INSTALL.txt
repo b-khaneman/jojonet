@@ -1,34 +1,31 @@
-JojoNet v1.0.0 — First official public release
-================================================
+JojoNet v1.1.0
+==============
+Repo: https://github.com/b-khaneman/jojonet
 
-Repository: https://github.com/b-khaneman/jojonet
-
-----------------------------------------
-INSTALL + RUN (copy/paste)
-----------------------------------------
-
-# 1) Install (both servers)
+INSTALL
+-------
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
-
-# 2) Check version
 sudo jojonet --version
-# Expected: jojonet 1.0.0
+# jojonet 1.1.0
 
-# 3) Foreign server FIRST
-sudo jojonet
-# Menu -> 1) Quick GRE Tunnel -> enter Iran IP
-# or:
-sudo jojonet --peer IRAN_IP
+RUN
+---
+# Foreign first, then Iran:
 
-# 4) Iran server
-sudo jojonet FOREIGN_IP
+# Best latency (UDP):
+sudo jojonet --wg PEER_IP
 
-# Optional modes
+# High speed / filtered:
+sudo jojonet --hy2 PEER_IP
+
+# Classic GRE:
+sudo jojonet PEER_IP
+
+# Fallbacks:
 sudo jojonet --tun-tcp PEER_IP
 sudo jojonet --paqet PEER_IP
 sudo jojonet --vxlan PEER_IP
 
-# Uninstall
+UNINSTALL
+---------
 sudo jojonet-uninstall
-
-Support: @B_khaneman

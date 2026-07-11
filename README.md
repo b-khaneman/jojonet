@@ -1,12 +1,11 @@
 # JojoNet
 
-**اولین نسخه رسمی منتشرشده** — مدیر تانل ایران ↔ خارج
+**اولین نسخه رسمی + آپدیت 1.1.0** — مدیر تانل ایران ↔ خارج
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/b-khaneman/jojonet)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/b-khaneman/jojonet)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> این **اولین انتشار عمومی (v1.0.0)** پروژه JojoNet است.  
-> برای نصب و استفاده، فقط از همین ریپو و لینک‌های زیر استفاده کنید.
+> JojoNet v1.1.0 — GRE / TUN-TCP / Paqet / VXLAN / **WireGuard** / **Hysteria2**
 
 **ریپو:** https://github.com/b-khaneman/jojonet  
 **پشتیبانی:** [@B_khaneman](https://t.me/B_khaneman)
@@ -24,16 +23,11 @@ curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh 
 ```bash
 sudo jojonet --version
 ```
-خروجی: `jojonet 1.0.0`
+خروجی: `jojonet 1.1.0`
 
-### ۳) اجرا — سرور خارج (اول این را بزن)
+### ۳) اجرا — سرور خارج (اول)
 ```bash
 sudo jojonet
-```
-منو → گزینه `1) Quick GRE Tunnel` → IP سرور ایران را وارد کن  
-یا مستقیم:
-```bash
-sudo jojonet --peer IP_ایران
 ```
 
 ### ۴) اجرا — سرور ایران
@@ -41,107 +35,58 @@ sudo jojonet --peer IP_ایران
 sudo jojonet IP_سرور_خارج
 ```
 
-### ۵) حالت‌های دیگر (اختیاری)
+---
+
+## انتخاب نوع تانل
+
+| اولویت | دستور | پینگ | سرعت | کی؟ |
+|--------|--------|------|------|-----|
+| ۱ | `sudo jojonet --wg PEER` | عالی | عالی | اگر UDP باز باشد |
+| ۲ | `sudo jojonet PEER` (GRE) | عالی | عالی | اگر GRE باز باشد |
+| ۳ | `sudo jojonet --hy2 PEER` | خوب | خیلی بالا | مسیر فیلتر / نیاز به سرعت |
+| ۴ | `sudo jojonet --tun-tcp PEER` | متوسط | خوب | GRE بسته |
+| ۵ | `sudo jojonet --paqet PEER` | متوسط | خوب | فیلتر شدید |
+| ۶ | `sudo jojonet --vxlan PEER` | خوب | خوب | UDP باز، GRE بسته |
+
+### WireGuard (پیشنهادی برای پینگ پایین)
 ```bash
-sudo jojonet --tun-tcp IP_طرف_مقابل
-sudo jojonet --paqet IP_طرف_مقابل
-sudo jojonet --vxlan IP_طرف_مقابل
+# خارج:
+sudo jojonet --wg IP_ایران
+# ایران:
+sudo jojonet --wg IP_خارج
 ```
 
-### ۶) حذف (در صورت نیاز)
+### Hysteria2 (پیشنهادی برای سرعت بالا روی مسیر فیلتر)
 ```bash
-sudo jojonet-uninstall
+# خارج:
+sudo jojonet --hy2 IP_ایران
+# ایران:
+sudo jojonet --hy2 IP_خارج
 ```
 
 ---
 
-## نصب از کلون
+## منو
 
-```bash
-git clone https://github.com/b-khaneman/jojonet.git
-cd jojonet
-sudo bash install.sh
 ```
-
----
-
-## این نسخه چیست؟
-
-JojoNet v1.0.0 اولین نسخهٔ کامل و منتشرشده برای ساخت و مدیریت تانل بین سرور ایران و سرور خارج است، با پشتیبانی از:
-
-| حالت | پروتکل | مناسب برای |
-|------|--------|------------|
-| **GRE** | IP/GRE | پیش‌فرض سریع |
-| **TUN/TCP** | TCP | وقتی GRE بسته است |
-| **Paqet** | Raw + KCP | مسیرهای فیلتر / latency بالا |
-| **VXLAN** | UDP overlay | وقتی UDP باز است |
-
-### امکانات نسخه اول
-- تشخیص خودکار نقش سرور (ایران / خارج) با امکان تنظیم دستی
-- چند تانل همزمان روی یک سرور
-- فوروارد پورت روی سمت ایران (nftables)
-- پایداری با systemd و بازیابی بعد از ریبوت
-- همگام‌سازی کلید با SSH یا export/import دستی
-- تأیید checksum برای دانلود باینری‌ها
-- اسکریپت نصب و حذف کامل
-
----
-
-## دستورات
-
-| دستور | توضیح |
-|--------|--------|
-| `sudo jojonet` | منوی اصلی |
-| `sudo jojonet PEER_IP` | تانل GRE سریع |
-| `sudo jojonet --tun-tcp PEER_IP` | TUN/TCP |
-| `sudo jojonet --paqet PEER_IP` | Paqet |
-| `sudo jojonet --vxlan PEER_IP` | VXLAN |
-| `sudo jojonet --health NAME` | بررسی سلامت تانل |
-| `sudo jojonet --export-keys PEER [FILE]` | خروجی کلید |
-| `sudo jojonet --import-keys PEER FILE` | ورود کلید |
-| `sudo jojonet --help` | راهنما |
-| `sudo jojonet-uninstall` | حذف کامل |
+1) Quick GRE
+2) TUN/TCP
+3) Paqet
+4) VXLAN
+5) WireGuard
+6) Hysteria2
+7) Advanced GRE
+8) Manage
+9) Status
+...
+```
 
 ---
 
 ## حذف
-
 ```bash
 sudo jojonet-uninstall
 ```
 
----
-
-## English
-
-**JojoNet v1.0.0 — First official public release**
-
-Iran ↔ Foreign tunnel manager (GRE / TUN-TCP / Paqet / VXLAN) with systemd persistence.
-
-### Install & run
-
-```bash
-# Install
-curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
-sudo jojonet --version
-
-# Foreign server (run first)
-sudo jojonet
-# or: sudo jojonet --peer IRAN_IP
-
-# Iran server
-sudo jojonet FOREIGN_IP
-```
-
-### Quick start
-1. Foreign server: `sudo jojonet`
-2. Iran server: `sudo jojonet <FOREIGN_IP>`
-
----
-
 ## License
-
-MIT — see [LICENSE](LICENSE)
-
-**First release:** v1.0.0  
-**Author / Support:** [@B_khaneman](https://t.me/B_khaneman)
+MIT

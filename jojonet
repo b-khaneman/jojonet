@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.0.0"
+readonly JOJONET_VERSION="1.1.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 
@@ -70,6 +70,14 @@ DEFAULT_MTU_FALLBACK=1310
 TUNNEL_NET_PREFIX="172.20"
 VXLAN_NET_PREFIX="172.21"
 TUN_TCP_NET_PREFIX="10.30"
+WG_NET_PREFIX="10.66"
+DEFAULT_WG_PORT=51820
+DEFAULT_WG_MTU=1280
+DEFAULT_HY2_PORT=443
+DEFAULT_HY2_SNI="www.cloudflare.com"
+HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
+HY2_BIN="/usr/local/bin/hysteria"
+HY2_VERSION="${JOJONET_HY2_VERSION:-v2.6.1}"
 DEFAULT_VXLAN_PORT=4789
 DEFAULT_VXLAN_MTU=1450
 DEFAULT_TCP_PORT=8443
@@ -81,7 +89,7 @@ STEALTH_MODE=0
 
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
 
 load_safe_config() {
     local file="$1" line key val
@@ -89,6 +97,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -261,7 +270,7 @@ healthcheck_tunnel() {
         echo -e "  service: ${RED}inactive${NC}"
     fi
     case "${TunnelMode:-gre}" in
-        gre|vxlan)
+        gre|vxlan|wireguard)
             if ip link show "$name" >/dev/null 2>&1; then
                 echo -e "  iface:   ${GREEN}present${NC}"
                 ok=$((ok + 1))
@@ -327,7 +336,7 @@ print_banner() {
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
-First official public release
+v1.1.0 — WireGuard + Hysteria2
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -336,6 +345,8 @@ Usage:
   sudo jojonet --tun-tcp <PEER_IP>     TUN/PrivateIP/TCP tunnel
   sudo jojonet --paqet <PEER_IP>       Paqet (Raw/KCP) tunnel
   sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
+  sudo jojonet --wg <PEER_IP>          WireGuard tunnel (low latency)
+  sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed)
   sudo jojonet --stealth               Enable stealth for this session
   sudo jojonet --refresh-templates     Regenerate systemd runner scripts
   sudo jojonet --health <NAME>         Healthcheck one tunnel
@@ -400,6 +411,7 @@ install -d -m700 "$INSTANCES_DIR"
 install -d -m755 "$(dirname "$TEMPLATE_SCRIPT")"
 install -d -m700 "$KEYS_ROOT"
 install -d -m700 "$PAQET_CONFIG_DIR"
+install -d -m700 "$HY2_CONFIG_DIR"
 install -d -m755 "$(dirname "$LOCK_FILE")" 2>/dev/null || true
 check_dependencies
 
@@ -813,6 +825,10 @@ generate_tunnel_name_from_peer() {
         prefix="pq"
     elif [[ "$mode" == "vxlan" ]]; then
         prefix="vx"
+    elif [[ "$mode" == "wireguard" ]]; then
+        prefix="wg"
+    elif [[ "$mode" == "hysteria2" ]]; then
+        prefix="hy"
     elif [[ "$role" == "kharej" ]]; then
         prefix="ir"
     else
@@ -952,6 +968,10 @@ refresh_runtime_templates() {
     create_paqet_service || return 1
     create_vxlan_runner_script || return 1
     create_vxlan_service || return 1
+    create_wg_runner_script || return 1
+    create_wg_service || return 1
+    create_hy2_runner_script || return 1
+    create_hy2_service || return 1
     return 0
 }
 
@@ -998,6 +1018,7 @@ resolve_tunnel_ips() {
     local net_prefix="$TUNNEL_NET_PREFIX"
     [[ "$mode" == "tun_tcp" ]] && net_prefix="$TUN_TCP_NET_PREFIX"
     [[ "$mode" == "vxlan" ]] && net_prefix="$VXLAN_NET_PREFIX"
+    [[ "$mode" == "wireguard" ]] && net_prefix="$WG_NET_PREFIX"
 
     Tun_Server_IP="${net_prefix}.$subnet_byte.1"
     Tun_Client_IP="${net_prefix}.$subnet_byte.2"
@@ -1426,7 +1447,8 @@ deploy_tunnel() {
     local tunnel_mode="${10:-gre}" tcp_port="${11:-$DEFAULT_TCP_PORT}" key_dir="${12:-}"
     local tun_server_ip="${13:-}" tun_client_ip="${14:-}" forward_proto="${15:-tcp}"
     local conf_file="$INSTANCES_DIR/$ins_name.conf" tmp_conf="" svc_unit="" gre_key=""
-    local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port=""
+    local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port="" hy_yaml=""
+    local wg_priv="" wg_pub="" wg_peer=""
 
     apply_global_sysctl || return 1
 
@@ -1453,10 +1475,32 @@ deploy_tunnel() {
         create_vxlan_runner_script || return 1
         create_vxlan_service || return 1
         svc_unit="jojonet-vxlan@${ins_name}.service"
+    elif [[ "$tunnel_mode" == "wireguard" ]]; then
+        install_wireguard_tools || return 1
+        create_wg_runner_script || return 1
+        create_wg_service || return 1
+        svc_unit="jojonet-wg@${ins_name}.service"
+    elif [[ "$tunnel_mode" == "hysteria2" ]]; then
+        install_hysteria2_binary || return 1
+        create_hy2_runner_script || return 1
+        create_hy2_service || return 1
+        local _sni="${HySni:-$DEFAULT_HY2_SNI}"
+        hy_yaml=$(build_hy2_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir"             "$fwd_port" "$_sni") || return 1
+        svc_unit="jojonet-hy2@${ins_name}.service"
     else
         create_template_script || return 1
         create_template_service || return 1
         svc_unit="jojonet@${ins_name}.service"
+    fi
+
+    if [[ "$tunnel_mode" == "wireguard" && -n "$key_dir" ]]; then
+        wg_priv="$key_dir/wg_private.key"
+        wg_pub="$key_dir/wg_public.key"
+        wg_peer="$key_dir/wg_peer_public.key"
+    fi
+    if [[ "$tunnel_mode" == "hysteria2" ]]; then
+        paqet_yaml=""
+        [[ -n "${hy_yaml:-}" ]] || hy_yaml="$HY2_CONFIG_DIR/${ins_name}.yaml"
     fi
 
     tmp_conf="${conf_file}.tmp"
@@ -1480,6 +1524,12 @@ PaqetYaml="$paqet_yaml"
 ForwardProto="$forward_proto"
 VxlanVni="$vxlan_vni"
 VxlanPort="$vxlan_port"
+WgPrivateKey="$wg_priv"
+WgPublicKey="$wg_pub"
+WgPeerPublicKey="$wg_peer"
+HyYaml="$hy_yaml"
+HyAuth=""
+HySni=""
 EOF
 
     chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; return 1; }
@@ -2050,7 +2100,7 @@ create_template_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
 
 load_safe_config() {
     local file="$1" line key val
@@ -2058,6 +2108,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -2281,7 +2332,7 @@ create_tuntcp_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
 
 load_safe_config() {
     local file="$1" line key val
@@ -2289,6 +2340,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -2498,7 +2550,7 @@ create_paqet_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
 
 load_safe_config() {
     local file="$1" line key val
@@ -2506,6 +2558,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -2627,7 +2680,7 @@ create_vxlan_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
 
 load_safe_config() {
     local file="$1" line key val
@@ -2635,6 +2688,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -2840,6 +2894,659 @@ EOF
     fi
 }
 
+
+# ==========================================
+# WireGuard helpers
+# ==========================================
+
+WG_RUNNER="/usr/local/bin/jojonet-run-wg.sh"
+WG_SERVICE="/etc/systemd/system/jojonet-wg@.service"
+WG_NET_PREFIX="10.66"
+DEFAULT_WG_PORT=51820
+DEFAULT_WG_MTU=1280
+
+install_wireguard_tools() {
+    if command -v wg >/dev/null 2>&1 && command -v wg-quick >/dev/null 2>&1; then
+        return 0
+    fi
+    log_note "Installing wireguard-tools..."
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools >/dev/null 2>&1 || \
+            apt-get install -y wireguard-tools >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y wireguard-tools >/dev/null 2>&1 || true
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y wireguard-tools >/dev/null 2>&1 || true
+    fi
+    command -v wg >/dev/null 2>&1 || {
+        log_error "wireguard-tools (wg) not available. Install: apt install wireguard-tools"
+        return 1
+    }
+    modprobe wireguard 2>/dev/null || true
+    return 0
+}
+
+ensure_wg_keys() {
+    local pair_id="$1" peer_ip="${2:-}" role="${3:-}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}"
+    install -d -m700 "$keydir"
+    # Each side has its OWN keypair; peer public is the other side's public key
+    if [[ ! -f "$keydir/wg_private.key" ]]; then
+        umask 077
+        wg genkey | tee "$keydir/wg_private.key" | wg pubkey > "$keydir/wg_public.key"
+        chmod 600 "$keydir/wg_private.key" "$keydir/wg_public.key"
+        log_info "Generated local WireGuard keypair in $keydir"
+    fi
+    if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
+        # Push our public key to peer as their wg_peer_public.key
+        ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "root@${peer_ip}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || true
+        scp -o ConnectTimeout=8 -q "$keydir/wg_public.key" \
+            "root@${peer_ip}:${keydir}/wg_peer_public.key" 2>/dev/null || true
+        # Pull peer public key
+        scp -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -q \
+            "root@${peer_ip}:${keydir}/wg_public.key" \
+            "$keydir/wg_peer_public.key" 2>/dev/null || true
+    fi
+    if [[ ! -f "$keydir/wg_peer_public.key" ]]; then
+        log_warn "Peer WireGuard public key missing."
+        log_warn "Run the same --wg command on the other server, or copy keys:"
+        log_warn "  sudo jojonet --export-keys $peer_ip"
+        log_warn "Temporary: using local public (will NOT handshake until peer key is set)."
+        cp -f "$keydir/wg_public.key" "$keydir/wg_peer_public.key"
+    fi
+    chmod 600 "$keydir/wg_private.key" "$keydir/wg_public.key" "$keydir/wg_peer_public.key" 2>/dev/null || true
+    printf '%s' "$keydir"
+}
+
+create_wg_runner_script() {
+    if ! cat << 'EOF' > "$WG_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Safe config loader — whitelist keys only (never source shell)
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in
+            *" $key "*) ;;
+            *) return 1 ;;
+        esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in
+            *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;;
+        esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+DEFAULT_WG_MTU=1280
+
+if [[ -z "$CONFIG_FILE" || ! -f "$CONFIG_FILE" ]]; then
+    echo "Config missing" >&2
+    exit 1
+fi
+if ! load_safe_config "$CONFIG_FILE"; then
+    echo "Invalid or unsafe config: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+table_name="jojonet_$Name"
+priv="${WgPrivateKey:-${KeyDir}/wg_private.key}"
+peer_pub="${WgPeerPublicKey:-${KeyDir}/wg_peer_public.key}"
+listen_port="${TcpPort:-51820}"
+mtu="${Suggested_MTU:-$DEFAULT_WG_MTU}"
+
+cleanup() {
+    trap - ERR
+    ip link delete "$Name" >/dev/null 2>&1 || true
+    nft delete table ip "$table_name" >/dev/null 2>&1 || true
+}
+
+case "$ACTION" in
+    start)
+        trap cleanup ERR
+        log() { echo "[jojonet-wg:${Name}] $*"; }
+        command -v wg >/dev/null 2>&1 || { log "ERROR: wg missing"; exit 1; }
+        [[ -f "$priv" ]] || { log "ERROR: private key missing: $priv"; exit 1; }
+        [[ -f "$peer_pub" ]] || { log "ERROR: peer public key missing: $peer_pub"; exit 1; }
+        modprobe wireguard 2>/dev/null || true
+        if ip link show "$Name" >/dev/null 2>&1; then
+            ip link delete "$Name" || true
+        fi
+        # Restrict AllowedIPs to tunnel overlay (backhaul), not full tunnel
+        allow="${Tun_Server_IP}/32,${Tun_Client_IP}/32"
+        [[ -n "$Tun_Server_IP" && -n "$Tun_Client_IP" ]] || allow="10.66.0.0/16"
+        ip link add dev "$Name" type wireguard || { log "ERROR: create wg iface"; exit 1; }
+        wg set "$Name" private-key "$priv" listen-port "$listen_port" \
+            peer "$(cat "$peer_pub")" allowed-ips "$allow" endpoint "${Remote_IP}:${listen_port}" persistent-keepalive 25 \
+            || { log "ERROR: wg set failed"; exit 1; }
+        ip addr flush dev "$Name" >/dev/null 2>&1 || true
+        ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assign"; exit 1; }
+        ip link set "$Name" mtu "$mtu"
+        ip link set "$Name" up || { log "ERROR: up failed"; exit 1; }
+        sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+        if [[ "$Role" == "iran" ]]; then
+            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+            DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+            [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default iface"; exit 1; }
+            [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tun IP"; exit 1; }
+            NFT_CONF="table ip $table_name {
+            chain prerouting {
+                type nat hook prerouting priority dstnat; policy accept;"
+            if [[ -n "$Ports" ]]; then
+                IFS=',' read -ra PORT_LIST <<< "$Ports"
+                for p in "${PORT_LIST[@]}"; do
+                    p="${p// /}"
+                    [[ -n "$p" ]] || continue
+                    if [[ "$p" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+                        NFT_CONF="$NFT_CONF
+                tcp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw
+                udp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw"
+                    else
+                        NFT_CONF="$NFT_CONF
+                tcp dport $p dnat ip to $Tun_Remote_IP_Raw
+                udp dport $p dnat ip to $Tun_Remote_IP_Raw"
+                    fi
+                done
+            fi
+            NFT_CONF="$NFT_CONF
+            }
+            chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"$DEFAULT_IFACE\" masquerade
+            }
+        }"
+            nft delete table ip "$table_name" >/dev/null 2>&1 || true
+            echo "$NFT_CONF" | nft -f - || { log "ERROR: nft failed"; exit 1; }
+        fi
+        log "SUCCESS: WireGuard $Name UP ($Tun_IP)"
+        ;;
+    stop)
+        cleanup
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$WG_RUNNER"
+}
+
+create_wg_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_wg_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet WireGuard Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-wg-%i
+ExecStart=/usr/local/bin/jojonet-run-wg.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-wg.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$WG_SERVICE" ]] && cmp -s "$tmp_file" "$WG_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$WG_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+quick_add_tunnel_wg() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local tun_ip="" tun_remote="" ins_mtu="$DEFAULT_WG_MTU" fwd_port="" key_dir=""
+    local wg_port="$DEFAULT_WG_PORT" existing=""
+
+    set +e
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "WireGuard Tunnel (low latency)"
+
+    install_wireguard_tools || { sleep 2; set -e; return 1; }
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+
+    if [[ -z "$peer_ip" ]]; then
+        read -r -p "Peer server IP: " peer_ip
+    fi
+    peer_ip="${peer_ip// /}"
+    if ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip" "wireguard"); then
+        echo -e "${YELLOW}[!] WireGuard to $rem_ip exists [$existing]. Restarting...${NC}"
+        restart_tunnel "$existing"
+        sleep 2; set -e; return $?
+    fi
+
+    if ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Role required. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2; set -e; return 1
+    fi
+    echo -e "${GREEN}[*] Role:${NC} $role_conf"
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "wireguard") || { set -e; return 1; }
+    [[ "$role_conf" == "iran" ]] && fwd_port="443" || fwd_port=""
+
+    read -r -p "WireGuard UDP port [$wg_port]: " _wp
+    wg_port=${_wp:-$wg_port}
+
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+    resolve_tunnel_ips "$role_conf" "$subnet_byte" "wireguard"
+    tun_ip="$Tun_IP"
+    tun_remote="$Tun_Remote_IP_Raw"
+
+    local pair_id
+    pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+    key_dir=$(ensure_wg_keys "$pair_id" "$rem_ip" "$role_conf") || { set -e; return 1; }
+
+    echo -e "\n${CYAN}--- WireGuard plan ---${NC}"
+    echo -e "  Interface: $ins_name"
+    echo -e "  Role:      $role_conf"
+    echo -e "  Peer:      $rem_ip"
+    echo -e "  Port:      UDP $wg_port"
+    echo -e "  Tunnel IP: $tun_ip"
+    [[ -n "$fwd_port" ]] && echo -e "  Forward:   $fwd_port"
+    echo ""
+
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$tun_ip" "$tun_remote" "$ins_mtu" "$fwd_port" "wireguard" "$wg_port" "$key_dir" \
+        "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] WireGuard [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --wg $loc_ip"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+# ==========================================
+# Hysteria2 helpers
+# ==========================================
+
+HY2_RUNNER="/usr/local/bin/jojonet-run-hy2.sh"
+HY2_SERVICE="/etc/systemd/system/jojonet-hy2@.service"
+HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
+HY2_BIN="/usr/local/bin/hysteria"
+HY2_REPO="apernet/hysteria"
+HY2_VERSION="${JOJONET_HY2_VERSION:-v2.6.1}"
+DEFAULT_HY2_PORT=443
+DEFAULT_HY2_SNI="www.cloudflare.com"
+
+detect_cpu_arch_hy2() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
+install_hysteria2_binary() {
+    if [[ -x "$HY2_BIN" ]]; then
+        return 0
+    fi
+    local arch tmpdir url fname
+    arch=$(detect_cpu_arch_hy2) || { log_error "Unsupported CPU for Hysteria2"; return 1; }
+    fname="hysteria-linux-${arch}"
+    url="https://github.com/${HY2_REPO}/releases/download/${HY2_VERSION}/${fname}"
+    tmpdir=$(mktemp -d /tmp/jojonet-hy2.XXXXXX) || return 1
+    log_note "Downloading Hysteria2 ${HY2_VERSION} ($fname)..."
+    if ! download_verified "$url" "$tmpdir/$fname" "$fname"; then
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    install -m755 "$tmpdir/$fname" "$HY2_BIN"
+    rm -rf "$tmpdir"
+    log_info "hysteria installed: $HY2_BIN"
+    return 0
+}
+
+ensure_hy2_auth() {
+    local pair_id="$1" peer_ip="${2:-}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}"
+    install -d -m700 "$keydir"
+    if [[ ! -f "$keydir/hy2.auth" ]]; then
+        if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
+            scp -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -q \
+                "root@${peer_ip}:${keydir}/hy2.auth" "$keydir/" 2>/dev/null || true
+        fi
+    fi
+    if [[ ! -f "$keydir/hy2.auth" ]]; then
+        openssl rand -hex 24 > "$keydir/hy2.auth"
+        chmod 600 "$keydir/hy2.auth"
+        if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
+            ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+                "root@${peer_ip}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || true
+            scp -o ConnectTimeout=8 -q "$keydir/hy2.auth" "root@${peer_ip}:${keydir}/" 2>/dev/null || true
+        fi
+    fi
+    printf '%s' "$keydir"
+}
+
+build_hy2_runtime_config() {
+    local name="$1" role="$2" rem="$3" port="$4" keydir="$5" ports="${6:-}" sni="${7:-$DEFAULT_HY2_SNI}"
+    local auth yaml fwd_block="" p
+    install -d -m700 "$HY2_CONFIG_DIR"
+    auth=$(tr -d '\n' < "$keydir/hy2.auth")
+    yaml="$HY2_CONFIG_DIR/${name}.yaml"
+
+    if [[ "$role" == "kharej" ]]; then
+        cat > "$yaml" <<EOF
+# JojoNet Hysteria2 server
+listen: :${port}
+auth:
+  type: password
+  password: ${auth}
+masquerade:
+  type: proxy
+  proxy:
+    url: https://${sni}
+    rewriteHost: true
+bandwidth:
+  up: 1 gbps
+  down: 1 gbps
+EOF
+    else
+        fwd_block=""
+        if [[ -n "$ports" ]]; then
+            fwd_block="tcpForwarding:"
+            IFS=',' read -ra _plist <<< "$ports"
+            for p in "${_plist[@]}"; do
+                p="${p// /}"
+                [[ -n "$p" ]] || continue
+                if [[ "$p" =~ ^[0-9]+$ ]]; then
+                    fwd_block="${fwd_block}
+  - listen: 0.0.0.0:${p}
+    remote: 127.0.0.1:${p}"
+                fi
+            done
+            fwd_block="${fwd_block}
+udpForwarding:"
+            for p in "${_plist[@]}"; do
+                p="${p// /}"
+                [[ -n "$p" ]] || continue
+                if [[ "$p" =~ ^[0-9]+$ ]]; then
+                    fwd_block="${fwd_block}
+  - listen: 0.0.0.0:${p}
+    remote: 127.0.0.1:${p}"
+                fi
+            done
+        fi
+        cat > "$yaml" <<EOF
+# JojoNet Hysteria2 client (Iran)
+server: ${rem}:${port}
+auth: ${auth}
+bandwidth:
+  up: 1 gbps
+  down: 1 gbps
+tls:
+  sni: ${sni}
+  insecure: true
+${fwd_block}
+EOF
+    fi
+    chmod 600 "$yaml"
+    echo "$yaml"
+}
+
+create_hy2_runner_script() {
+    if ! cat << 'EOF' > "$HY2_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+HY2_BIN="/usr/local/bin/hysteria"
+
+[[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || { echo "Config missing" >&2; exit 1; }
+load_safe_config "$CONFIG_FILE" || { echo "Bad config" >&2; exit 1; }
+yaml="${HyYaml:-}"
+
+stop_hy2() {
+    pkill -f "hysteria (server|client) -c ${yaml}" >/dev/null 2>&1 || true
+    pkill -f "hysteria.*-c ${yaml}" >/dev/null 2>&1 || true
+}
+
+case "$ACTION" in
+    start)
+        stop_hy2
+        [[ -x "$HY2_BIN" ]] || { echo "hysteria binary missing" >&2; exit 1; }
+        [[ -f "$yaml" ]] || { echo "yaml missing: $yaml" >&2; exit 1; }
+        if [[ "$Role" == "kharej" ]]; then
+            exec "$HY2_BIN" server -c "$yaml"
+        else
+            exec "$HY2_BIN" client -c "$yaml"
+        fi
+        ;;
+    stop)
+        stop_hy2
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$HY2_RUNNER"
+}
+
+create_hy2_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_hy2_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet Hysteria2 Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-hy2-%i
+ExecStart=/usr/local/bin/jojonet-run-hy2.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-hy2.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=90
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$HY2_SERVICE" ]] && cmp -s "$tmp_file" "$HY2_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$HY2_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+quick_add_tunnel_hy2() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip=""
+    local fwd_port="" key_dir="" hy_port="$DEFAULT_HY2_PORT" sni="$DEFAULT_HY2_SNI"
+    local existing="" hy_yaml=""
+
+    set +e
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "Hysteria2 Tunnel (high speed / filtered paths)"
+
+    install_hysteria2_binary || { sleep 2; set -e; return 1; }
+    install -d -m700 "$HY2_CONFIG_DIR"
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+
+    if [[ -z "$peer_ip" ]]; then
+        read -r -p "Peer server IP: " peer_ip
+    fi
+    peer_ip="${peer_ip// /}"
+    if ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip" "hysteria2"); then
+        echo -e "${YELLOW}[!] Hysteria2 to $rem_ip exists [$existing]. Restarting...${NC}"
+        restart_tunnel "$existing"
+        sleep 2; set -e; return $?
+    fi
+
+    if ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Role required.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    echo -e "${GREEN}[*] Role:${NC} $role_conf"
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "hysteria2") || { set -e; return 1; }
+
+    if [[ "$role_conf" == "kharej" ]]; then
+        read -r -p "Listen UDP port [$hy_port]: " _hp
+        hy_port=${_hp:-$hy_port}
+        fwd_port=""
+    else
+        fwd_port="443"
+        read -r -p "Server UDP port [$hy_port]: " _hp
+        hy_port=${_hp:-$hy_port}
+        read -r -p "Forward ports on Iran [$fwd_port]: " _fp
+        fwd_port=${_fp:-$fwd_port}
+    fi
+    read -r -p "TLS SNI [$sni]: " _sni
+    sni=${_sni:-$sni}
+
+    local pair_id
+    pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+    key_dir=$(ensure_hy2_auth "$pair_id" "$rem_ip") || { set -e; return 1; }
+
+    echo -e "\n${CYAN}--- Hysteria2 plan ---${NC}"
+    echo -e "  Name:  $ins_name"
+    echo -e "  Role:  $role_conf"
+    echo -e "  Peer:  $rem_ip"
+    echo -e "  Port:  UDP $hy_port"
+    echo -e "  SNI:   $sni"
+    [[ -n "$fwd_port" ]] && echo -e "  Fwd:   $fwd_port (via tunnel to foreign localhost)"
+    echo ""
+
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "0" \
+        "" "" "1350" "$fwd_port" "hysteria2" "$hy_port" "$key_dir" \
+        "" "" "tcp"; then
+        # patch HySni into conf
+        if [[ -f "$INSTANCES_DIR/$ins_name.conf" ]]; then
+            grep -q '^HySni=' "$INSTANCES_DIR/$ins_name.conf" || \
+                echo "HySni=\"$sni\"" >> "$INSTANCES_DIR/$ins_name.conf"
+        fi
+        echo -e "${GREEN}[+] Hysteria2 [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --hy2 $loc_ip"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+
 create_boot_restore_service() {
     if ! cat << 'EOF' > "$BOOT_RESTORE_SCRIPT"
 #!/usr/bin/env bash
@@ -2852,15 +3559,14 @@ for conf in "$INSTANCES_DIR"/*.conf; do
     [[ -n "$name" ]] || continue
     mode=$(grep -E '^TunnelMode=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2)
     mode=${mode:-gre}
-    if [[ "$mode" == "tun_tcp" ]]; then
-        svc="jojonet-tcptun@${name}.service"
-    elif [[ "$mode" == "paqet" ]]; then
-        svc="jojonet-paqet@${name}.service"
-    elif [[ "$mode" == "vxlan" ]]; then
-        svc="jojonet-vxlan@${name}.service"
-    else
-        svc="jojonet@${name}.service"
-    fi
+    case "$mode" in
+        tun_tcp)   svc="jojonet-tcptun@${name}.service" ;;
+        paqet)     svc="jojonet-paqet@${name}.service" ;;
+        vxlan)     svc="jojonet-vxlan@${name}.service" ;;
+        wireguard) svc="jojonet-wg@${name}.service" ;;
+        hysteria2) svc="jojonet-hy2@${name}.service" ;;
+        *)         svc="jojonet@${name}.service" ;;
+    esac
     echo "[jojonet-boot] Ensuring $svc"
     systemctl enable "$svc" >/dev/null 2>&1 || true
     if ! systemctl is-active --quiet "$svc"; then
@@ -2912,15 +3618,14 @@ EOF
 tunnel_service_unit() {
     local name="$1" mode=""
     mode=$(tunnel_mode_from_name "$name")
-    if [[ "$mode" == "tun_tcp" ]]; then
-        echo "jojonet-tcptun@${name}.service"
-    elif [[ "$mode" == "paqet" ]]; then
-        echo "jojonet-paqet@${name}.service"
-    elif [[ "$mode" == "vxlan" ]]; then
-        echo "jojonet-vxlan@${name}.service"
-    else
-        echo "jojonet@${name}.service"
-    fi
+    case "$mode" in
+        tun_tcp)    echo "jojonet-tcptun@${name}.service" ;;
+        paqet)      echo "jojonet-paqet@${name}.service" ;;
+        vxlan)      echo "jojonet-vxlan@${name}.service" ;;
+        wireguard)  echo "jojonet-wg@${name}.service" ;;
+        hysteria2)  echo "jojonet-hy2@${name}.service" ;;
+        *)          echo "jojonet@${name}.service" ;;
+    esac
 }
 
 tunnel_boot_enabled() {
@@ -2998,7 +3703,9 @@ restart_tunnel() {
     if systemctl is-active --quiet "$unit"; then
         if [[ "$mode" == "paqet" ]]; then
             pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 && unit_active=1
-        elif [[ "$mode" == "tun_tcp" ]]; then
+        elif [[ "$mode" == "hysteria2" ]]; then
+            pgrep -f "hysteria.*${name}" >/dev/null 2>&1 && unit_active=1
+        elif [[ "$mode" == "tun_tcp" || "$mode" == "wireguard" || "$mode" == "gre" || "$mode" == "vxlan" ]]; then
             ip link show "$name" >/dev/null 2>&1 && unit_active=1
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             unit_active=1
@@ -3119,10 +3826,12 @@ rollback_new_tunnel() {
     local name="$1" conf="$2" unit="" mode=""
     mode=$(tunnel_mode_from_name "$name" 2>/dev/null || echo "gre")
     case "$mode" in
-        tun_tcp) unit="jojonet-tcptun@${name}.service" ;;
-        paqet)   unit="jojonet-paqet@${name}.service" ;;
-        vxlan)   unit="jojonet-vxlan@${name}.service" ;;
-        *)       unit="jojonet@${name}.service" ;;
+        tun_tcp)   unit="jojonet-tcptun@${name}.service" ;;
+        paqet)     unit="jojonet-paqet@${name}.service" ;;
+        vxlan)     unit="jojonet-vxlan@${name}.service" ;;
+        wireguard) unit="jojonet-wg@${name}.service" ;;
+        hysteria2) unit="jojonet-hy2@${name}.service" ;;
+        *)         unit="jojonet@${name}.service" ;;
     esac
     echo -e "${RED}[*] Rolling back tunnel [$name]...${NC}"
     set +e
@@ -3673,12 +4382,14 @@ main_menu() {
         menu_line "2) TUN/PrivateIP/TCP (Backhaul-style)"
         menu_line "3) Paqet Tunnel (Raw/KCP)"
         menu_line "4) VXLAN Tunnel (UDP overlay)"
-        menu_line "5) Advanced GRE Setup"
-        menu_line "6) Manage Tunnels"
-        menu_line "7) Network Status"
-        menu_line "8) Stealth Mode (history + quiet)"
-        menu_line "9) Healthcheck tunnel"
-        menu_line "10) Export / Import keys (no SSH)"
+        menu_line "5) WireGuard Tunnel (low latency)"
+        menu_line "6) Hysteria2 Tunnel (high speed)"
+        menu_line "7) Advanced GRE Setup"
+        menu_line "8) Manage Tunnels"
+        menu_line "9) Network Status"
+        menu_line "10) Stealth Mode (history + quiet)"
+        menu_line "11) Healthcheck tunnel"
+        menu_line "12) Export / Import keys (no SSH)"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -3688,16 +4399,18 @@ main_menu() {
             2) quick_add_tunnel_tun_tcp || true ;;
             3) quick_add_tunnel_paqet || true ;;
             4) quick_add_tunnel_vxlan || true ;;
-            5) add_new_tunnel || true ;;
-            6) manage_tunnels || true ;;
-            7) show_live_status || true ;;
-            8) toggle_stealth_mode ;;
-            9)
+            5) quick_add_tunnel_wg || true ;;
+            6) quick_add_tunnel_hy2 || true ;;
+            7) add_new_tunnel || true ;;
+            8) manage_tunnels || true ;;
+            9) show_live_status || true ;;
+            10) toggle_stealth_mode ;;
+            11)
                 read -r -p "Tunnel name: " _hn || true
                 [[ -n "${_hn:-}" ]] && healthcheck_tunnel "$_hn"
                 press_enter
                 ;;
-            10)
+            12)
                 echo "  1) Export keys"
                 echo "  2) Import keys"
                 read -r -p "Choose [1/2]: " _kc || true
@@ -3725,6 +4438,11 @@ create_paqet_runner_script >/dev/null 2>&1 || true
 create_paqet_service >/dev/null 2>&1 || true
 create_vxlan_runner_script >/dev/null 2>&1 || true
 create_vxlan_service >/dev/null 2>&1 || true
+create_wg_runner_script >/dev/null 2>&1 || true
+create_wg_service >/dev/null 2>&1 || true
+create_hy2_runner_script >/dev/null 2>&1 || true
+create_hy2_service >/dev/null 2>&1 || true
+install -d -m700 "$HY2_CONFIG_DIR" 2>/dev/null || true
 repair_all_instances
 if (( $(count_configured_tunnels) > 0 )); then
     create_boot_restore_service >/dev/null 2>&1 || true
@@ -3767,6 +4485,14 @@ if [[ "${1:-}" == "--paqet" && -n "${2:-}" ]]; then
 fi
 if [[ "${1:-}" == "--vxlan" && -n "${2:-}" ]]; then
     quick_add_tunnel_vxlan "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--wg" || "${1:-}" == "--wireguard" ]] && [[ -n "${2:-}" ]]; then
+    quick_add_tunnel_wg "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--hy2" || "${1:-}" == "--hysteria2" ]] && [[ -n "${2:-}" ]]; then
+    quick_add_tunnel_hy2 "$2"
     exit $?
 fi
 if [[ "${1:-}" == "--peer" && -n "${2:-}" ]]; then

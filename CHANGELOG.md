@@ -1,17 +1,10 @@
 # Changelog
 
+## 1.1.0
+- Added **WireGuard** mode (`--wg`) — low latency / high stability
+- Added **Hysteria2** mode (`--hy2`) — high speed on filtered paths
+- Menu items 5 and 6 for WG / HY2
+
 ## 1.0.0 — First official public release
-
-اولین نسخه رسمی منتشرشده JojoNet.
-
 - GRE / TUN-TCP / Paqet / VXLAN
-- نصب یک‌خطی از GitHub
-- systemd + boot restore
-- فوروارد پورت (nftables) سمت ایران
-- نقش دستی و تشخیص خودکار
-- export/import کلید
-- healthcheck
-- uninstall
-- تأیید checksum دانلودها
-
-This is the **first published version** of JojoNet.
+- One-liner install, systemd, healthcheck, uninstall

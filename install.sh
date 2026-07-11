@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# JOJONET Installer v1.0.0 — First official public release
+# JojoNet Installer v1.1.0 — WireGuard + Hysteria2
 # https://github.com/b-khaneman/jojonet
 #
 # One-liner:
@@ -12,7 +12,7 @@
 
 set -Eeo pipefail
 
-readonly INSTALLER_VERSION="1.0.0"
+readonly INSTALLER_VERSION="1.1.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_BIN="/usr/local/bin/jojonet"
 readonly SHARE_DIR="/usr/local/share/jojonet"
