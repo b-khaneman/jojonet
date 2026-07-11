@@ -860,10 +860,17 @@ wait_for_tunnel_up() {
     local name="$1" mode="$2" max_wait="${3:-60}"
     local i
     for ((i = 1; i <= max_wait; i++)); do
-        if [[ "$mode" == "tun_tcp" ]]; then
+        if [[ "$mode" == "tun_tcp" || "$mode" == "wireguard" ]]; then
             ip link show "$name" >/dev/null 2>&1 && return 0
         elif [[ "$mode" == "paqet" ]]; then
             pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 && return 0
+        elif [[ "$mode" == "hysteria2" ]]; then
+            if pgrep -f "hysteria.*${name}\\.yaml" >/dev/null 2>&1; then
+                return 0
+            fi
+            if systemctl is-active --quiet "jojonet-hy2@${name}.service" 2>/dev/null; then
+                return 0
+            fi
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             return 0
         fi
@@ -1448,7 +1455,7 @@ deploy_tunnel() {
     local tun_server_ip="${13:-}" tun_client_ip="${14:-}" forward_proto="${15:-tcp}"
     local conf_file="$INSTANCES_DIR/$ins_name.conf" tmp_conf="" svc_unit="" gre_key=""
     local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port="" hy_yaml=""
-    local wg_priv="" wg_pub="" wg_peer=""
+    local wg_priv="" wg_pub="" wg_peer="" hy_sni="${DEFAULT_HY2_SNI}"
 
     apply_global_sysctl || return 1
 
@@ -1484,8 +1491,9 @@ deploy_tunnel() {
         install_hysteria2_binary || return 1
         create_hy2_runner_script || return 1
         create_hy2_service || return 1
-        local _sni="${HySni:-$DEFAULT_HY2_SNI}"
-        hy_yaml=$(build_hy2_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir"             "$fwd_port" "$_sni") || return 1
+        hy_sni="${HySni:-${JOJONET_HY2_SNI:-$DEFAULT_HY2_SNI}}"
+        hy_yaml=$(build_hy2_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
+            "$fwd_port" "$hy_sni") || return 1
         svc_unit="jojonet-hy2@${ins_name}.service"
     else
         create_template_script || return 1
@@ -1529,7 +1537,7 @@ WgPublicKey="$wg_pub"
 WgPeerPublicKey="$wg_peer"
 HyYaml="$hy_yaml"
 HyAuth=""
-HySni=""
+HySni="$hy_sni"
 EOF
 
     chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; return 1; }
@@ -1558,10 +1566,15 @@ EOF
 
     if systemctl is-active --quiet "$svc_unit"; then
         local iface_ok=0
-        if [[ "$tunnel_mode" == "tun_tcp" ]]; then
+        if [[ "$tunnel_mode" == "tun_tcp" || "$tunnel_mode" == "wireguard" ]]; then
             ip link show "$ins_name" >/dev/null 2>&1 && iface_ok=1
         elif [[ "$tunnel_mode" == "paqet" ]]; then
             pgrep -f "paqet run -c.*/${ins_name}\\.yaml" >/dev/null 2>&1 && iface_ok=1
+        elif [[ "$tunnel_mode" == "hysteria2" ]]; then
+            pgrep -f "hysteria.*(server|client).*${ins_name}" >/dev/null 2>&1 && iface_ok=1
+            pgrep -f "hysteria.*${ins_name}\\.yaml" >/dev/null 2>&1 && iface_ok=1
+            # Type=simple: if unit active and yaml exists, accept
+            [[ -f "${hy_yaml:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
         elif ip link show "$ins_name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             iface_ok=1
         fi
@@ -1569,6 +1582,10 @@ EOF
             echo -e "${GREEN}[+] Tunnel [$ins_name] ($tunnel_mode) is ACTIVE!${NC}"
             if [[ "$tunnel_mode" == "paqet" ]]; then
                 echo -e "  Listen/peer port: $tcp_port  |  Config: $paqet_yaml"
+            elif [[ "$tunnel_mode" == "hysteria2" ]]; then
+                echo -e "  UDP port: $tcp_port  |  Config: ${hy_yaml:-n/a}"
+            elif [[ "$tunnel_mode" == "wireguard" ]]; then
+                echo -e "  UDP port: $tcp_port  |  Interface: $ins_name  |  IP: $tun_ip"
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
                 echo -e "  VNI: $vxlan_vni  |  UDP: $vxlan_port  |  Interface: $ins_name"
             else
@@ -1580,7 +1597,7 @@ EOF
             create_boot_restore_service || true
             systemctl enable jojonet-boot.service >/dev/null 2>&1 || true
             local ping_target=""
-            if [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "vxlan" ]]; then
+            if [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "vxlan" || "$tunnel_mode" == "wireguard" ]]; then
                 if [[ "$role_conf" == "iran" ]]; then
                     ping_target="${tun_remote:-$tun_client_ip}"
                 else
@@ -2906,7 +2923,7 @@ DEFAULT_WG_PORT=51820
 DEFAULT_WG_MTU=1280
 
 install_wireguard_tools() {
-    if command -v wg >/dev/null 2>&1 && command -v wg-quick >/dev/null 2>&1; then
+    if command -v wg >/dev/null 2>&1; then
         return 0
     fi
     log_note "Installing wireguard-tools..."
@@ -2922,6 +2939,7 @@ install_wireguard_tools() {
         log_error "wireguard-tools (wg) not available. Install: apt install wireguard-tools"
         return 1
     }
+    # wg-quick is optional; we use ip/wg directly
     modprobe wireguard 2>/dev/null || true
     return 0
 }
@@ -3517,6 +3535,8 @@ quick_add_tunnel_hy2() {
     local pair_id
     pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
     key_dir=$(ensure_hy2_auth "$pair_id" "$rem_ip") || { set -e; return 1; }
+    export HySni="$sni"
+    export JOJONET_HY2_SNI="$sni"
 
     echo -e "\n${CYAN}--- Hysteria2 plan ---${NC}"
     echo -e "  Name:  $ins_name"
