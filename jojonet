@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.1"
+readonly JOJONET_VERSION="1.2.2"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -503,6 +503,13 @@ healthcheck_tunnel() {
                 else
                     echo -e "  peer ping ${Tun_Remote_IP_Raw}: ${YELLOW}fail${NC}"
                 fi
+            elif [[ "${Role:-}" == "kharej" && -n "${Tun_Client_IP:-}" ]]; then
+                if ping -c1 -W2 "$Tun_Client_IP" >/dev/null 2>&1; then
+                    echo -e "  peer ping ${Tun_Client_IP}: ${GREEN}ok${NC}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  peer ping ${Tun_Client_IP}: ${YELLOW}fail${NC}"
+                fi
             fi
             ;;
         tun_tcp)
@@ -972,10 +979,21 @@ compute_vxlan_vni() {
 }
 
 detect_server_role() {
-    local ip="$1" cc=""
+    local ip="$1" cc="" raw="" url
     if command -v curl >/dev/null 2>&1; then
-        cc=$(curl -fsSL --max-time 8 "https://ip-api.com/json/${ip}?fields=countryCode" 2>/dev/null \
-            | grep -oE '"countryCode":"[A-Z]{2}"' | head -1 | cut -d'"' -f4 || true)
+        for url in \
+            "https://ip-api.com/json/${ip}?fields=countryCode" \
+            "https://ipapi.co/${ip}/country_code/" \
+            "https://ifconfig.co/country-iso?ip=${ip}"
+        do
+            raw=$(curl -fsSL --max-time 8 "$url" 2>/dev/null || true)
+            cc=$(grep -oE '"countryCode":"[A-Z]{2}"' <<< "$raw" 2>/dev/null | head -1 | cut -d'"' -f4 || true)
+            if [[ -z "$cc" ]]; then
+                cc=$(tr -d '[:space:]"' <<< "$raw" | grep -oE '^[A-Z]{2}$' | head -1 || true)
+            fi
+            [[ "$cc" =~ ^[A-Z]{2}$ ]] && break
+            cc=""
+        done
     fi
     if [[ "$cc" == "IR" ]]; then
         printf '%s' "iran"
@@ -1268,14 +1286,15 @@ resolve_tunnel_ips() {
             Tun_IP="${Tun_Client_IP}/24"
             Tun_Remote_IP_Raw="$Tun_Server_IP"
         else
-            Tun_IP="${net_prefix}.$subnet_byte.1/30"
-            Tun_Remote_IP_Raw="${net_prefix}.$subnet_byte.2"
+            # Foreign=.1 (server), Iran=.2 (client) — same as TUN/TCP
+            Tun_IP="${Tun_Client_IP}/30"
+            Tun_Remote_IP_Raw="$Tun_Server_IP"
         fi
     else
         if [[ "$mode" == "tun_tcp" ]]; then
             Tun_IP="${Tun_Server_IP}/24"
         else
-            Tun_IP="${net_prefix}.$subnet_byte.2/30"
+            Tun_IP="${Tun_Server_IP}/30"
         fi
         Tun_Remote_IP_Raw=""
     fi
@@ -1832,9 +1851,9 @@ EOF
             local ping_target=""
             if [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "vxlan" || "$tunnel_mode" == "wireguard" ]]; then
                 if [[ "$role_conf" == "iran" ]]; then
-                    ping_target="${tun_remote:-$tun_client_ip}"
+                    ping_target="${tun_remote:-$tun_server_ip}"
                 else
-                    ping_target="${tun_server_ip:-}"
+                    ping_target="${tun_client_ip:-}"
                 fi
             elif [[ "$tunnel_mode" == "tun_tcp" ]]; then
                 if [[ "$role_conf" == "iran" ]]; then
@@ -3040,6 +3059,7 @@ case "$ACTION" in
         log "Set MTU=$Suggested_MTU and bring interface UP"
         ip link set "$Name" mtu "$Suggested_MTU"
         ip link set "$Name" up || { log "ERROR: interface up failed"; exit 1; }
+        sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
 
         if ! ip link show "$Name" 2>/dev/null | grep -qE '<.*UP.*>|state UP'; then
             log "ERROR: interface not in UP state after start"
@@ -3290,9 +3310,16 @@ case "$ACTION" in
         allow="${Tun_Server_IP}/32,${Tun_Client_IP}/32"
         [[ -n "$Tun_Server_IP" && -n "$Tun_Client_IP" ]] || allow="10.66.0.0/16"
         ip link add dev "$Name" type wireguard || { log "ERROR: create wg iface"; exit 1; }
-        wg set "$Name" private-key "$priv" listen-port "$listen_port" \
-            peer "$(cat "$peer_pub")" allowed-ips "$allow" endpoint "${Remote_IP}:${listen_port}" persistent-keepalive 25 \
-            || { log "ERROR: wg set failed"; exit 1; }
+        if [[ "$Role" == "kharej" ]]; then
+            wg set "$Name" private-key "$priv" listen-port "$listen_port" \
+                peer "$(cat "$peer_pub")" allowed-ips "$allow" \
+                || { log "ERROR: wg set failed (server)"; exit 1; }
+        else
+            wg set "$Name" private-key "$priv" \
+                peer "$(cat "$peer_pub")" allowed-ips "$allow" \
+                endpoint "${Remote_IP}:${listen_port}" persistent-keepalive 25 \
+                || { log "ERROR: wg set failed (client)"; exit 1; }
+        fi
         ip addr flush dev "$Name" >/dev/null 2>&1 || true
         ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assign"; exit 1; }
         ip link set "$Name" mtu "$mtu"
