@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3
+- **Tunnel Map**: manage menu shows `Local IP ──[METHOD]──► Peer IP` for every tunnel
+- New CLI: `sudo jojonet --list-tunnels` / `--list-tunnels --detail`
+- Manage menu: full detail cards, local IP column in table
+
 ## 1.2.2
 - **Fix GRE/VXLAN/WireGuard tunnel IPs**: foreign server gets `.1`, Iran gets `.2` (aligned with TUN/TCP)
 - **Fix ping/healthcheck targets** for foreign role after IP correction

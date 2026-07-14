@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.2"
+readonly JOJONET_VERSION="1.2.3"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -562,7 +562,7 @@ print_banner() {
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
-v1.2.1 — self-update (mirrors) + WireGuard + Hysteria2
+v1.2.3 — tunnel map / list view + self-update + WireGuard + Hysteria2
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -578,7 +578,8 @@ Usage:
   sudo jojonet --check-update          Check for new version only
   sudo jojonet --stealth               Enable stealth for this session
   sudo jojonet --refresh-templates     Regenerate systemd runner scripts
-  sudo jojonet --health <NAME>         Healthcheck one tunnel
+  sudo jojonet --list-tunnels            List all tunnels (map view)
+  sudo jojonet --list-tunnels --detail   Full details per tunnel
   sudo jojonet --export-keys <PEER> [FILE]  Export TUN/Paqet keys (no SSH)
   sudo jojonet --import-keys <PEER> <FILE>  Import TUN/Paqet keys
   sudo jojonet --role iran|kharej      Force role (or set JOJONET_ROLE)
@@ -1241,34 +1242,239 @@ count_configured_tunnels() {
 }
 
 show_existing_tunnels_summary() {
+    list_all_tunnels 0
+}
+
+# Human-readable tunnel mode label
+tunnel_mode_label() {
+    case "${1:-gre}" in
+        gre)           printf '%s' "GRE" ;;
+        tun_tcp)       printf '%s' "TUN/TCP" ;;
+        paqet)         printf '%s' "Paqet" ;;
+        vxlan)         printf '%s' "VXLAN" ;;
+        wireguard|wg)  printf '%s' "WireGuard" ;;
+        hysteria2|hy2) printf '%s' "Hysteria2" ;;
+        *)             printf '%s' "${1:-?}" ;;
+    esac
+}
+
+# UP / DOWN / FAIL for a tunnel instance name
+tunnel_status_word() {
+    local name="$1" svc=""
+    svc=$(tunnel_service_unit "$name")
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        printf '%s' "UP"
+    elif systemctl is-failed --quiet "$svc" 2>/dev/null; then
+        printf '%s' "FAIL"
+    else
+        printf '%s' "DOWN"
+    fi
+}
+
+tunnel_status_colored() {
+    local name="$1" st
+    st=$(tunnel_status_word "$name")
+    case "$st" in
+        UP)   echo -e "${GREEN}${st}${NC}" ;;
+        FAIL) echo -e "${RED}${st}${NC}" ;;
+        *)    echo -e "${YELLOW}${st}${NC}" ;;
+    esac
+}
+
+tunnel_role_label() {
+    case "${1:-}" in
+        iran)   printf '%s' "Iran" ;;
+        kharej) printf '%s' "Foreign" ;;
+        *)      printf '%s' "${1:-?}" ;;
+    esac
+}
+
+# Overlay / port summary for a loaded instance config
+tunnel_endpoint_summary() {
+    local mode="${TunnelMode:-gre}" local_ip peer_ip local_tun peer_tun extra=""
+    local_ip="${Local_IP:-?}"
+    peer_ip="${Remote_IP:-?}"
+    case "$mode" in
+        gre|vxlan|wireguard|tun_tcp)
+            if [[ -n "${Tun_IP:-}" ]]; then
+                local_tun=$(echo "$Tun_IP" | awk -F'/' '{print $1}')
+            fi
+            if [[ "$Role" == "iran" ]]; then
+                peer_tun="${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
+            else
+                peer_tun="${Tun_Client_IP:-?}"
+            fi
+            [[ -n "$local_tun" && -n "$peer_tun" ]] && \
+                extra="overlay ${local_tun} ↔ ${peer_tun}"
+            ;;
+        paqet)
+            extra="KCP port ${TcpPort:-?}"
+            [[ -n "${Ports:-}" ]] && extra="${extra} | forward ${Ports}"
+            ;;
+        hysteria2)
+            extra="UDP ${TcpPort:-?}"
+            [[ -n "${Ports:-}" ]] && extra="${extra} | forward ${Ports}"
+            ;;
+    esac
+    case "$mode" in
+        vxlan)
+            [[ -n "${VxlanVni:-}" ]] && extra="${extra:+$extra | }VNI ${VxlanVni}"
+            [[ -n "${VxlanPort:-}" ]] && extra="${extra:+$extra | }UDP ${VxlanPort}"
+            ;;
+        wireguard)
+            [[ -n "${TcpPort:-}" ]] && extra="${extra:+$extra | }WG UDP ${TcpPort}"
+            ;;
+    esac
+    printf '%s' "$extra"
+}
+
+# One-line description: local IP ──[MODE]──► peer IP
+format_tunnel_map_line() {
+    local mode_l role_l st st_c extra fwd=""
+    mode_l=$(tunnel_mode_label "${TunnelMode:-gre}")
+    role_l=$(tunnel_role_label "${Role:-}")
+    st=$(tunnel_status_word "$Name")
+    case "$st" in
+        UP)   st_c="${GREEN}${st}${NC}" ;;
+        FAIL) st_c="${RED}${st}${NC}" ;;
+        *)    st_c="${YELLOW}${st}${NC}" ;;
+    esac
+    extra=$(tunnel_endpoint_summary)
+    [[ -n "${Ports:-}" && "${TunnelMode:-gre}" != "paqet" && "${TunnelMode:-gre}" != "hysteria2" ]] && \
+        fwd=" | forward ${Ports}"
+    echo -e "  ${st_c}  ${CYAN}${Local_IP:-?}${NC} (${role_l})  ──${YELLOW}[${mode_l}]${NC}──►  ${CYAN}${Remote_IP:-?}${NC} (peer)"
+    [[ -n "$extra$fwd" ]] && echo -e "         ${extra}${fwd}"
+}
+
+# Print all configured tunnels (detail: 0=compact header+lines, 1=full cards)
+list_all_tunnels() {
+    local detail="${1:-0}"
     shopt -s nullglob
     local files=("$INSTANCES_DIR"/*.conf)
     shopt -u nullglob
+
     if (( ${#files[@]} == 0 )); then
-        return 0
+        echo -e "${YELLOW}[!] No tunnels configured.${NC}"
+        return 1
     fi
-        echo -e "\n${CYAN}Active tunnels:${NC}"
-    local f n r t
-    for f in "${files[@]}"; do
-        n=$(grep -E '^Name=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
-        r=$(grep -E '^Remote_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
-        t=$(grep -E '^Tun_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
-        local mode_disp
-        mode_disp=$(grep -E '^TunnelMode=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
-        if [[ "${mode_disp:-gre}" == "paqet" ]]; then
-            t=$(grep -E '^TcpPort=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
-            t=":${t:-?}"
-        elif [[ "${mode_disp:-gre}" == "vxlan" ]]; then
-            t=$(grep -E '^Tun_IP=' "$f" 2>/dev/null | head -1 | cut -d'"' -f2)
-            t=$(echo "$t" | awk -F'/' '{print $1}')
+
+    echo -e "\n${CYAN}=== Tunnel Map (${#files[@]} configured) ===${NC}"
+    local file idx=0 total_up=0
+    local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    local Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+
+    for file in "${files[@]}"; do
+        idx=$((idx + 1))
+        if ! load_instance_config "$file"; then
+            echo -e "  ${RED}[!] Invalid config: $(basename "$file")${NC}"
+            continue
         fi
-        if systemctl is-active --quiet "$(tunnel_service_unit "$n")" 2>/dev/null; then
-            echo -e "  ${BLUE}$n${NC} -> peer ${CYAN}$r${NC} | $t | ${GREEN}UP${NC}"
+        [[ "$(tunnel_status_word "$Name")" == "UP" ]] && total_up=$((total_up + 1))
+
+        if (( detail == 0 )); then
+            echo -e "${BLUE}#${idx} ${Name}${NC}"
+            format_tunnel_map_line
         else
-            echo -e "  ${BLUE}$n${NC} -> peer ${CYAN}$r${NC} | $t | ${RED}DOWN${NC}"
+            show_tunnel_detail_card "$idx"
         fi
+        echo ""
     done
-    echo ""
+
+    echo -e "${CYAN}Summary:${NC} ${GREEN}${total_up}${NC}/${#files[@]} active"
+    return 0
+}
+
+show_tunnel_detail_card() {
+    local num="${1:-?}"
+    local mode_l svc boot mode="${TunnelMode:-gre}" st st_c
+    mode_l=$(tunnel_mode_label "$mode")
+    svc=$(tunnel_service_unit "$Name")
+    st=$(tunnel_status_word "$Name")
+    case "$st" in
+        UP)   st_c="${GREEN}${st}${NC}" ;;
+        FAIL) st_c="${RED}${st}${NC}" ;;
+        *)    st_c="${YELLOW}${st}${NC}" ;;
+    esac
+
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}#${num} ${Name}${NC}  |  ${st_c}  |  ${YELLOW}${mode_l}${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${GREEN}This server:${NC}  ${CYAN}${Local_IP:-?}${NC}  ($(tunnel_role_label "${Role:-}"))"
+    echo -e "  ${GREEN}Peer server:${NC}  ${CYAN}${Remote_IP:-?}${NC}"
+    echo -e "  ${GREEN}Method:${NC}       ${YELLOW}${mode_l}${NC} (${mode})"
+
+    case "$mode" in
+        gre)
+            echo -e "  ${GREEN}GRE key:${NC}      ${GreKey:-n/a}"
+            echo -e "  ${GREEN}Overlay:${NC}      ${Tun_IP:-?}  ↔  peer ${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
+            ;;
+        tun_tcp)
+            echo -e "  ${GREEN}TCP port:${NC}     ${TcpPort:-?}"
+            echo -e "  ${GREEN}Private IP:${NC}   ${Tun_Server_IP:-?} (foreign) ↔ ${Tun_Client_IP:-?} (iran)"
+            echo -e "  ${GREEN}Local TUN:${NC}    ${Tun_IP:-?}"
+            ;;
+        paqet)
+            echo -e "  ${GREEN}Port:${NC}         ${TcpPort:-?}  |  forward ${ForwardProto:-tcp}"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}"
+            [[ -n "${PaqetYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${PaqetYaml}"
+            ;;
+        vxlan)
+            echo -e "  ${GREEN}VNI:${NC}          ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
+            echo -e "  ${GREEN}Overlay:${NC}      ${Tun_IP:-?}"
+            ;;
+        wireguard)
+            echo -e "  ${GREEN}WG port:${NC}      UDP ${TcpPort:-?}"
+            echo -e "  ${GREEN}Overlay:${NC}      ${Tun_IP:-?}  ↔  peer ${Tun_Client_IP:-${Tun_Remote_IP_Raw:-?}}"
+            ;;
+        hysteria2)
+            echo -e "  ${GREEN}UDP port:${NC}     ${TcpPort:-?}  |  SNI ${HySni:-${DEFAULT_HY2_SNI}}"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}"
+            [[ -n "${HyYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${HyYaml}"
+            ;;
+    esac
+
+    [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" ]] && \
+        echo -e "  ${GREEN}Port forward:${NC} ${Ports} → peer tunnel IP"
+    echo -e "  ${GREEN}MTU:${NC}          ${Suggested_MTU:-default}"
+    echo -e "  ${GREEN}Subnet ID:${NC}    ${Subnet_Byte:-?}"
+    echo -e "  ${GREEN}Service:${NC}      ${svc}"
+    if tunnel_boot_enabled "$Name"; then
+        echo -e "  ${GREEN}Boot:${NC}         enabled"
+    else
+        echo -e "  ${GREEN}Boot:${NC}         ${YELLOW}disabled${NC}"
+    fi
+    [[ -n "${KeyDir:-}" ]] && echo -e "  ${GREEN}Keys:${NC}         ${KeyDir}"
+}
+
+show_tunnel_overview_menu() {
+    while true; do
+        command -v clear >/dev/null && clear
+        logo
+        print_banner "Tunnel Map — Overview"
+        list_all_tunnels 1 || true
+        echo ""
+        menu_line "1) Refresh"
+        menu_line "2) Healthcheck a tunnel"
+        menu_line "3) Open Manage (restart / delete)"
+        menu_line "0) Back"
+        local c=""
+        read -r -p "Choice: " c || break
+        case "$c" in
+            1) ;;
+            2)
+                local hn=""
+                read -r -p "Tunnel name: " hn || true
+                [[ -n "$hn" ]] && healthcheck_tunnel "$hn"
+                press_enter
+                ;;
+            3) manage_tunnels; return 0 ;;
+            0) break ;;
+            *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+        esac
+    done
 }
 
 resolve_tunnel_ips() {
@@ -4296,12 +4502,18 @@ manage_tunnels() {
             return
         fi
 
-        printf "${BLUE}%-11s | %-6s | %-13s | %-13s | %-7s | %-5s | %-5s${NC}\n" \
-            "Name" "Mode" "Peer IP" "Tunnel IP" "Status" "Boot" "Ports"
-        echo "------------------------------------------------------------------------------------------------"
+        list_all_tunnels 0 || true
+
+        echo -e "${CYAN}Quick table:${NC}"
+        printf "${BLUE}%-11s | %-6s | %-13s | %-13s | %-13s | %-7s | %-5s${NC}\n" \
+            "Name" "Mode" "Local IP" "Peer IP" "Tunnel IP" "Status" "Ports"
+        echo "------------------------------------------------------------------------------------------------------------------------"
 
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
-        local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports=""
+        local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports="" TcpPort=""
+        local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+        local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
         local file
 
         for file in "${conf_files[@]}"; do
@@ -4310,22 +4522,16 @@ manage_tunnels() {
                 continue
             fi
 
-            local status_raw="Unknown" status_color="${NC}" svc=""
-            svc=$(tunnel_service_unit "$Name")
-            if systemctl is-active --quiet "$svc"; then
-                status_raw="Active"; status_color="${GREEN}"
-            elif systemctl is-failed --quiet "$svc"; then
-                status_raw="Failed"; status_color="${RED}"
-            else
-                status_raw="Inactive"; status_color="${YELLOW}"
-            fi
+            local status_raw status_color st
+            st=$(tunnel_status_word "$Name")
+            case "$st" in
+                UP)   status_raw="Active"; status_color="${GREEN}" ;;
+                FAIL) status_raw="Failed"; status_color="${RED}" ;;
+                *)    status_raw="Inactive"; status_color="${YELLOW}" ;;
+            esac
 
-            local mode_disp="${TunnelMode:-gre}"
-
-            local boot_raw="no" boot_color="${RED}"
-            if tunnel_boot_enabled "$Name"; then
-                boot_raw="yes"; boot_color="${GREEN}"
-            fi
+            local mode_disp
+            mode_disp=$(tunnel_mode_label "${TunnelMode:-gre}")
 
             local display_port="-"
             if [[ -n "${Ports:-}" ]]; then
@@ -4336,21 +4542,24 @@ manage_tunnels() {
             local base_tun_ip=""
             if [[ "${TunnelMode:-gre}" == "paqet" ]]; then
                 base_tun_ip=":${TcpPort:-?}"
+            elif [[ "${TunnelMode:-gre}" == "hysteria2" ]]; then
+                base_tun_ip="udp:${TcpPort:-?}"
             elif [[ "${TunnelMode:-gre}" == "vxlan" ]]; then
                 base_tun_ip=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
                 [[ -n "${VxlanPort:-}" ]] && base_tun_ip="${base_tun_ip:-?}:udp${VxlanPort}"
             elif [[ -n "${Tun_IP:-}" ]]; then
                 base_tun_ip=$(echo "$Tun_IP" | awk -F'/' '{print $1}')
             fi
-            printf "%-11s | %-6s | %-13s | %-13s | ${status_color}%-7s${NC} | ${boot_color}%-5s${NC} | %-5s\n" \
-                "$Name" "$mode_disp" "$Remote_IP" "$base_tun_ip" "$status_raw" "$boot_raw" "$display_port"
+            printf "%-11s | %-6s | %-13s | %-13s | %-13s | ${status_color}%-7s${NC} | %-5s\n" \
+                "$Name" "$mode_disp" "$Local_IP" "$Remote_IP" "$base_tun_ip" "$status_raw" "$display_port"
         done
 
         echo ""
-        menu_line "1) Troubleshoot, Logs & Restart"
-        menu_line "2) Restart ALL Tunnels"
-        menu_line "3) Enable Boot Persistence"
-        menu_line "4) Delete Tunnel"
+        menu_line "1) Full tunnel details (overview)"
+        menu_line "2) Troubleshoot, Logs & Restart"
+        menu_line "3) Restart ALL Tunnels"
+        menu_line "4) Enable Boot Persistence"
+        menu_line "5) Delete Tunnel"
         menu_line "0) Back to Main Menu"
         echo ""
 
@@ -4358,7 +4567,8 @@ manage_tunnels() {
         read -r -p "Choice: " ins_choice || break
 
         case "$ins_choice" in
-            1)
+            1) show_tunnel_overview_menu ;;
+            2)
                 local TGT_NAME
                 read -r -p "Tunnel name: " TGT_NAME
                 local tgt_conf="$INSTANCES_DIR/$TGT_NAME.conf"
@@ -4412,9 +4622,9 @@ manage_tunnels() {
                     sleep 2
                 fi
                 ;;
-            2) restart_all_tunnels ;;
-            3) ensure_boot_persistence ;;
-            4)
+            3) restart_all_tunnels ;;
+            4) ensure_boot_persistence ;;
+            5)
                 local REM_NAME
                 read -r -p "Tunnel name to delete: " REM_NAME
                 local rem_conf="$INSTANCES_DIR/$REM_NAME.conf"
@@ -4665,7 +4875,7 @@ main_menu() {
         menu_line "5) WireGuard Tunnel (low latency)"
         menu_line "6) Hysteria2 Tunnel (high speed)"
         menu_line "7) Advanced GRE Setup"
-        menu_line "8) Manage Tunnels"
+        menu_line "8) Manage Tunnels (map + restart/delete)"
         menu_line "9) Network Status"
         menu_line "10) Stealth Mode (history + quiet)"
         menu_line "11) Healthcheck tunnel"
@@ -4747,6 +4957,14 @@ if [[ "${1:-}" == "--role" && -n "${2:-}" ]]; then
 fi
 if [[ "${1:-}" == "--health" && -n "${2:-}" ]]; then
     healthcheck_tunnel "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--list-tunnels" || "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then
+    if [[ "${2:-}" == "--detail" || "${2:-}" == "-d" ]]; then
+        list_all_tunnels 1
+    else
+        list_all_tunnels 0
+    fi
     exit $?
 fi
 if [[ "${1:-}" == "--export-keys" && -n "${2:-}" ]]; then
