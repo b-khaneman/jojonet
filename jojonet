@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.4"
+readonly JOJONET_VERSION="1.2.5"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -498,17 +498,17 @@ healthcheck_tunnel() {
             fi
             if [[ -n "${Tun_Remote_IP_Raw:-}" ]]; then
                 if ping -c1 -W2 "$Tun_Remote_IP_Raw" >/dev/null 2>&1; then
-                    echo -e "  peer ping ${Tun_Remote_IP_Raw}: ${GREEN}ok${NC}"
+                    echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${GREEN}ok${NC}"
                     ok=$((ok + 1))
                 else
-                    echo -e "  peer ping ${Tun_Remote_IP_Raw}: ${YELLOW}fail${NC}"
+                    echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${YELLOW}fail${NC}"
                 fi
             elif [[ "${Role:-}" == "kharej" && -n "${Tun_Client_IP:-}" ]]; then
                 if ping -c1 -W2 "$Tun_Client_IP" >/dev/null 2>&1; then
-                    echo -e "  peer ping ${Tun_Client_IP}: ${GREEN}ok${NC}"
+                    echo -e "  Iran ping ${Tun_Client_IP}: ${GREEN}ok${NC}"
                     ok=$((ok + 1))
                 else
-                    echo -e "  peer ping ${Tun_Client_IP}: ${YELLOW}fail${NC}"
+                    echo -e "  Iran ping ${Tun_Client_IP}: ${YELLOW}fail${NC}"
                 fi
             fi
             ;;
@@ -562,7 +562,7 @@ print_banner() {
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
-v1.2.4 — Iran/Foreign labels on tunnel map + self-update + WG + HY2
+v1.2.5 — Iran/Kharej labels on tunnel map + self-update + WG + HY2
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -1284,7 +1284,7 @@ tunnel_status_colored() {
 tunnel_role_label() {
     case "${1:-}" in
         iran)   printf '%s' "Iran" ;;
-        kharej) printf '%s' "Foreign" ;;
+        kharej) printf '%s' "Kharej" ;;
         *)      printf '%s' "${1:-?}" ;;
     esac
 }
@@ -1293,10 +1293,10 @@ tunnel_role_label() {
 resolve_iran_foreign_ips() {
     if [[ "${Role:-}" == "iran" ]]; then
         TUNNEL_IRAN_IP="${Local_IP:-?}"
-        TUNNEL_FOREIGN_IP="${Remote_IP:-?}"
+        TUNNEL_KHAREJ_IP="${Remote_IP:-?}"
     else
         TUNNEL_IRAN_IP="${Remote_IP:-?}"
-        TUNNEL_FOREIGN_IP="${Local_IP:-?}"
+        TUNNEL_KHAREJ_IP="${Local_IP:-?}"
     fi
 }
 
@@ -1306,8 +1306,8 @@ tunnel_country_tag() {
         iran|Iran|ایران)
             echo -e "${GREEN}[Iran/ایران]${NC}"
             ;;
-        kharej|foreign|Foreign|خارج)
-            echo -e "${MAGENTA}[Foreign/خارج]${NC}"
+        kharej|Kharej|خارج)
+            echo -e "${MAGENTA}[Kharej/خارج]${NC}"
             ;;
         *)
             echo -e "${YELLOW}[?]${NC}"
@@ -1317,19 +1317,19 @@ tunnel_country_tag() {
 
 # Overlay tunnel IPs labeled by country
 tunnel_overlay_iran_foreign() {
-    local iran_tun="" foreign_tun=""
+    local iran_tun="" kharej_tun=""
     case "${Role:-}" in
         iran)
             iran_tun=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
-            foreign_tun="${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
+            kharej_tun="${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
             ;;
         kharej)
-            foreign_tun=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
+            kharej_tun=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
             iran_tun="${Tun_Client_IP:-?}"
             ;;
     esac
-    if [[ -n "$iran_tun" && -n "$foreign_tun" ]]; then
-        printf 'overlay %s (Iran/ایران) ↔ %s (Foreign/خارج)' "$iran_tun" "$foreign_tun"
+    if [[ -n "$iran_tun" && -n "$kharej_tun" ]]; then
+        printf 'overlay %s (Iran/ایران) ↔ %s (Kharej/خارج)' "$iran_tun" "$kharej_tun"
     fi
 }
 # Overlay / port summary for a loaded instance config
@@ -1361,13 +1361,13 @@ tunnel_endpoint_summary() {
     printf '%s' "$extra"
 }
 
-# One-line description with explicit Iran / Foreign labels on both public IPs
+# One-line description with explicit Iran / Kharej labels on both public IPs
 format_tunnel_map_line() {
-    local mode_l st st_c extra fwd="" iran_ip foreign_ip
+    local mode_l st st_c extra fwd="" iran_ip kharej_ip
     mode_l=$(tunnel_mode_label "${TunnelMode:-gre}")
     resolve_iran_foreign_ips
     iran_ip="$TUNNEL_IRAN_IP"
-    foreign_ip="$TUNNEL_FOREIGN_IP"
+    kharej_ip="$TUNNEL_KHAREJ_IP"
     st=$(tunnel_status_word "$Name")
     case "$st" in
         UP)   st_c="${GREEN}${st}${NC}" ;;
@@ -1377,7 +1377,7 @@ format_tunnel_map_line() {
     extra=$(tunnel_endpoint_summary)
     [[ -n "${Ports:-}" && "${TunnelMode:-gre}" != "paqet" && "${TunnelMode:-gre}" != "hysteria2" ]] && \
         fwd=" | forward ${Ports}"
-    echo -e "  ${st_c}  $(tunnel_country_tag iran) ${CYAN}${iran_ip}${NC}  ──${YELLOW}[${mode_l}]${NC}──►  $(tunnel_country_tag foreign) ${CYAN}${foreign_ip}${NC}"
+    echo -e "  ${st_c}  $(tunnel_country_tag iran) ${CYAN}${iran_ip}${NC}  ──${YELLOW}[${mode_l}]${NC}──►  $(tunnel_country_tag kharej) ${CYAN}${kharej_ip}${NC}"
     [[ -n "$extra$fwd" ]] && echo -e "         ${extra}${fwd}"
 }
 
@@ -1439,19 +1439,19 @@ show_tunnel_detail_card() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     resolve_iran_foreign_ips
     echo -e "  ${GREEN}Iran / ایران:${NC}     ${CYAN}${TUNNEL_IRAN_IP}${NC}  $(tunnel_country_tag iran)"
-    echo -e "  ${GREEN}Foreign / خارج:${NC}  ${CYAN}${TUNNEL_FOREIGN_IP}${NC}  $(tunnel_country_tag foreign)"
-    echo -e "  ${GREEN}This server:${NC}    ${CYAN}${Local_IP:-?}${NC}  ($(tunnel_role_label "${Role:-}"))"
-    echo -e "  ${GREEN}Method:${NC}         ${YELLOW}${mode_l}${NC} (${mode})"
+    echo -e "  ${GREEN}Kharej / خارج:${NC}    ${CYAN}${TUNNEL_KHAREJ_IP}${NC}  $(tunnel_country_tag kharej)"
+    echo -e "  ${GREEN}This server:${NC}      ${CYAN}${Local_IP:-?}${NC}  ($(tunnel_role_label "${Role:-}"))"
+    echo -e "  ${GREEN}Method:${NC}           ${YELLOW}${mode_l}${NC} (${mode})"
 
     case "$mode" in
         gre)
-            echo -e "  ${GREEN}GRE key:${NC}        ${GreKey:-n/a}"
-            echo -e "  ${GREEN}Overlay:${NC}        ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Foreign)"
+            echo -e "  ${GREEN}GRE key:${NC}          ${GreKey:-n/a}"
+            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         tun_tcp)
-            echo -e "  ${GREEN}TCP port:${NC}       ${TcpPort:-?}"
-            echo -e "  ${GREEN}Private IP:${NC}     ${Tun_Server_IP:-?} (Foreign) ↔ ${Tun_Client_IP:-?} (Iran)"
-            echo -e "  ${GREEN}Local TUN:${NC}      ${Tun_IP:-?} ($(tunnel_role_label "${Role:-}"))"
+            echo -e "  ${GREEN}TCP port:${NC}         ${TcpPort:-?}"
+            echo -e "  ${GREEN}Private IP:${NC}       ${Tun_Server_IP:-?} (Kharej) ↔ ${Tun_Client_IP:-?} (Iran)"
+            echo -e "  ${GREEN}Local TUN:${NC}        ${Tun_IP:-?} ($(tunnel_role_label "${Role:-}"))"
             ;;
         paqet)
             echo -e "  ${GREEN}Port:${NC}         ${TcpPort:-?}  |  forward ${ForwardProto:-tcp}"
@@ -1459,12 +1459,12 @@ show_tunnel_detail_card() {
             [[ -n "${PaqetYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${PaqetYaml}"
             ;;
         vxlan)
-            echo -e "  ${GREEN}VNI:${NC}            ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
-            echo -e "  ${GREEN}Overlay:${NC}        ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Foreign)"
+            echo -e "  ${GREEN}VNI:${NC}              ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
+            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         wireguard)
-            echo -e "  ${GREEN}WG port:${NC}        UDP ${TcpPort:-?}"
-            echo -e "  ${GREEN}Overlay:${NC}        ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Foreign)"
+            echo -e "  ${GREEN}WG port:${NC}          UDP ${TcpPort:-?}"
+            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         hysteria2)
             echo -e "  ${GREEN}UDP port:${NC}     ${TcpPort:-?}  |  SNI ${HySni:-${DEFAULT_HY2_SNI}}"
@@ -1474,7 +1474,7 @@ show_tunnel_detail_card() {
     esac
 
     [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" ]] && \
-        echo -e "  ${GREEN}Port forward:${NC} ${Ports} → peer tunnel IP"
+        echo -e "  ${GREEN}Port forward:${NC}   ${Ports} → Kharej tunnel IP"
     echo -e "  ${GREEN}MTU:${NC}          ${Suggested_MTU:-default}"
     echo -e "  ${GREEN}Subnet ID:${NC}    ${Subnet_Byte:-?}"
     echo -e "  ${GREEN}Service:${NC}      ${svc}"
@@ -4543,7 +4543,7 @@ manage_tunnels() {
 
         echo -e "${CYAN}Quick table:${NC}"
         printf "${BLUE}%-11s | %-6s | %-15s | %-15s | %-13s | %-7s | %-5s${NC}\n" \
-            "Name" "Mode" "Iran IP" "Foreign IP" "Tunnel IP" "Status" "Ports"
+            "Name" "Mode" "Iran IP" "Kharej IP" "Tunnel IP" "Status" "Ports"
         echo "----------------------------------------------------------------------------------------------------------------------------"
 
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
@@ -4551,7 +4551,7 @@ manage_tunnels() {
         local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
         local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
         local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
-        local file iran_ip foreign_ip
+        local file iran_ip kharej_ip
 
         for file in "${conf_files[@]}"; do
             if ! load_instance_config "$file"; then
@@ -4560,7 +4560,7 @@ manage_tunnels() {
             fi
             resolve_iran_foreign_ips
             iran_ip="$TUNNEL_IRAN_IP"
-            foreign_ip="$TUNNEL_FOREIGN_IP"
+            kharej_ip="$TUNNEL_KHAREJ_IP"
 
             local status_raw status_color st
             st=$(tunnel_status_word "$Name")
@@ -4591,7 +4591,7 @@ manage_tunnels() {
                 base_tun_ip=$(echo "$Tun_IP" | awk -F'/' '{print $1}')
             fi
             printf "%-11s | %-6s | %-15s | %-15s | %-13s | ${status_color}%-7s${NC} | %-5s\n" \
-                "$Name" "$mode_disp" "$iran_ip" "$foreign_ip" "$base_tun_ip" "$status_raw" "$display_port"
+                "$Name" "$mode_disp" "$iran_ip" "$kharej_ip" "$base_tun_ip" "$status_raw" "$display_port"
         done
 
         echo ""

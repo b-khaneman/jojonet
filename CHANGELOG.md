@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.5
+- Tunnel map uses **Kharej/خارج** instead of Foreign/peer for the foreign server IP
+
 ## 1.2.4
 - Tunnel map shows explicit **Iran/ایران** and **Foreign/خارج** labels on every public IP
 - Quick table columns: Iran IP | Foreign IP (instead of local/peer)
