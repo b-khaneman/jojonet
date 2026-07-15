@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.4.1"
+readonly JOJONET_VERSION="1.4.2"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -84,6 +84,8 @@ DEFAULT_WG_PORT=51820
 DEFAULT_WG_MTU=1280
 DEFAULT_HY2_PORT=443
 DEFAULT_HY2_SNI="www.cloudflare.com"
+DEFAULT_HY2_HOP_RANGE="20000-50000"
+DEFAULT_HY2_HOP_INTERVAL="30s"
 HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
 HY2_BIN="/usr/local/bin/hysteria"
 HY2_VERSION="${JOJONET_HY2_VERSION:-v2.6.1}"
@@ -98,7 +100,7 @@ STEALTH_MODE=0
 
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -106,7 +108,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -1651,6 +1653,36 @@ repair_single_config() {
                 "$key_dir" "$fwd" "$proto" && changed=1
             echo -e "${YELLOW}[*] Repaired Paqet YAML for [$name]${NC}"
         fi
+    elif [[ "${mode:-gre}" == "hysteria2" ]]; then
+        local yaml tcp_port key_dir role rem fwd sni hop_range hop_interval
+        yaml=$(conf_get_field "$conf" "HyYaml")
+        tcp_port=$(conf_get_field "$conf" "TcpPort")
+        key_dir=$(conf_get_field "$conf" "KeyDir")
+        role=$(conf_get_field "$conf" "Role")
+        rem=$(conf_get_field "$conf" "Remote_IP")
+        fwd=$(conf_get_field "$conf" "Ports")
+        sni=$(conf_get_field "$conf" "HySni")
+        hop_range=$(conf_get_field "$conf" "HyHopRange")
+        hop_interval=$(conf_get_field "$conf" "HyHopInterval")
+        sni=${sni:-$DEFAULT_HY2_SNI}
+        if [[ -z "$hop_range" && "$tcp_port" =~ ^[0-9]+-[0-9]+$ ]]; then
+            hop_range="$tcp_port"
+        fi
+        if [[ -n "$key_dir" && -f "$key_dir/hy2.auth" ]]; then
+            if [[ -z "$yaml" || ! -f "$yaml" || ! -s "$yaml" ]]; then
+                yaml=$(build_hy2_runtime_config "$name" "$role" "$rem" \
+                    "${tcp_port:-$DEFAULT_HY2_PORT}" "$key_dir" "$fwd" "$sni" \
+                    "$hop_range" "$hop_interval") && changed=1
+                if [[ -n "$yaml" ]]; then
+                    if grep -q '^HyYaml=' "$conf"; then
+                        sed -i "s|^HyYaml=.*|HyYaml=\"$yaml\"|" "$conf"
+                    else
+                        echo "HyYaml=\"$yaml\"" >> "$conf"
+                    fi
+                    echo -e "${YELLOW}[*] Repaired Hysteria2 YAML for [$name]${NC}"
+                fi
+            fi
+        fi
     fi
 
     if (( changed )); then
@@ -1857,7 +1889,7 @@ list_all_tunnels() {
     local Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
 
     for file in "${files[@]}"; do
         idx=$((idx + 1))
@@ -1925,7 +1957,12 @@ show_tunnel_detail_card() {
             echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         hysteria2)
-            echo -e "  ${GREEN}UDP port:${NC}     ${TcpPort:-?}  |  SNI ${HySni:-${DEFAULT_HY2_SNI}}"
+            if [[ -n "${HyHopRange:-}" ]]; then
+                echo -e "  ${GREEN}Hop Port:${NC}    ${HyHopRange} every ${HyHopInterval:-$DEFAULT_HY2_HOP_INTERVAL}"
+            else
+                echo -e "  ${GREEN}UDP port:${NC}     ${TcpPort:-?}  |  SNI ${HySni:-${DEFAULT_HY2_SNI}}"
+            fi
+            echo -e "  ${GREEN}SNI:${NC}         ${HySni:-${DEFAULT_HY2_SNI}}"
             [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}" || true
             [[ -n "${HyYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${HyYaml}" || true
             ;;
@@ -2411,7 +2448,7 @@ deploy_tunnel() {
     local tun_server_ip="${13:-}" tun_client_ip="${14:-}" forward_proto="${15:-tcp}"
     local conf_file="$INSTANCES_DIR/$ins_name.conf" tmp_conf="" svc_unit="" gre_key=""
     local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port="" hy_yaml=""
-    local wg_priv="" wg_pub="" wg_peer="" hy_sni="${DEFAULT_HY2_SNI}"
+    local wg_priv="" wg_pub="" wg_peer="" hy_sni="${DEFAULT_HY2_SNI}" hy_hop_range="" hy_hop_interval=""
 
     apply_global_sysctl || return 1
 
@@ -2473,8 +2510,17 @@ deploy_tunnel() {
         create_hy2_runner_script || return 1
         create_hy2_service || return 1
         hy_sni="${HySni:-${JOJONET_HY2_SNI:-$DEFAULT_HY2_SNI}}"
+        hy_hop_range="${HyHopRange:-}"
+        hy_hop_interval="${HyHopInterval:-}"
+        if [[ -z "$hy_hop_range" && "$tcp_port" =~ ^[0-9]+-[0-9]+$ ]]; then
+            hy_hop_range="$tcp_port"
+        fi
+        if [[ -n "$hy_hop_range" ]]; then
+            hy_hop_interval=$(normalize_hy2_hop_interval "${hy_hop_interval:-$DEFAULT_HY2_HOP_INTERVAL}")
+            tcp_port="$hy_hop_range"
+        fi
         hy_yaml=$(build_hy2_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
-            "$fwd_port" "$hy_sni") || return 1
+            "$fwd_port" "$hy_sni" "$hy_hop_range" "$hy_hop_interval") || return 1
         svc_unit="jojonet-hy2@${ins_name}.service"
     else
         create_template_script || return 1
@@ -2519,6 +2565,8 @@ WgPeerPublicKey="$wg_peer"
 HyYaml="$hy_yaml"
 HyAuth=""
 HySni="$hy_sni"
+HyHopRange="$hy_hop_range"
+HyHopInterval="$hy_hop_interval"
 EOF
 
     chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; return 1; }
@@ -2564,7 +2612,11 @@ EOF
             if [[ "$tunnel_mode" == "paqet" ]]; then
                 echo -e "  Listen/peer port: $tcp_port  |  Config: $paqet_yaml"
             elif [[ "$tunnel_mode" == "hysteria2" ]]; then
-                echo -e "  UDP port: $tcp_port  |  Config: ${hy_yaml:-n/a}"
+                if [[ -n "$hy_hop_range" ]]; then
+                    echo -e "  Hop Port: ${hy_hop_range} every ${hy_hop_interval}  |  Config: ${hy_yaml:-n/a}"
+                else
+                    echo -e "  UDP port: $tcp_port  |  Config: ${hy_yaml:-n/a}"
+                fi
             elif [[ "$tunnel_mode" == "wireguard" ]]; then
                 echo -e "  UDP port: $tcp_port  |  Interface: $ins_name  |  IP: $tun_ip"
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
@@ -3110,7 +3162,7 @@ create_template_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -3118,7 +3170,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -3338,7 +3390,7 @@ create_tuntcp_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -3346,7 +3398,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -3556,7 +3608,7 @@ create_paqet_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -3564,7 +3616,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -3686,7 +3738,7 @@ create_vxlan_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -3694,7 +3746,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -3976,7 +4028,7 @@ create_wg_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -3984,7 +4036,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4291,6 +4343,42 @@ HY2_REPO="apernet/hysteria"
 HY2_VERSION="${JOJONET_HY2_VERSION:-v2.6.1}"
 DEFAULT_HY2_PORT=443
 DEFAULT_HY2_SNI="www.cloudflare.com"
+DEFAULT_HY2_HOP_RANGE="20000-50000"
+DEFAULT_HY2_HOP_INTERVAL="30s"
+
+normalize_hy2_hop_interval() {
+    local raw="${1:-$DEFAULT_HY2_HOP_INTERVAL}" sec=""
+    raw="${raw//' '/}"
+    [[ -z "$raw" ]] && { echo "$DEFAULT_HY2_HOP_INTERVAL"; return 0; }
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        sec="$raw"
+    elif [[ "$raw" =~ ^([0-9]+)s$ ]]; then
+        sec="${BASH_REMATCH[1]}"
+    elif [[ "$raw" =~ ^([0-9]+)m$ ]]; then
+        sec=$(( BASH_REMATCH[1] * 60 ))
+    else
+        echo "$DEFAULT_HY2_HOP_INTERVAL"
+        return 1
+    fi
+    (( sec < 5 )) && sec=5
+    echo "${sec}s"
+}
+
+validate_hy2_port_or_range() {
+    local v="$1" a b
+    v="${v//' '/}"
+    if [[ "$v" =~ ^[0-9]+$ ]]; then
+        (( v >= 1 && v <= 65535 )) || return 1
+        return 0
+    fi
+    if [[ "$v" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        a="${BASH_REMATCH[1]}"
+        b="${BASH_REMATCH[2]}"
+        (( a >= 1 && b <= 65535 && a < b )) || return 1
+        return 0
+    fi
+    return 1
+}
 
 detect_cpu_arch_hy2() {
     case "$(uname -m)" in
@@ -4343,16 +4431,37 @@ ensure_hy2_auth() {
 }
 
 build_hy2_runtime_config() {
-    local name="$1" role="$2" rem="$3" port="$4" keydir="$5" ports="${6:-}" sni="${7:-$DEFAULT_HY2_SNI}"
-    local auth yaml fwd_block="" p
+    local name="$1" role="$2" rem="$3" port="$4" keydir="$5" ports="${6:-}" \
+        sni="${7:-$DEFAULT_HY2_SNI}" hop_range="${8:-}" hop_interval="${9:-}"
+    local auth yaml fwd_block="" p listen_addr server_addr hop_block=""
     install -d -m700 "$HY2_CONFIG_DIR"
     auth=$(tr -d '\n' < "$keydir/hy2.auth")
     yaml="$HY2_CONFIG_DIR/${name}.yaml"
 
+    # Prefer explicit hop range; else treat port as range if "N-M"
+    hop_range="${hop_range//' '/}"
+    port="${port//' '/}"
+    if [[ -z "$hop_range" && "$port" =~ ^[0-9]+-[0-9]+$ ]]; then
+        hop_range="$port"
+    fi
+    if [[ -n "$hop_range" ]]; then
+        validate_hy2_port_or_range "$hop_range" || return 1
+        listen_addr=":${hop_range}"
+        server_addr="${rem}:${hop_range}"
+        hop_interval=$(normalize_hy2_hop_interval "${hop_interval:-$DEFAULT_HY2_HOP_INTERVAL}")
+        hop_block="transport:
+  udp:
+    hopInterval: ${hop_interval}"
+    else
+        validate_hy2_port_or_range "$port" || return 1
+        listen_addr=":${port}"
+        server_addr="${rem}:${port}"
+    fi
+
     if [[ "$role" == "kharej" ]]; then
         cat > "$yaml" <<EOF
-# JojoNet Hysteria2 server
-listen: :${port}
+# JojoNet Hysteria2 server${hop_range:+ (hop port ${hop_range})}
+listen: ${listen_addr}
 auth:
   type: password
   password: ${auth}
@@ -4392,8 +4501,8 @@ udpForwarding:"
             done
         fi
         cat > "$yaml" <<EOF
-# JojoNet Hysteria2 client (Iran)
-server: ${rem}:${port}
+# JojoNet Hysteria2 client (Iran)${hop_range:+ (hop port ${hop_range} / ${hop_interval})}
+server: ${server_addr}
 auth: ${auth}
 bandwidth:
   up: 1 gbps
@@ -4401,6 +4510,7 @@ bandwidth:
 tls:
   sni: ${sni}
   insecure: true
+${hop_block}
 ${fwd_block}
 EOF
     fi
@@ -4413,7 +4523,7 @@ create_hy2_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4421,7 +4531,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4523,7 +4633,8 @@ quick_add_tunnel_hy2() {
     local peer_ip="${1:-}"
     local ins_name="" role_conf="" loc_ip="" rem_ip=""
     local fwd_port="" key_dir="" hy_port="$DEFAULT_HY2_PORT" sni="$DEFAULT_HY2_SNI"
-    local existing="" hy_yaml=""
+    local existing="" hy_yaml="" hop_enable="y" hop_range="$DEFAULT_HY2_HOP_RANGE"
+    local hop_interval="$DEFAULT_HY2_HOP_INTERVAL"
 
     set +e
     command -v clear >/dev/null && clear
@@ -4564,17 +4675,50 @@ quick_add_tunnel_hy2() {
 
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "hysteria2") || { set -e; return 1; }
 
-    if [[ "$role_conf" == "kharej" ]]; then
-        read -r -p "Listen UDP port [$hy_port]: " _hp
-        hy_port=${_hp:-$hy_port}
-        fwd_port=""
+    echo ""
+    echo -e "${CYAN}Hop Port${NC} — UDP range hopping (بسیار موثر وقتی UDP روی یک پورت محدود می‌شود)"
+    echo -e "  Server listens on full range; client rotates ports every N seconds."
+    read -r -p "Enable Hop Port? [Y/n]: " hop_enable
+    hop_enable=$(printf '%s' "${hop_enable:-y}" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$hop_enable" == "n" || "$hop_enable" == "no" ]]; then
+        hop_range=""
+        hop_interval=""
+        if [[ "$role_conf" == "kharej" ]]; then
+            read -r -p "Listen UDP port [$hy_port]: " _hp
+            hy_port=${_hp:-$hy_port}
+            fwd_port=""
+        else
+            fwd_port=$(allocate_iran_forward_port "443")
+            read -r -p "Server UDP port [$hy_port]: " _hp
+            hy_port=${_hp:-$hy_port}
+            read -r -p "Forward ports on Iran [$fwd_port]: " _fp
+            fwd_port=${_fp:-$fwd_port}
+        fi
+        if ! validate_hy2_port_or_range "$hy_port"; then
+            echo -e "${RED}[!] Invalid UDP port.${NC}"
+            sleep 2; set -e; return 1
+        fi
     else
-        fwd_port=$(allocate_iran_forward_port "443")
-        read -r -p "Server UDP port [$hy_port]: " _hp
-        hy_port=${_hp:-$hy_port}
-        read -r -p "Forward ports on Iran [$fwd_port]: " _fp
-        fwd_port=${_fp:-$fwd_port}
+        read -r -p "Hop port range [$hop_range]: " _hr
+        hop_range=${_hr:-$hop_range}
+        hop_range="${hop_range//' '/}"
+        if ! validate_hy2_port_or_range "$hop_range" || [[ ! "$hop_range" =~ - ]]; then
+            echo -e "${RED}[!] Invalid range. Example: 20000-50000${NC}"
+            sleep 2; set -e; return 1
+        fi
+        read -r -p "Hop interval [${hop_interval}] (min 5s): " _hi
+        hop_interval=$(normalize_hy2_hop_interval "${_hi:-$hop_interval}")
+        hy_port="$hop_range"
+        if [[ "$role_conf" == "iran" ]]; then
+            fwd_port=$(allocate_iran_forward_port "443")
+            read -r -p "Forward ports on Iran [$fwd_port]: " _fp
+            fwd_port=${_fp:-$fwd_port}
+        else
+            fwd_port=""
+        fi
     fi
+
     read -r -p "TLS SNI [$sni]: " _sni
     sni=${_sni:-$sni}
 
@@ -4583,12 +4727,18 @@ quick_add_tunnel_hy2() {
     key_dir=$(ensure_hy2_auth "$pair_id" "$rem_ip") || { set -e; return 1; }
     export HySni="$sni"
     export JOJONET_HY2_SNI="$sni"
+    export HyHopRange="$hop_range"
+    export HyHopInterval="$hop_interval"
 
     echo -e "\n${CYAN}--- Hysteria2 plan ---${NC}"
     echo -e "  Name:  $ins_name"
     echo -e "  Role:  $role_conf"
     echo -e "  Peer:  $rem_ip"
-    echo -e "  Port:  UDP $hy_port"
+    if [[ -n "$hop_range" ]]; then
+        echo -e "  Hop:   ${GREEN}ON${NC}  range ${hop_range}  every ${hop_interval}"
+    else
+        echo -e "  Port:  UDP $hy_port (fixed)"
+    fi
     echo -e "  SNI:   $sni"
     [[ -n "$fwd_port" ]] && echo -e "  Fwd:   $fwd_port (via tunnel to foreign localhost)"
     echo ""
@@ -4596,12 +4746,26 @@ quick_add_tunnel_hy2() {
     if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "0" \
         "" "" "1350" "$fwd_port" "hysteria2" "$hy_port" "$key_dir" \
         "" "" "tcp"; then
-        # patch HySni into conf
         if [[ -f "$INSTANCES_DIR/$ins_name.conf" ]]; then
             grep -q '^HySni=' "$INSTANCES_DIR/$ins_name.conf" || \
                 echo "HySni=\"$sni\"" >> "$INSTANCES_DIR/$ins_name.conf"
+            if [[ -n "$hop_range" ]]; then
+                if grep -q '^HyHopRange=' "$INSTANCES_DIR/$ins_name.conf"; then
+                    sed -i "s|^HyHopRange=.*|HyHopRange=\"$hop_range\"|" "$INSTANCES_DIR/$ins_name.conf"
+                else
+                    echo "HyHopRange=\"$hop_range\"" >> "$INSTANCES_DIR/$ins_name.conf"
+                fi
+                if grep -q '^HyHopInterval=' "$INSTANCES_DIR/$ins_name.conf"; then
+                    sed -i "s|^HyHopInterval=.*|HyHopInterval=\"$hop_interval\"|" "$INSTANCES_DIR/$ins_name.conf"
+                else
+                    echo "HyHopInterval=\"$hop_interval\"" >> "$INSTANCES_DIR/$ins_name.conf"
+                fi
+            fi
         fi
         echo -e "${GREEN}[+] Hysteria2 [$ins_name] is up.${NC}"
+        if [[ -n "$hop_range" ]]; then
+            hint "Peer must use the SAME hop range: $hop_range (interval $hop_interval)"
+        fi
         [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --hy2 $loc_ip"
         sleep 2
         set -e
@@ -5008,6 +5172,12 @@ change_tunnel_peer_ip() {
                 set -e
                 return 1
             }
+            export HySni="${HySni:-$DEFAULT_HY2_SNI}"
+            export HyHopRange="${HyHopRange:-}"
+            export HyHopInterval="${HyHopInterval:-}"
+            if [[ -z "${HyHopRange:-}" && "$tcp_port" =~ ^[0-9]+-[0-9]+$ ]]; then
+                export HyHopRange="$tcp_port"
+            fi
             tun_ip=""
             tun_remote=""
             tun_server=""
@@ -5358,7 +5528,7 @@ manage_tunnels() {
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
         local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports="" TcpPort=""
         local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
+        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval=""
         local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
         local file iran_ip kharej_ip
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2
+- **Hysteria2 Hop Port** (native): UDP port range hopping so traffic is not stuck on one filtered port
+  - Prompt at setup (default range `20000-50000`, interval `30s`)
+  - Kharej: `listen: :START-END` (HY2 auto DNAT via nft/iptables)
+  - Iran: `server: peer:START-END` + `transport.udp.hopInterval`
+  - Stored as `HyHopRange` / `HyHopInterval` in instance config
+
 ## 1.4.1
 - **All tunnel modes**: auto forward port on Iran (not only GRE)
 - **Pairing card**: correct CLI per mode (`--wg`, `--tun-tcp`, …) + subnet prefix per mode
