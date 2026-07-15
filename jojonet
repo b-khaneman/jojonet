@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.8"
+readonly JOJONET_VERSION="1.3.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -71,7 +71,9 @@ DEFAULT_PAQET_ENCRYPTION="aes-128-gcm"
 DEFAULT_PAQET_KCP_MODE="fast"
 SYSCTL_FILE="/etc/sysctl.d/99-jojonet.conf"
 LOCK_FILE="/run/lock/jojonet.lock"
-DEFAULT_MTU_FALLBACK=1310
+DEFAULT_MTU_FALLBACK=1436
+DEFAULT_GRE_MTU=1436
+GRE_SUBNET_BYTE=10
 TUNNEL_NET_PREFIX="172.20"
 VXLAN_NET_PREFIX="172.21"
 TUN_TCP_NET_PREFIX="10.30"
@@ -911,6 +913,7 @@ repair_tunnel_overlay_ips() {
     name=$(conf_get_field "$conf" "Name")
     role=$(conf_get_field "$conf" "Role")
     subnet=$(conf_get_field "$conf" "Subnet_Byte")
+    [[ "$mode" == "gre" ]] && subnet="$GRE_SUBNET_BYTE"
     [[ -n "$name" && -n "$role" && -n "$subnet" ]] || return 1
     old_tun=$(conf_get_field "$conf" "Tun_IP")
     resolve_tunnel_ips "$role" "$subnet" "$mode"
@@ -921,6 +924,11 @@ repair_tunnel_overlay_ips() {
     if [[ "$role" == "iran" ]]; then
         grep -q '^Tun_Remote_IP_Raw=' "$conf" && \
             sed -i "s/^Tun_Remote_IP_Raw=.*/Tun_Remote_IP_Raw=\"$Tun_Remote_IP_Raw\"/" "$conf"
+    fi
+    if [[ "$mode" == "gre" ]]; then
+        grep -q '^Subnet_Byte=' "$conf" && \
+            sed -i "s/^Subnet_Byte=.*/Subnet_Byte=\"$GRE_SUBNET_BYTE\"/" "$conf"
+        grep -q '^GreKey=' "$conf" && sed -i 's/^GreKey=.*/GreKey=""/' "$conf"
     fi
     echo -e "${YELLOW}[*] Repaired overlay IPs [$name]: $old_tun -> $Tun_IP${NC}" >&2
     return 0
@@ -937,9 +945,30 @@ clamp_mtu() {
 }
 
 ipv4_to_uint() {
-    local a b c d
-    IFS='.' read -r a b c d <<< "$1"
+    local ip="${1:-0.0.0.0}" a=0 b=0 c=0 d=0
+    IFS='.' read -r a b c d <<< "$ip"
+    a=${a:-0}; b=${b:-0}; c=${c:-0}; d=${d:-0}
     echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+}
+
+# True if another WireGuard iface already listens on this UDP port
+wg_udp_port_in_use() {
+    local port="$1" exclude="${2:-}" iface lp=""
+    command -v wg >/dev/null 2>&1 || return 1
+    for iface in $(wg show interfaces 2>/dev/null); do
+        [[ "$iface" == "$exclude" ]] && continue
+        lp=$(wg show "$iface" listen-port 2>/dev/null || true)
+        [[ -n "$lp" && "$lp" == "$port" ]] && return 0
+    done
+    return 1
+}
+
+# Return iface name if overlay IP is already assigned elsewhere
+overlay_ip_on_iface() {
+    local want="${1%%/*}" got=""
+    got=$(ip -o -4 addr show 2>/dev/null | awk -v ip="$want" '
+        $4 ~ "^" ip "(/|$)" { print $2; exit }')
+    [[ -n "$got" ]] && printf '%s' "$got"
 }
 
 # Same subnet on both servers — derived from the IP pair (no manual Subnet ID)
@@ -1163,19 +1192,7 @@ repair_single_config() {
     [[ -n "$name" ]] || return 0
 
     if [[ "${mode:-gre}" == "gre" ]]; then
-        gre=$(conf_get_field "$conf" "GreKey")
-        if [[ -z "$gre" ]]; then
-            loc=$(conf_get_field "$conf" "Local_IP")
-            rem=$(conf_get_field "$conf" "Remote_IP")
-            gre=$(compute_gre_key "$loc" "$rem")
-            if grep -q '^GreKey=' "$conf"; then
-                sed -i "s/^GreKey=.*/GreKey=\"$gre\"/" "$conf"
-            else
-                echo "GreKey=\"$gre\"" >> "$conf"
-            fi
-            changed=1
-            echo -e "${YELLOW}[*] Repaired GreKey for [$name] -> $gre${NC}"
-        fi
+        : # plain GRE — no key
     elif [[ "${mode:-gre}" == "vxlan" ]]; then
         local vni port
         vni=$(conf_get_field "$conf" "VxlanVni")
@@ -1467,7 +1484,7 @@ show_tunnel_detail_card() {
 
     case "$mode" in
         gre)
-            echo -e "  ${GREEN}GRE key:${NC}          ${GreKey:-n/a}"
+            echo -e "  ${GREEN}GRE:${NC}             plain (no key)"
             echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         tun_tcp)
@@ -1980,7 +1997,14 @@ deploy_tunnel() {
     apply_global_sysctl || return 1
 
     if [[ "$tunnel_mode" == "gre" ]]; then
-        gre_key=$(compute_gre_key "$loc_ip" "$rem_ip")
+        gre_key=""
+        subnet_byte="$GRE_SUBNET_BYTE"
+        resolve_tunnel_ips "$role_conf" "$subnet_byte" "gre"
+        tun_ip="$Tun_IP"
+        tun_server_ip="$Tun_Server_IP"
+        tun_client_ip="$Tun_Client_IP"
+        [[ "$role_conf" == "iran" ]] && tun_remote="$Tun_Remote_IP_Raw"
+        [[ "$ins_mtu" == "1310" || "$ins_mtu" == "$DEFAULT_MTU_FALLBACK" ]] && ins_mtu="$DEFAULT_GRE_MTU"
     elif [[ "$tunnel_mode" == "vxlan" ]]; then
         vxlan_vni=$(compute_vxlan_vni "$loc_ip" "$rem_ip")
         vxlan_port="${tcp_port:-$DEFAULT_VXLAN_PORT}"
@@ -2109,7 +2133,7 @@ EOF
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
                 echo -e "  VNI: $vxlan_vni  |  UDP: $vxlan_port  |  Interface: $ins_name"
             else
-                echo -e "  GreKey: ${gre_key:-n/a}  |  Interface: $ins_name"
+                echo -e "  Plain GRE  |  Interface: $ins_name  |  IP: $tun_ip"
             fi
             if systemctl is-enabled --quiet "$svc_unit" 2>/dev/null; then
                 hint "Enabled on boot."
@@ -2139,7 +2163,10 @@ EOF
     fi
 
     journalctl -u "$svc_unit" -b --no-pager | tail -n 20 || true
+    set +e
+    trap - ERR
     rollback_new_tunnel "$ins_name" "$conf_file"
+    trap error_handler ERR
     return 1
 }
 
@@ -2221,24 +2248,10 @@ quick_add_tunnel() {
         ins_mtu=$(calculate_mtu "$rem_ip")
         ins_mtu=$(clamp_mtu "$ins_mtu")
     else
-        ins_mtu=$DEFAULT_MTU_FALLBACK
+        ins_mtu=$DEFAULT_GRE_MTU
     fi
 
-    gre_key=$(compute_gre_key "$loc_ip" "$rem_ip")
-    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
-
-    if subnet_byte_in_use "$subnet_byte"; then
-        local other_peer=""
-        other_peer=$(awk -F'"' -v b="$subnet_byte" '
-            $0 ~ /Subnet_Byte/ && $2 == b { in_b=1 }
-            in_b && $0 ~ /Remote_IP/ { print $2; exit }
-        ' "$INSTANCES_DIR"/*.conf 2>/dev/null || true)
-        if [[ -n "$other_peer" && "$other_peer" != "$rem_ip" ]]; then
-            echo -e "${RED}[!] Subnet collision with another tunnel (peer: $other_peer).${NC}"
-            sleep 3
-            return 1
-        fi
-    fi
+    subnet_byte=$GRE_SUBNET_BYTE
 
     resolve_tunnel_ips "$role_conf" "$subnet_byte" "gre"
     tun_ip="$Tun_IP"
@@ -2249,9 +2262,9 @@ quick_add_tunnel() {
     echo -e "  Role:          $role_conf"
     echo -e "  Local IP:      $loc_ip"
     echo -e "  Peer IP:       $rem_ip"
-    echo -e "  Tunnel subnet: ${TUNNEL_NET_PREFIX}.$subnet_byte.0/30"
+    echo -e "  Tunnel subnet: ${TUNNEL_NET_PREFIX}.${subnet_byte}.0/30  (Kharej .1 / Iran .2)"
     echo -e "  Tunnel IP:     $tun_ip"
-    echo -e "  GRE key:       $gre_key"
+    echo -e "  GRE:         plain (no key)  |  MTU $ins_mtu"
     echo -e "  MTU:           $ins_mtu"
     [[ -n "$fwd_port" ]] && echo -e "  Forward ports: $fwd_port"
     hint "Run same on peer: sudo jojonet $loc_ip"
@@ -2690,9 +2703,20 @@ if ! load_safe_config "$CONFIG_FILE"; then
 fi
 
 table_name="jojonet_$Name"
+IPT_MARK="jojonet_${Name}"
 
 cleanup() {
     trap - ERR
+    if [[ "${Role:-}" == "iran" && -n "${Tun_Remote_IP_Raw:-}" ]]; then
+        local p _ports="${Ports:-443}"
+        IFS=',' read -ra _PL <<< "$_ports"
+        for p in "${_PL[@]}"; do
+            p="${p// /}"
+            [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] || continue
+            iptables -t nat -D PREROUTING -p tcp --dport "$p" \
+                -j DNAT --to-destination "${Tun_Remote_IP_Raw}:$p" 2>/dev/null || true
+        done
+    fi
     ip link delete "$Name" >/dev/null 2>&1 || true
     nft delete table ip "$table_name" >/dev/null 2>&1 || true
 }
@@ -2703,7 +2727,7 @@ case "$ACTION" in
 
         log() { echo "[jojonet:${Name}] $*"; }
 
-        log "Starting tunnel instance..."
+        log "Starting plain GRE tunnel (manual-compatible)..."
         modprobe ip_gre 2>/dev/null || true
 
         if ip link show "$Name" >/dev/null 2>&1; then
@@ -2711,31 +2735,26 @@ case "$ACTION" in
             ip link delete "$Name" || { log "ERROR: failed to delete old interface"; exit 1; }
         fi
 
-        log "GRE add: remote=$Remote_IP local=$Local_IP key=$GreKey"
-        if ! [[ "${GreKey:-}" =~ ^[0-9]+$ ]] || (( GreKey == 0 )); then
-            log "ERROR: GreKey missing or invalid"
-            exit 1
-        fi
-        ip tunnel add "$Name" mode gre remote "$Remote_IP" local "$Local_IP" key "$GreKey" ttl 255 \
+        log "ip tunnel add $Name mode gre remote $Remote_IP local $Local_IP"
+        ip tunnel add "$Name" mode gre remote "$Remote_IP" local "$Local_IP" \
             || { log "ERROR: GRE creation failed"; exit 1; }
-        ip tunnel change "$Name" keepalive 10 3 || true
 
-        ip addr flush dev "$Name" >/dev/null 2>&1
-        log "Assign IP $Tun_IP on $Name"
+        log "ip addr add $Tun_IP dev $Name"
         ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assignment failed"; exit 1; }
 
-        if ! [[ "$Suggested_MTU" =~ ^[0-9]+$ ]]; then Suggested_MTU=$DEFAULT_MTU_FALLBACK; fi
-        (( Suggested_MTU < 576 )) && Suggested_MTU=$DEFAULT_MTU_FALLBACK
-        (( Suggested_MTU > 9000 )) && Suggested_MTU=$DEFAULT_MTU_FALLBACK
+        DEFAULT_GRE_MTU=1436
+        if ! [[ "$Suggested_MTU" =~ ^[0-9]+$ ]]; then Suggested_MTU=$DEFAULT_GRE_MTU; fi
+        (( Suggested_MTU < 576 )) && Suggested_MTU=$DEFAULT_GRE_MTU
+        (( Suggested_MTU > 9000 )) && Suggested_MTU=$DEFAULT_GRE_MTU
 
-        log "Set MTU=$Suggested_MTU and bring interface UP"
+        log "ip link set $Name mtu $Suggested_MTU && up"
         ip link set "$Name" mtu "$Suggested_MTU"
         ip link set "$Name" up || { log "ERROR: interface up failed"; exit 1; }
 
-        DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
-        log "sysctl: ip_forward=1, rp_filter=0 on $Name${DEFAULT_IFACE:+ and $DEFAULT_IFACE}"
+        log "sysctl net.ipv4.ip_forward=1"
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
         sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+        DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
         [[ -n "$DEFAULT_IFACE" ]] && sysctl -w "net.ipv4.conf.${DEFAULT_IFACE}.rp_filter=0" >/dev/null 2>&1 || true
         sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
         sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
@@ -2746,44 +2765,29 @@ case "$ACTION" in
         fi
 
         if [[ "$Role" == "iran" ]]; then
-            log "Iran role: nftables NAT (port forward -> Kharej tunnel IP)"
-            [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default interface not found"; exit 1; }
+            log "Iran: iptables DNAT + MASQUERADE (panel forward)"
             [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tunnel IP missing"; exit 1; }
+            command -v iptables >/dev/null 2>&1 || { log "ERROR: iptables required on Iran"; exit 1; }
 
-            NFT_CONF="table ip $table_name {
-            chain prerouting {
-                type nat hook prerouting priority dstnat; policy accept;"
+            _ports="${Ports:-443}"
+            IFS=',' read -ra PORT_LIST <<< "$_ports"
+            for p in "${PORT_LIST[@]}"; do
+                p="${p// /}"
+                [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] || continue
+                log "iptables DNAT tcp/$p -> ${Tun_Remote_IP_Raw}:$p"
+                iptables -t nat -C PREROUTING -p tcp --dport "$p" \
+                    -j DNAT --to-destination "${Tun_Remote_IP_Raw}:$p" 2>/dev/null || \
+                    iptables -t nat -A PREROUTING -p tcp --dport "$p" \
+                    -j DNAT --to-destination "${Tun_Remote_IP_Raw}:$p" \
+                    || { log "ERROR: iptables DNAT failed for port $p"; exit 1; }
+            done
 
-            if [[ -n "$Ports" ]]; then
-                IFS=',' read -ra PORT_LIST <<< "$Ports"
-                for p in "${PORT_LIST[@]}"; do
-                    p="${p// /}"
-                    [[ -n "$p" ]] || continue
-                    log "NAT rule: dport $p -> $Tun_Remote_IP_Raw"
-                    if [[ "$p" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
-                        NFT_CONF="$NFT_CONF
-                tcp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw
-                udp dport ${BASH_REMATCH[1]}-${BASH_REMATCH[2]} dnat ip to $Tun_Remote_IP_Raw"
-                    else
-                        NFT_CONF="$NFT_CONF
-                tcp dport $p dnat ip to $Tun_Remote_IP_Raw
-                udp dport $p dnat ip to $Tun_Remote_IP_Raw"
-                    fi
-                done
-            fi
-
-            NFT_CONF="$NFT_CONF
-            }
-            chain postrouting {
-                type nat hook postrouting priority srcnat; policy accept;
-                oifname \"$DEFAULT_IFACE\" masquerade
-            }
-        }"
-
-            nft delete table ip "$table_name" >/dev/null 2>&1 || true
-            echo "$NFT_CONF" | nft -f - || { log "ERROR: nft table creation failed"; exit 1; }
+            log "iptables -t nat -A POSTROUTING -j MASQUERADE"
+            iptables -t nat -C POSTROUTING -j MASQUERADE 2>/dev/null || \
+                iptables -t nat -A POSTROUTING -j MASQUERADE \
+                || { log "ERROR: iptables MASQUERADE failed"; exit 1; }
         else
-            log "Foreign role: GRE only (no NAT)"
+            log "Kharej: GRE only (no NAT)"
         fi
 
         log "SUCCESS: tunnel $Name is UP with $Tun_IP"
@@ -3488,8 +3492,12 @@ ensure_wg_keys() {
         log_warn "Peer WireGuard public key missing."
         log_warn "Run the same --wg command on the other server, or copy keys:"
         log_warn "  sudo jojonet --export-keys $peer_ip"
-        log_warn "Temporary: using local public (will NOT handshake until peer key is set)."
-        cp -f "$keydir/wg_public.key" "$keydir/wg_peer_public.key"
+        if [[ "$role" == "kharej" ]]; then
+            log_warn "Kharej will start listen-only until Iran side runs --wg."
+        else
+            log_warn "Temporary: using local public (will NOT handshake until peer key is set)."
+            cp -f "$keydir/wg_public.key" "$keydir/wg_peer_public.key"
+        fi
     fi
     chmod 600 "$keydir/wg_private.key" "$keydir/wg_public.key" "$keydir/wg_peer_public.key" 2>/dev/null || true
     printf '%s' "$keydir"
@@ -3566,22 +3574,52 @@ case "$ACTION" in
         log() { echo "[jojonet-wg:${Name}] $*"; }
         command -v wg >/dev/null 2>&1 || { log "ERROR: wg missing"; exit 1; }
         [[ -f "$priv" ]] || { log "ERROR: private key missing: $priv"; exit 1; }
-        [[ -f "$peer_pub" ]] || { log "ERROR: peer public key missing: $peer_pub"; exit 1; }
+        if [[ ! -f "$peer_pub" && "$Role" != "kharej" ]]; then
+            log "ERROR: peer public key missing: $peer_pub"
+            exit 1
+        fi
         modprobe wireguard 2>/dev/null || true
         if ip link show "$Name" >/dev/null 2>&1; then
             ip link delete "$Name" || true
+        fi
+        # Drop stale iface holding the same overlay IP (failed prior attempt)
+        _busy=$(ip -o -4 addr show 2>/dev/null | awk -v ip="${Tun_IP%%/*}" '$4 ~ "^" ip "(/|$)" { print $2; exit }')
+        if [[ -n "$_busy" && "$_busy" != "$Name" ]]; then
+            log "Removing stale interface $_busy (overlay IP ${Tun_IP%%/*} busy)"
+            ip link delete "$_busy" >/dev/null 2>&1 || true
+        fi
+        if [[ "$Role" == "kharej" ]]; then
+            _lp=""
+            for _wi in $(wg show interfaces 2>/dev/null); do
+                [[ "$_wi" == "$Name" ]] && continue
+                _lp=$(wg show "$_wi" listen-port 2>/dev/null || true)
+                if [[ -n "$_lp" && "$_lp" == "$listen_port" ]]; then
+                    log "ERROR: UDP $listen_port already used by WireGuard interface $_wi"
+                    log "ERROR: pick another port or: ip link delete $_wi"
+                    exit 1
+                fi
+            done
         fi
         # Restrict AllowedIPs to tunnel overlay (backhaul), not full tunnel
         allow="${Tun_Server_IP}/32,${Tun_Client_IP}/32"
         [[ -n "$Tun_Server_IP" && -n "$Tun_Client_IP" ]] || allow="10.66.0.0/16"
         ip link add dev "$Name" type wireguard || { log "ERROR: create wg iface"; exit 1; }
         if [[ "$Role" == "kharej" ]]; then
-            wg set "$Name" private-key "$priv" listen-port "$listen_port" \
-                peer "$(cat "$peer_pub")" allowed-ips "$allow" \
-                || { log "ERROR: wg set failed (server)"; exit 1; }
+            _own_pub=$(wg pubkey < "$priv" 2>/dev/null || true)
+            _peer_key=""
+            [[ -f "$peer_pub" ]] && _peer_key=$(tr -d '[:space:]' < "$peer_pub" 2>/dev/null || true)
+            if [[ -n "$_peer_key" && "$_peer_key" != "$_own_pub" ]]; then
+                wg set "$Name" private-key "$priv" listen-port "$listen_port" \
+                    peer "$_peer_key" allowed-ips "$allow" \
+                    || { log "ERROR: wg set failed (server)"; exit 1; }
+            else
+                log "WARN: peer key not ready — listen-only until Iran runs --wg"
+                wg set "$Name" private-key "$priv" listen-port "$listen_port" \
+                    || { log "ERROR: wg set failed (server, listen-only)"; exit 1; }
+            fi
         else
             wg set "$Name" private-key "$priv" \
-                peer "$(cat "$peer_pub")" allowed-ips "$allow" \
+                peer "$(tr -d '[:space:]' < "$peer_pub")" allowed-ips "$allow" \
                 endpoint "${Remote_IP}:${listen_port}" persistent-keepalive 25 \
                 || { log "ERROR: wg set failed (client)"; exit 1; }
         fi
@@ -3729,6 +3767,13 @@ quick_add_tunnel_wg() {
 
     read -r -p "WireGuard UDP port [$wg_port]: " _wp
     wg_port=${_wp:-$wg_port}
+    if [[ "$role_conf" == "kharej" ]] && wg_udp_port_in_use "$wg_port"; then
+        echo -e "${RED}[!] UDP port $wg_port is already used by another WireGuard interface.${NC}"
+        echo -e "${YELLOW}    Check: wg show  |  ip link delete <iface>${NC}"
+        echo -e "${YELLOW}    Or enter a different port (e.g. 51821).${NC}"
+        read -r -p "WireGuard UDP port: " _wp2
+        wg_port=${_wp2:-51821}
+    fi
 
     subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
     resolve_tunnel_ips "$role_conf" "$subnet_byte" "wireguard"
@@ -4293,12 +4338,27 @@ restart_all_tunnels() {
 }
 
 stop_tunnel_runtime() {
-    local name="$1" unit=""
+    local name="$1" unit="" conf="$INSTANCES_DIR/$name.conf"
     unit=$(tunnel_service_unit "$name")
     systemctl stop "$unit" >/dev/null 2>&1 || true
     pkill -f "tun-server.*-device ${name}" >/dev/null 2>&1 || true
     pkill -f "tun-client.*-device ${name}" >/dev/null 2>&1 || true
     pkill -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 || true
+    if [[ -r "$conf" ]] && grep -q '^TunnelMode="gre"' "$conf" 2>/dev/null; then
+        local remote="" ports="" p
+        remote=$(grep -E '^Tun_Remote_IP_Raw=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2)
+        ports=$(grep -E '^Ports=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2)
+        ports=${ports:-443}
+        if [[ -n "$remote" ]]; then
+            IFS=',' read -ra _PL <<< "$ports"
+            for p in "${_PL[@]}"; do
+                p="${p// /}"
+                [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] || continue
+                iptables -t nat -D PREROUTING -p tcp --dport "$p" \
+                    -j DNAT --to-destination "${remote}:$p" 2>/dev/null || true
+            done
+        fi
+    fi
     ip link show "$name" >/dev/null 2>&1 && ip link delete "$name" >/dev/null 2>&1 || true
     nft list table ip "jojonet_$name" >/dev/null 2>&1 && \
         nft delete table ip "jojonet_$name" >/dev/null 2>&1 || true
@@ -4611,11 +4671,13 @@ show_tunnel_plan() {
             local p
             for p in "${_ports[@]}"; do
                 p="${p// /}"
-                [[ -n "$p" ]] || continue
-                echo "  # nft: dnat tcp/udp dport $p -> $tun_remote"
+                [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] || continue
+                echo "  iptables -t nat -A PREROUTING -p tcp --dport $p -j DNAT --to-destination ${tun_remote}:$p"
             done
+        else
+            echo "  iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination ${tun_remote:-172.20.10.1}:443"
         fi
-        echo "  # nft: masquerade on default outbound interface"
+        echo "  iptables -t nat -A POSTROUTING -j MASQUERADE"
     fi
     echo -e "${CYAN}============================================${NC}\n"
 }
@@ -4641,9 +4703,8 @@ rollback_new_tunnel() {
     pkill -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1
     rm -f "$PAQET_CONFIG_DIR/${name}.yaml" >/dev/null 2>&1
     rm -f "$conf" "${conf}.tmp" >/dev/null 2>&1
-    ip link delete "$name" >/dev/null 2>&1
-    nft delete table ip "jojonet_$name" >/dev/null 2>&1
-    set -e
+    ip link delete "$name" >/dev/null 2>&1 || true
+    nft delete table ip "jojonet_$name" >/dev/null 2>&1 || true
 }
 
 add_new_tunnel() {
@@ -4733,29 +4794,9 @@ add_new_tunnel() {
     done
     CONF_FILE="$INSTANCES_DIR/$INS_NAME.conf"
 
-    local auto_subnet
-    # Pair-hash keeps Iran/Foreign in sync (same as Quick GRE). Unique local only as fallback.
-    auto_subnet=$(compute_pair_subnet_byte "$LOC_IP" "$REM_IP")
-    if subnet_byte_in_use "$auto_subnet"; then
-        log_warn "Pair subnet $auto_subnet already used locally; you may pick another (both sides must match)."
-    fi
-    echo -e "\n${CYAN}Tunnel subnet ID (3rd octet -> ${TUNNEL_NET_PREFIX}.X.0/30)${NC}"
-    echo -e "${YELLOW}Default is pair-derived ($auto_subnet) so both servers match automatically.${NC}"
-    read -r -p "Subnet ID [pair: $auto_subnet]: " subnet_input
-    subnet_input=${subnet_input:-$auto_subnet}
-
-    if ! validate_subnet_byte "$subnet_input"; then
-        echo -e "${RED}[!] Subnet ID must be 1-250.${NC}"
-        sleep 2; return
-    fi
-    subnet_byte=$subnet_input
-
-    if subnet_byte_in_use "$subnet_byte"; then
-        echo -e "${YELLOW}[!] Warning: subnet $subnet_byte already used by another tunnel on THIS server.${NC}"
-        read -r -p "Continue anyway? [y/N]: " confirm_dup
-        confirm_dup=$(echo "$confirm_dup" | tr '[:upper:]' '[:lower:]')
-        [[ "$confirm_dup" == "y" ]] || return
-    fi
+    local auto_subnet=$GRE_SUBNET_BYTE
+    echo -e "\n${CYAN}Tunnel overlay:${NC} ${TUNNEL_NET_PREFIX}.${GRE_SUBNET_BYTE}.1 (Kharej) ↔ .2 (Iran)"
+    subnet_byte=$GRE_SUBNET_BYTE
 
     if [[ "$ROLE_CONF" == "iran" ]]; then
         resolve_tunnel_ips "iran" "$subnet_byte" "gre"
@@ -4768,18 +4809,18 @@ add_new_tunnel() {
     fi
 
     echo -e "\n${CYAN}MTU settings${NC}"
-        menu_line "1) Auto-detect (recommended)"
-        menu_line "2) Fixed $DEFAULT_MTU_FALLBACK (common GRE value)"
+        menu_line "1) Standard $DEFAULT_GRE_MTU (recommended, manual-compatible)"
+        menu_line "2) Auto-detect from path"
     read -r -p "Choose [1/2, default 1]: " mtu_choice
 
     if [[ "$mtu_choice" == "2" ]]; then
-        INS_MTU=$DEFAULT_MTU_FALLBACK
-    else
         INS_MTU=$(calculate_mtu "$REM_IP")
         INS_MTU=$(clamp_mtu "$INS_MTU")
+    else
+        INS_MTU=$DEFAULT_GRE_MTU
     fi
 
-    show_tunnel_plan "$INS_NAME" "$ROLE_CONF" "$LOC_IP" "$REM_IP" "$INS_TUN_IP" "$INS_TUN_REMOTE_IP_RAW" "$INS_MTU" "$FWD_PORT" "$(compute_gre_key "$LOC_IP" "$REM_IP")"
+    show_tunnel_plan "$INS_NAME" "$ROLE_CONF" "$LOC_IP" "$REM_IP" "$INS_TUN_IP" "$INS_TUN_REMOTE_IP_RAW" "$INS_MTU" "$FWD_PORT" ""
 
     read -r -p "Apply this configuration? [Y/n]: " confirm_apply
     confirm_apply=$(echo "$confirm_apply" | tr '[:upper:]' '[:lower:]')
@@ -4918,7 +4959,12 @@ manage_tunnels() {
                                 fi
                                 press_enter ;;
                             3)
-                                if nft list table ip "jojonet_$TGT_NAME" >/dev/null 2>&1; then
+                                if [[ "$(tunnel_mode_from_name "$TGT_NAME")" == "gre" ]] && \
+                                    grep -q '^Role="iran"' "$tgt_conf" 2>/dev/null; then
+                                    echo -e "${CYAN}iptables NAT (Iran GRE):${NC}"
+                                    iptables -t nat -L PREROUTING -n -v 2>/dev/null | head -20 || true
+                                    iptables -t nat -L POSTROUTING -n -v 2>/dev/null | head -10 || true
+                                elif nft list table ip "jojonet_$TGT_NAME" >/dev/null 2>&1; then
                                     nft list table ip "jojonet_$TGT_NAME" || true
                                 else
                                     echo -e "${YELLOW}No nft table (normal on Foreign server).${NC}"

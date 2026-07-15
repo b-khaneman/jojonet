@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0
+- **GRE matches proven manual setup**: no GRE key, fixed overlay `172.20.10.1/30` (Kharej) ↔ `.2` (Iran)
+- MTU default **1436** for GRE
+- **Iran**: `iptables` DNAT (tcp/443…) + full `POSTROUTING MASQUERADE` (replaces nftables for GRE)
+- Auto-repair migrates old GRE configs to `172.20.10.x`
+
+## 1.2.9
+- Fix `ipv4_to_uint` crash (`unbound variable` with set -u)
+- WireGuard Kharej: start listen-only when Iran keys not ready yet (no fake self-peer)
+- WireGuard: detect UDP port / overlay IP conflicts with clear errors
+- Safer rollback on failed tunnel deploy (no ERR trap crash)
+
 ## 1.2.8
 - **Manage → Change peer IP**: replace tunnel with new Iran/Kharej peer (recomputes subnet, overlay, keys)
 - CLI: `sudo jojonet --change-peer <NAME> <NEW_PEER_IP>`
