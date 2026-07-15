@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.3.1"
+readonly JOJONET_VERSION="1.4.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -502,14 +502,18 @@ healthcheck_tunnel() {
             fi
             if [[ -n "${Tun_Remote_IP_Raw:-}" ]]; then
                 if ping -c1 -W2 "$Tun_Remote_IP_Raw" >/dev/null 2>&1; then
-                    echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${GREEN}ok${NC}"
+                    local _ms
+                    _ms=$(ping -c1 -W2 "$Tun_Remote_IP_Raw" 2>/dev/null | grep -oE 'time=[0-9.]+' | head -1 | cut -d= -f2)
+                    echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${GREEN}ok${NC}${_ms:+ (${_ms} ms)}"
                     ok=$((ok + 1))
                 else
                     echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${YELLOW}fail${NC}"
                 fi
             elif [[ "${Role:-}" == "kharej" && -n "${Tun_Client_IP:-}" ]]; then
                 if ping -c1 -W2 "$Tun_Client_IP" >/dev/null 2>&1; then
-                    echo -e "  Iran ping ${Tun_Client_IP}: ${GREEN}ok${NC}"
+                    local _ms
+                    _ms=$(ping -c1 -W2 "$Tun_Client_IP" 2>/dev/null | grep -oE 'time=[0-9.]+' | head -1 | cut -d= -f2)
+                    echo -e "  Iran ping ${Tun_Client_IP}: ${GREEN}ok${NC}${_ms:+ (${_ms} ms)}"
                     ok=$((ok + 1))
                 else
                     echo -e "  Iran ping ${Tun_Client_IP}: ${YELLOW}fail${NC}"
@@ -536,8 +540,285 @@ healthcheck_tunnel() {
     (( ok > 0 ))
 }
 
+# ── v1.4: preflight, auto-port, status, backup, import GRETun, pairing ──
 
-# Logging (always stderr — safe inside command substitutions)
+iran_dnat_port_in_use() {
+    local port="$1" f ports p
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    for f in "${files[@]}"; do
+        ports=$(conf_get_field "$f" "Ports")
+        IFS=',' read -ra _pl <<< "${ports:-}"
+        for p in "${_pl[@]}"; do
+            p="${p// /}"
+            [[ "$p" == "$port" ]] && return 0
+        done
+    done
+    command -v iptables >/dev/null 2>&1 || return 1
+    iptables -t nat -L PREROUTING -n 2>/dev/null | grep -qE "dpt:${port}\b" && return 0
+    return 1
+}
+
+allocate_iran_forward_port() {
+    local preferred="${1:-443}" p
+    local candidates=("$preferred" 8443 2053 2083 2096 8080 8444 4433)
+    for p in "${candidates[@]}"; do
+        if ! iran_dnat_port_in_use "$p"; then
+            echo "$p"
+            return 0
+        fi
+    done
+    echo "$preferred"
+    return 1
+}
+
+preflight_tunnel_check() {
+    local mode="${1:-gre}" role="${2:-}" loc_ip="${3:-}" rem_ip="${4:-}" \
+        subnet_byte="${5:-}" tun_ip="${6:-}" extra_port="${7:-}"
+    local issues=0 warns=0 iface busy="" ov="${tun_ip%%/*}"
+
+    echo -e "${CYAN}=== Pre-flight check ===${NC}"
+
+    if [[ "$mode" == "wireguard" && -n "$extra_port" ]] && wg_udp_port_in_use "$extra_port"; then
+        echo -e "  ${YELLOW}[!] UDP $extra_port in use (e.g. wg0) — pick another port${NC}"
+        warns=$((warns + 1))
+    fi
+
+    if ip link show GRETun >/dev/null 2>&1; then
+        local jn=0 f
+        shopt -s nullglob
+        for f in "$INSTANCES_DIR"/*.conf; do
+            [[ "$(basename "${f%.conf}")" == "GRETun" ]] && jn=1
+        done
+        shopt -u nullglob
+        (( jn == 0 )) && {
+            echo -e "  ${YELLOW}[!] Manual interface GRETun detected — import: sudo jojonet --import-gretun${NC}"
+            warns=$((warns + 1))
+        }
+    fi
+
+    if [[ -n "$ov" ]]; then
+        busy=$(overlay_ip_on_iface "$ov")
+        [[ -n "$busy" ]] && {
+            echo -e "  ${RED}[!] Overlay $ov already on $busy${NC}"
+            issues=$((issues + 1))
+        }
+    fi
+
+    if [[ "$role" == "iran" && "$mode" == "gre" ]]; then
+        local fp="${8:-443}"
+        if iran_dnat_port_in_use "$fp"; then
+            echo -e "  ${YELLOW}[!] Forward port $fp already used — use allocate_iran_forward_port or Advanced setup${NC}"
+            warns=$((warns + 1))
+        fi
+    fi
+
+    if (( issues == 0 && warns == 0 )); then
+        echo -e "  ${GREEN}[+] Pre-flight OK${NC}"
+    elif (( issues == 0 )); then
+        echo -e "  ${YELLOW}[*] $warns warning(s) — continuing${NC}"
+    else
+        echo -e "  ${RED}[!] $issues blocking issue(s)${NC}"
+        return 1
+    fi
+    return 0
+}
+
+show_pairing_card() {
+    local role="$1" loc_ip="$2" rem_ip="$3" subnet_byte="$4" name="$5" mode="${6:-gre}" fwd_port="${7:-}"
+    [[ "$STEALTH_MODE" == "1" ]] && return 0
+    echo ""
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}  Pairing — next step on peer server${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [[ "$role" == "kharej" ]]; then
+        echo -e "  ${CYAN}Iran server:${NC}  sudo jojonet --role iran ${loc_ip}"
+        echo -e "  ${CYAN}Or:${NC}           sudo jojonet ${loc_ip}"
+    else
+        echo -e "  ${CYAN}Kharej server:${NC} sudo jojonet --role kharej ${loc_ip}"
+        echo -e "  ${CYAN}Or:${NC}            sudo jojonet ${loc_ip}"
+    fi
+    echo -e "  ${CYAN}Subnet ID:${NC}    ${subnet_byte}  →  ${TUNNEL_NET_PREFIX}.${subnet_byte}.1 (Kharej) ↔ .2 (Iran)"
+    echo -e "  ${CYAN}Interface:${NC}    ${name}"
+    [[ -n "$fwd_port" ]] && echo -e "  ${CYAN}Iran forward:${NC} public:${fwd_port} → Kharej tunnel IP"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
+show_global_status() {
+    local interactive="${1:-1}" f n total=0 up=0 down=0
+    if (( interactive )); then
+        command -v clear >/dev/null && clear
+        logo
+    fi
+    print_banner "System Status"
+    echo -e "  Version:     ${GREEN}${JOJONET_VERSION}${NC}"
+    echo -e "  ip_forward:  $(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo '?')"
+    echo -e "  rp_filter:   $(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null || echo '?')"
+    echo -e "  TCP BBR:     $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '?')"
+    echo ""
+
+    if ip link show GRETun >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}[!] Manual GRETun present${NC} — ${CYAN}sudo jojonet --import-gretun${NC}"
+    fi
+    if command -v wg >/dev/null 2>&1 && wg show wg0 >/dev/null 2>&1; then
+        local wgp
+        wgp=$(wg show wg0 listen-port 2>/dev/null || true)
+        echo -e "  ${YELLOW}[!] wg0 on UDP ${wgp:-?}${NC} (non-JojoNet)"
+    fi
+
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    echo -e "${CYAN}=== Tunnels (${#files[@]}) ===${NC}"
+    for f in "${files[@]}"; do
+        n=$(conf_get_field "$f" "Name")
+        [[ -n "$n" ]] || continue
+        total=$((total + 1))
+        if [[ "$(tunnel_status_word "$n")" == "UP" ]]; then
+            up=$((up + 1))
+            echo -e "  ${GREEN}UP${NC}   $n"
+        else
+            down=$((down + 1))
+            echo -e "  ${RED}DOWN${NC} $n"
+        fi
+        healthcheck_tunnel "$n" 2>/dev/null | sed 's/^/    /' || true
+        if load_instance_config "$f" 2>/dev/null && [[ "${Role:-}" == "iran" && -n "${Ports:-}" ]]; then
+            local lip p
+            lip=$(conf_get_field "$f" "Local_IP")
+            IFS=',' read -ra _fp <<< "${Ports:-443}"
+            p="${_fp[0]// /}"
+            if [[ -n "$lip" && -n "$p" && "$p" =~ ^[0-9]+$ ]]; then
+                if curl -sk --connect-timeout 3 "https://${lip}:${p}/" >/dev/null 2>&1 || \
+                   curl -sk --connect-timeout 3 "http://${lip}:${p}/" >/dev/null 2>&1; then
+                    echo -e "    forward ${lip}:${p}: ${GREEN}reachable${NC}"
+                else
+                    echo -e "    forward ${lip}:${p}: ${YELLOW}no HTTP response (panel may still work)${NC}"
+                fi
+            fi
+        fi
+    done
+    echo ""
+    echo -e "${CYAN}Summary:${NC} ${GREEN}${up}${NC} up / ${RED}${down}${NC} down / ${total} total"
+    if (( interactive )); then
+        press_enter
+    fi
+}
+
+status_cli() {
+    show_global_status 0
+}
+
+export_all_configs() {
+    local out="${1:-/root/jojonet-backup-$(date +%Y%m%d-%H%M).tar.gz}"
+    local tmp
+    tmp=$(mktemp -d /tmp/jojonet-exp.XXXXXX) || return 1
+    install -d -m700 "$tmp/instances" "$tmp/meta"
+    shopt -s nullglob
+    cp -a "$INSTANCES_DIR"/*.conf "$tmp/instances/" 2>/dev/null || true
+    shopt -u nullglob
+    echo "version=${JOJONET_VERSION}" > "$tmp/meta/info.txt"
+    date >> "$tmp/meta/info.txt"
+    tar -czf "$out" -C "$tmp" instances meta 2>/dev/null || { rm -rf "$tmp"; return 1; }
+    rm -rf "$tmp"
+    chmod 600 "$out"
+    log_info "Exported: $out"
+    echo "$out"
+}
+
+import_all_configs() {
+    local arc="$1" n=0
+    [[ -f "$arc" ]] || { log_error "Not found: $arc"; return 1; }
+    local tmp
+    tmp=$(mktemp -d /tmp/jojonet-imp.XXXXXX) || return 1
+    tar -xzf "$arc" -C "$tmp" || { rm -rf "$tmp"; return 1; }
+    if [[ -d "$tmp/instances" ]]; then
+        for f in "$tmp/instances"/*.conf; do
+            [[ -f "$f" ]] || continue
+            install -m600 "$f" "$INSTANCES_DIR/"
+            n=$((n + 1))
+        done
+    fi
+    rm -rf "$tmp"
+    refresh_runtime_templates || true
+    repair_all_instances
+    restart_all_tunnels
+    log_info "Imported $n tunnel config(s)."
+    return 0
+}
+
+tunnel_logs_cli() {
+    local name="$1" lines="${2:-50}"
+    [[ -n "$name" ]] || { log_error "Usage: jojonet --logs <NAME>"; return 1; }
+    journalctl -u "$(tunnel_service_unit "$name")" -b --no-pager -n "$lines" 2>/dev/null || \
+        log_error "No logs for $name"
+}
+
+parse_gre_remote_local() {
+    local ifname="$1"
+    ip -d link show "$ifname" 2>/dev/null | sed -n 's/.*remote \([0-9.]*\).*local \([0-9.]*\).*/\1 \2/p' | head -1
+}
+
+import_manual_gretun() {
+    local ifname="${1:-GRETun}" rl="" rem="" loc="" addr="" role="" subnet_byte=""
+    set +e
+    if ! ip link show "$ifname" >/dev/null 2>&1; then
+        echo -e "${RED}[!] Interface $ifname not found.${NC}"
+        ip -o link show type gre 2>/dev/null | awk '{print "  - " $2}' | sed 's/:$//' || true
+        sleep 2
+        set -e
+        return 1
+    fi
+    rl=$(parse_gre_remote_local "$ifname")
+    rem=$(echo "$rl" | awk '{print $1}')
+    loc=$(echo "$rl" | awk '{print $2}')
+    addr=$(ip -o -4 addr show dev "$ifname" 2>/dev/null | awk '{print $4}' | head -1)
+    [[ -n "$rem" && -n "$loc" && -n "$addr" ]] || {
+        echo -e "${RED}[!] Cannot parse $ifname (remote/local/IP).${NC}"
+        sleep 2
+        set -e
+        return 1
+    }
+    if [[ "$addr" == *".1/"* ]]; then role="kharej"
+    elif [[ "$addr" == *".2/"* ]]; then role="iran"
+    else
+        read -r -p "Role [1=Iran 2=Kharej]: " _r
+        [[ "$_r" == "2" ]] && role="kharej" || role="iran"
+    fi
+    subnet_byte=$(echo "$addr" | awk -F'[./]' '{print $3}')
+    echo -e "${CYAN}Import plan:${NC}"
+    echo -e "  Iface: $ifname  Role: $role  Local: $loc  Remote: $rem"
+    echo -e "  Overlay: $addr  Subnet: $subnet_byte"
+    read -r -p "Import into JojoNet (stop $ifname, recreate as managed)? [y/N]: " _c
+    _c=$(echo "$_c" | tr '[:upper:]' '[:lower:]')
+    [[ "$_c" == "y" ]] || { set -e; return 0; }
+
+    ip link delete "$ifname" 2>/dev/null || true
+    resolve_tunnel_ips "$role" "$subnet_byte" "gre"
+    local fwd="" ins_name="$ifname"
+    validate_interface_name "$ins_name" || ins_name=$(allocate_tunnel_name "$rem" "$role" "gre" "$subnet_byte")
+    [[ "$role" == "iran" ]] && fwd=$(allocate_iran_forward_port "443")
+
+    if deploy_tunnel "$ins_name" "$role" "$loc" "$rem" "$subnet_byte" \
+        "$Tun_IP" "$Tun_Remote_IP_Raw" "$DEFAULT_GRE_MTU" "$fwd" "gre" \
+        "$DEFAULT_TCP_PORT" "" "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] Imported $ifname → JojoNet [$ins_name]${NC}"
+        show_pairing_card "$role" "$loc" "$rem" "$subnet_byte" "$ins_name" "gre" "$fwd"
+    fi
+    sleep 2
+    set -e
+}
+
+notify_webhook() {
+    local msg="$1"
+    [[ -n "${JOJONET_WEBHOOK_URL:-}" ]] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -fsS -m 8 -X POST -H 'Content-Type: application/json' \
+        -d "$(printf '{"text":"%s"}' "${msg//\"/\\\"}")" \
+        "$JOJONET_WEBHOOK_URL" >/dev/null 2>&1 || true
+}
+
 log_info()  { echo -e "${GREEN}[+]${NC} $*" >&2; }
 log_warn()  { echo -e "${YELLOW}[!]${NC} $*" >&2; }
 log_note()  { echo -e "${YELLOW}[*]${NC} $*" >&2; }
@@ -565,8 +846,7 @@ print_banner() {
 
 show_help() {
     cat <<EOF
-JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
-v1.2.5 — Iran/Kharej labels on tunnel map + self-update + WG + HY2
+JOJONET v${JOJONET_VERSION} — Iran ↔ Kharej tunnel manager
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -577,36 +857,34 @@ Usage:
   sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
   sudo jojonet --wg <PEER_IP>          WireGuard tunnel (low latency)
   sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed)
-  sudo jojonet --update                Update JojoNet from GitHub
-  sudo jojonet --update --force        Force reinstall from GitHub
-  sudo jojonet --check-update          Check for new version only
-  sudo jojonet --stealth               Enable stealth for this session
-  sudo jojonet --refresh-templates     Regenerate systemd runner scripts
-  sudo jojonet --change-peer <NAME> <IP>  Change tunnel peer IP and redeploy
-  sudo jojonet --list-tunnels            List all tunnels (map view)
-  sudo jojonet --list-tunnels --detail   Full details per tunnel
-  sudo jojonet --export-keys <PEER> [FILE]  Export TUN/Paqet keys (no SSH)
-  sudo jojonet --import-keys <PEER> <FILE>  Import TUN/Paqet keys
-  sudo jojonet --role iran|kharej      Force role (or set JOJONET_ROLE)
-  sudo jojonet --version               Show version
-  sudo jojonet --help                  Show this help
+  sudo jojonet --status                Full status (ping, forward, tunnels)
+  sudo jojonet --logs <NAME> [N]       Tunnel journal (default 50 lines)
+  sudo jojonet --import-gretun [IFACE] Import manual GRETun into JojoNet
+  sudo jojonet --export-config [FILE]  Backup all tunnel configs
+  sudo jojonet --import-config <FILE>  Restore tunnel configs from backup
+  sudo jojonet --fix-tunnels             Repair configs + restart all tunnels
+  sudo jojonet --change-peer <NAME> <IP>  Change peer IP and redeploy
+  sudo jojonet --list-tunnels [--detail] List tunnels
+  sudo jojonet --health <NAME>         Healthcheck one tunnel
+  sudo jojonet --export-keys <PEER> [FILE]
+  sudo jojonet --import-keys <PEER> <FILE>
+  sudo jojonet --update [--force]      Update from GitHub
+  sudo jojonet --refresh-templates     Regenerate runner scripts
+  sudo jojonet --role iran|kharej      Force role
+  sudo jojonet --version | --help
 
 Environment:
-  JOJONET_ROLE=iran|kharej             Skip GeoIP role detection
-  JOJONET_ALLOW_UNSIGNED=1             Allow binary downloads without checksum
-  JOJONET_DISABLE_RP_FILTER=1          Global rp_filter=0 (legacy behavior)
-  JOJONET_QUICK_PROBE_MTU=1            Probe path MTU in Quick GRE
-  JOJONET_PAQET_CORE_VERSION=...       Pin Paqet core tag
-  JOJONET_STEALTH=1                    Quiet/stealth session
+  JOJONET_ROLE=iran|kharej
+  JOJONET_WEBHOOK_URL=...              Notify on tunnel up/down
+  JOJONET_ALLOW_UNSIGNED=1
+  JOJONET_QUICK_PROBE_MTU=1
 
 Quick start:
-  1) Run on FOREIGN server first (menu or CLI with peer IP)
-  2) Run on IRAN server: sudo jojonet <FOREIGN_IP>
-  3) Subnet ID and keys sync automatically from the IP pair
-  4) Prefer: sudo bash install.sh  (verify package) over curl|bash
+  1) Kharej first:  sudo jojonet <IRAN_IP>
+  2) Iran second:   sudo jojonet <KHAREJ_IP>
+  3) Pairing card shows exact command for peer server
 
-Support: ${JOJONET_SUPPORT}
-Docs: ${JOJONET_REPO}
+Support: ${JOJONET_SUPPORT}  |  ${JOJONET_REPO}
 EOF
 }
 
@@ -2058,6 +2336,12 @@ deploy_tunnel() {
 
     apply_global_sysctl || return 1
 
+    if [[ "$role_conf" == "iran" && "$tunnel_mode" == "gre" && -z "$fwd_port" ]]; then
+        fwd_port=$(allocate_iran_forward_port "443")
+    fi
+    preflight_tunnel_check "$tunnel_mode" "$role_conf" "$loc_ip" "$rem_ip" \
+        "${subnet_byte:-}" "${tun_ip:-}" "${tcp_port:-}" "${fwd_port:-}" || return 1
+
     if [[ "$tunnel_mode" == "gre" ]]; then
         gre_key=""
         if [[ -z "$subnet_byte" ]]; then
@@ -2222,6 +2506,9 @@ EOF
                 fi
             fi
             verify_tunnel_ping "$ping_target" || true
+            load_stealth_mode
+            show_pairing_card "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" "$ins_name" "$tunnel_mode" "$fwd_port"
+            notify_webhook "JojoNet OK: tunnel [$ins_name] $tunnel_mode ACTIVE on $(hostname -s 2>/dev/null || echo server)"
             return 0
         fi
         echo -e "${RED}[!] Service active but runtime check failed.${NC}"
@@ -2230,6 +2517,7 @@ EOF
     fi
 
     journalctl -u "$svc_unit" -b --no-pager | tail -n 20 || true
+    notify_webhook "JojoNet FAIL: tunnel [$ins_name] $tunnel_mode on $(hostname -s 2>/dev/null || echo server)"
     set +e
     trap - ERR
     rollback_new_tunnel "$ins_name" "$conf_file"
@@ -2315,7 +2603,10 @@ quick_add_tunnel() {
     }
 
     if [[ "$role_conf" == "iran" ]]; then
-        fwd_port="443"
+        fwd_port=$(allocate_iran_forward_port "443")
+        if [[ "$fwd_port" != "443" ]]; then
+            echo -e "${YELLOW}[*] Port 443 already forwarded — using port ${fwd_port} for this tunnel${NC}"
+        fi
     else
         fwd_port=""
     fi
@@ -5345,11 +5636,13 @@ main_menu() {
         menu_line "6) Hysteria2 Tunnel (high speed)"
         menu_line "7) Advanced GRE Setup"
         menu_line "8) Manage Tunnels (map / change peer / restart / delete)"
-        menu_line "9) Network Status"
+        menu_line "9) System Status (ping + forward test)"
         menu_line "10) Stealth Mode (history + quiet)"
         menu_line "11) Healthcheck tunnel"
         menu_line "12) Export / Import keys (no SSH)"
         menu_line "13) Update JojoNet from GitHub"
+        menu_line "14) Backup / Restore configs"
+        menu_line "15) Import manual GRETun"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -5363,7 +5656,7 @@ main_menu() {
             6) quick_add_tunnel_hy2 || true ;;
             7) add_new_tunnel || true ;;
             8) manage_tunnels || true ;;
-            9) show_live_status || true ;;
+            9) show_global_status || true ;;
             10) toggle_stealth_mode ;;
             11)
                 read -r -p "Tunnel name: " _hn || true
@@ -5385,6 +5678,23 @@ main_menu() {
                 press_enter
                 ;;
             13) menu_update_jojonet || true ;;
+            14)
+                echo "  1) Export all configs"
+                echo "  2) Import configs"
+                read -r -p "Choose [1/2]: " _bc || true
+                if [[ "$_bc" == "1" ]]; then
+                    read -r -p "Output file [/root/jojonet-backup.tar.gz]: " _out || true
+                    export_all_configs "${_out:-/root/jojonet-backup.tar.gz}"
+                elif [[ "$_bc" == "2" ]]; then
+                    read -r -p "Backup archive path: " _arc || true
+                    [[ -n "${_arc:-}" ]] && import_all_configs "$_arc"
+                fi
+                press_enter
+                ;;
+            15)
+                read -r -p "Interface name [GRETun]: " _gi || true
+                import_manual_gretun "${_gi:-GRETun}" || true
+                ;;
             0) command -v clear >/dev/null && clear; opsec_scrub_history; exit 0 ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
         esac
@@ -5434,6 +5744,26 @@ if [[ "${1:-}" == "--role" && -n "${2:-}" ]]; then
 fi
 if [[ "${1:-}" == "--health" && -n "${2:-}" ]]; then
     healthcheck_tunnel "$2"
+    exit $?
+fi
+if [[ "${1:-}" == "--status" ]]; then
+    status_cli
+    exit 0
+fi
+if [[ "${1:-}" == "--logs" && -n "${2:-}" ]]; then
+    tunnel_logs_cli "$2" "${3:-50}"
+    exit $?
+fi
+if [[ "${1:-}" == "--import-gretun" ]]; then
+    import_manual_gretun "${2:-GRETun}"
+    exit $?
+fi
+if [[ "${1:-}" == "--export-config" ]]; then
+    export_all_configs "${2:-}"
+    exit 0
+fi
+if [[ "${1:-}" == "--import-config" && -n "${2:-}" ]]; then
+    import_all_configs "$2"
     exit $?
 fi
 if [[ "${1:-}" == "--list-tunnels" || "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then

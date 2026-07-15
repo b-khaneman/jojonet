@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0
+- **Pre-flight check** before deploy (wg0 port, GRETun, overlay IP conflicts)
+- **Auto forward port** on Iran when 443 is taken (8443, 2053, …)
+- **`sudo jojonet --status`** — ping latency + forward reachability + tunnel summary
+- **Pairing card** after successful deploy (exact peer command + subnet ID)
+- **`--import-gretun`** migrate manual GRETun into JojoNet
+- **`--export-config` / `--import-config`** backup & restore all tunnels
+- **`--logs <NAME>`** tunnel journal from CLI
+- **Webhook** notify on tunnel up/down (`JOJONET_WEBHOOK_URL`)
+- Menu: backup/restore + import GRETun
+
 ## 1.3.1
 - **Multi-tunnel GRE**: each peer pair gets its own subnet (`172.20.X.1` Kharej / `.2` Iran), auto from IP pair hash
 - Interface names include subnet hint (`gr…b11`) — unique per peer + subnet
