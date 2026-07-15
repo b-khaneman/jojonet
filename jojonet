@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.3"
+readonly JOJONET_VERSION="1.2.4"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -562,7 +562,7 @@ print_banner() {
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Foreign tunnel manager
-v1.2.3 — tunnel map / list view + self-update + WireGuard + Hysteria2
+v1.2.4 — Iran/Foreign labels on tunnel map + self-update + WG + HY2
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -1289,23 +1289,56 @@ tunnel_role_label() {
     esac
 }
 
+# Resolve public IPs by country (independent of which server you are on)
+resolve_iran_foreign_ips() {
+    if [[ "${Role:-}" == "iran" ]]; then
+        TUNNEL_IRAN_IP="${Local_IP:-?}"
+        TUNNEL_FOREIGN_IP="${Remote_IP:-?}"
+    else
+        TUNNEL_IRAN_IP="${Remote_IP:-?}"
+        TUNNEL_FOREIGN_IP="${Local_IP:-?}"
+    fi
+}
+
+# Colored country tag for display
+tunnel_country_tag() {
+    case "${1:-}" in
+        iran|Iran|ایران)
+            echo -e "${GREEN}[Iran/ایران]${NC}"
+            ;;
+        kharej|foreign|Foreign|خارج)
+            echo -e "${MAGENTA}[Foreign/خارج]${NC}"
+            ;;
+        *)
+            echo -e "${YELLOW}[?]${NC}"
+            ;;
+    esac
+}
+
+# Overlay tunnel IPs labeled by country
+tunnel_overlay_iran_foreign() {
+    local iran_tun="" foreign_tun=""
+    case "${Role:-}" in
+        iran)
+            iran_tun=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
+            foreign_tun="${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
+            ;;
+        kharej)
+            foreign_tun=$(echo "${Tun_IP:-}" | awk -F'/' '{print $1}')
+            iran_tun="${Tun_Client_IP:-?}"
+            ;;
+    esac
+    if [[ -n "$iran_tun" && -n "$foreign_tun" ]]; then
+        printf 'overlay %s (Iran/ایران) ↔ %s (Foreign/خارج)' "$iran_tun" "$foreign_tun"
+    fi
+}
 # Overlay / port summary for a loaded instance config
 tunnel_endpoint_summary() {
-    local mode="${TunnelMode:-gre}" local_ip peer_ip local_tun peer_tun extra=""
-    local_ip="${Local_IP:-?}"
-    peer_ip="${Remote_IP:-?}"
+    local mode="${TunnelMode:-gre}" extra="" overlay=""
     case "$mode" in
         gre|vxlan|wireguard|tun_tcp)
-            if [[ -n "${Tun_IP:-}" ]]; then
-                local_tun=$(echo "$Tun_IP" | awk -F'/' '{print $1}')
-            fi
-            if [[ "$Role" == "iran" ]]; then
-                peer_tun="${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
-            else
-                peer_tun="${Tun_Client_IP:-?}"
-            fi
-            [[ -n "$local_tun" && -n "$peer_tun" ]] && \
-                extra="overlay ${local_tun} ↔ ${peer_tun}"
+            overlay=$(tunnel_overlay_iran_foreign)
+            [[ -n "$overlay" ]] && extra="$overlay"
             ;;
         paqet)
             extra="KCP port ${TcpPort:-?}"
@@ -1328,11 +1361,13 @@ tunnel_endpoint_summary() {
     printf '%s' "$extra"
 }
 
-# One-line description: local IP ──[MODE]──► peer IP
+# One-line description with explicit Iran / Foreign labels on both public IPs
 format_tunnel_map_line() {
-    local mode_l role_l st st_c extra fwd=""
+    local mode_l st st_c extra fwd="" iran_ip foreign_ip
     mode_l=$(tunnel_mode_label "${TunnelMode:-gre}")
-    role_l=$(tunnel_role_label "${Role:-}")
+    resolve_iran_foreign_ips
+    iran_ip="$TUNNEL_IRAN_IP"
+    foreign_ip="$TUNNEL_FOREIGN_IP"
     st=$(tunnel_status_word "$Name")
     case "$st" in
         UP)   st_c="${GREEN}${st}${NC}" ;;
@@ -1342,7 +1377,7 @@ format_tunnel_map_line() {
     extra=$(tunnel_endpoint_summary)
     [[ -n "${Ports:-}" && "${TunnelMode:-gre}" != "paqet" && "${TunnelMode:-gre}" != "hysteria2" ]] && \
         fwd=" | forward ${Ports}"
-    echo -e "  ${st_c}  ${CYAN}${Local_IP:-?}${NC} (${role_l})  ──${YELLOW}[${mode_l}]${NC}──►  ${CYAN}${Remote_IP:-?}${NC} (peer)"
+    echo -e "  ${st_c}  $(tunnel_country_tag iran) ${CYAN}${iran_ip}${NC}  ──${YELLOW}[${mode_l}]${NC}──►  $(tunnel_country_tag foreign) ${CYAN}${foreign_ip}${NC}"
     [[ -n "$extra$fwd" ]] && echo -e "         ${extra}${fwd}"
 }
 
@@ -1402,19 +1437,21 @@ show_tunnel_detail_card() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BLUE}#${num} ${Name}${NC}  |  ${st_c}  |  ${YELLOW}${mode_l}${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${GREEN}This server:${NC}  ${CYAN}${Local_IP:-?}${NC}  ($(tunnel_role_label "${Role:-}"))"
-    echo -e "  ${GREEN}Peer server:${NC}  ${CYAN}${Remote_IP:-?}${NC}"
-    echo -e "  ${GREEN}Method:${NC}       ${YELLOW}${mode_l}${NC} (${mode})"
+    resolve_iran_foreign_ips
+    echo -e "  ${GREEN}Iran / ایران:${NC}     ${CYAN}${TUNNEL_IRAN_IP}${NC}  $(tunnel_country_tag iran)"
+    echo -e "  ${GREEN}Foreign / خارج:${NC}  ${CYAN}${TUNNEL_FOREIGN_IP}${NC}  $(tunnel_country_tag foreign)"
+    echo -e "  ${GREEN}This server:${NC}    ${CYAN}${Local_IP:-?}${NC}  ($(tunnel_role_label "${Role:-}"))"
+    echo -e "  ${GREEN}Method:${NC}         ${YELLOW}${mode_l}${NC} (${mode})"
 
     case "$mode" in
         gre)
-            echo -e "  ${GREEN}GRE key:${NC}      ${GreKey:-n/a}"
-            echo -e "  ${GREEN}Overlay:${NC}      ${Tun_IP:-?}  ↔  peer ${Tun_Remote_IP_Raw:-${Tun_Server_IP:-?}}"
+            echo -e "  ${GREEN}GRE key:${NC}        ${GreKey:-n/a}"
+            echo -e "  ${GREEN}Overlay:${NC}        ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Foreign)"
             ;;
         tun_tcp)
-            echo -e "  ${GREEN}TCP port:${NC}     ${TcpPort:-?}"
-            echo -e "  ${GREEN}Private IP:${NC}   ${Tun_Server_IP:-?} (foreign) ↔ ${Tun_Client_IP:-?} (iran)"
-            echo -e "  ${GREEN}Local TUN:${NC}    ${Tun_IP:-?}"
+            echo -e "  ${GREEN}TCP port:${NC}       ${TcpPort:-?}"
+            echo -e "  ${GREEN}Private IP:${NC}     ${Tun_Server_IP:-?} (Foreign) ↔ ${Tun_Client_IP:-?} (Iran)"
+            echo -e "  ${GREEN}Local TUN:${NC}      ${Tun_IP:-?} ($(tunnel_role_label "${Role:-}"))"
             ;;
         paqet)
             echo -e "  ${GREEN}Port:${NC}         ${TcpPort:-?}  |  forward ${ForwardProto:-tcp}"
@@ -1422,12 +1459,12 @@ show_tunnel_detail_card() {
             [[ -n "${PaqetYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${PaqetYaml}"
             ;;
         vxlan)
-            echo -e "  ${GREEN}VNI:${NC}          ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
-            echo -e "  ${GREEN}Overlay:${NC}      ${Tun_IP:-?}"
+            echo -e "  ${GREEN}VNI:${NC}            ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
+            echo -e "  ${GREEN}Overlay:${NC}        ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Foreign)"
             ;;
         wireguard)
-            echo -e "  ${GREEN}WG port:${NC}      UDP ${TcpPort:-?}"
-            echo -e "  ${GREEN}Overlay:${NC}      ${Tun_IP:-?}  ↔  peer ${Tun_Client_IP:-${Tun_Remote_IP_Raw:-?}}"
+            echo -e "  ${GREEN}WG port:${NC}        UDP ${TcpPort:-?}"
+            echo -e "  ${GREEN}Overlay:${NC}        ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Foreign)"
             ;;
         hysteria2)
             echo -e "  ${GREEN}UDP port:${NC}     ${TcpPort:-?}  |  SNI ${HySni:-${DEFAULT_HY2_SNI}}"
@@ -4505,22 +4542,25 @@ manage_tunnels() {
         list_all_tunnels 0 || true
 
         echo -e "${CYAN}Quick table:${NC}"
-        printf "${BLUE}%-11s | %-6s | %-13s | %-13s | %-13s | %-7s | %-5s${NC}\n" \
-            "Name" "Mode" "Local IP" "Peer IP" "Tunnel IP" "Status" "Ports"
-        echo "------------------------------------------------------------------------------------------------------------------------"
+        printf "${BLUE}%-11s | %-6s | %-15s | %-15s | %-13s | %-7s | %-5s${NC}\n" \
+            "Name" "Mode" "Iran IP" "Foreign IP" "Tunnel IP" "Status" "Ports"
+        echo "----------------------------------------------------------------------------------------------------------------------------"
 
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
         local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports="" TcpPort=""
         local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
         local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni=""
         local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
-        local file
+        local file iran_ip foreign_ip
 
         for file in "${conf_files[@]}"; do
             if ! load_instance_config "$file"; then
                 echo -e "${RED}[!] Invalid config: $file${NC}"
                 continue
             fi
+            resolve_iran_foreign_ips
+            iran_ip="$TUNNEL_IRAN_IP"
+            foreign_ip="$TUNNEL_FOREIGN_IP"
 
             local status_raw status_color st
             st=$(tunnel_status_word "$Name")
@@ -4550,8 +4590,8 @@ manage_tunnels() {
             elif [[ -n "${Tun_IP:-}" ]]; then
                 base_tun_ip=$(echo "$Tun_IP" | awk -F'/' '{print $1}')
             fi
-            printf "%-11s | %-6s | %-13s | %-13s | %-13s | ${status_color}%-7s${NC} | %-5s\n" \
-                "$Name" "$mode_disp" "$Local_IP" "$Remote_IP" "$base_tun_ip" "$status_raw" "$display_port"
+            printf "%-11s | %-6s | %-15s | %-15s | %-13s | ${status_color}%-7s${NC} | %-5s\n" \
+                "$Name" "$mode_disp" "$iran_ip" "$foreign_ip" "$base_tun_ip" "$status_raw" "$display_port"
         done
 
         echo ""

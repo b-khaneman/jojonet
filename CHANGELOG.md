@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4
+- Tunnel map shows explicit **Iran/ایران** and **Foreign/خارج** labels on every public IP
+- Quick table columns: Iran IP | Foreign IP (instead of local/peer)
+
 ## 1.2.3
 - **Tunnel Map**: manage menu shows `Local IP ──[METHOD]──► Peer IP` for every tunnel
 - New CLI: `sudo jojonet --list-tunnels` / `--list-tunnels --detail`
