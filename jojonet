@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.3.0"
+readonly JOJONET_VERSION="1.3.1"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -74,6 +74,8 @@ LOCK_FILE="/run/lock/jojonet.lock"
 DEFAULT_MTU_FALLBACK=1436
 DEFAULT_GRE_MTU=1436
 GRE_SUBNET_BYTE=10
+GRE_SUBNET_MIN=10
+GRE_SUBNET_MAX=250
 TUNNEL_NET_PREFIX="172.20"
 VXLAN_NET_PREFIX="172.21"
 TUN_TCP_NET_PREFIX="10.30"
@@ -913,7 +915,11 @@ repair_tunnel_overlay_ips() {
     name=$(conf_get_field "$conf" "Name")
     role=$(conf_get_field "$conf" "Role")
     subnet=$(conf_get_field "$conf" "Subnet_Byte")
-    [[ "$mode" == "gre" ]] && subnet="$GRE_SUBNET_BYTE"
+    if [[ "$mode" == "gre" ]]; then
+        loc=$(conf_get_field "$conf" "Local_IP")
+        rem=$(conf_get_field "$conf" "Remote_IP")
+        [[ -z "$subnet" && -n "$loc" && -n "$rem" ]] && subnet=$(gre_subnet_for_pair "$loc" "$rem")
+    fi
     [[ -n "$name" && -n "$role" && -n "$subnet" ]] || return 1
     old_tun=$(conf_get_field "$conf" "Tun_IP")
     resolve_tunnel_ips "$role" "$subnet" "$mode"
@@ -926,8 +932,6 @@ repair_tunnel_overlay_ips() {
             sed -i "s/^Tun_Remote_IP_Raw=.*/Tun_Remote_IP_Raw=\"$Tun_Remote_IP_Raw\"/" "$conf"
     fi
     if [[ "$mode" == "gre" ]]; then
-        grep -q '^Subnet_Byte=' "$conf" && \
-            sed -i "s/^Subnet_Byte=.*/Subnet_Byte=\"$GRE_SUBNET_BYTE\"/" "$conf"
         grep -q '^GreKey=' "$conf" && sed -i 's/^GreKey=.*/GreKey=""/' "$conf"
     fi
     echo -e "${YELLOW}[*] Repaired overlay IPs [$name]: $old_tun -> $Tun_IP${NC}" >&2
@@ -969,6 +973,56 @@ overlay_ip_on_iface() {
     got=$(ip -o -4 addr show 2>/dev/null | awk -v ip="$want" '
         $4 ~ "^" ip "(/|$)" { print $2; exit }')
     [[ -n "$got" ]] && printf '%s' "$got"
+}
+
+# Deterministic GRE subnet id (10-250) for a public IP pair — same value on both servers
+gre_subnet_for_pair() {
+    local ip1="$1" ip2="$2" b
+    b=$(compute_pair_subnet_byte "$ip1" "$ip2")
+    (( b < GRE_SUBNET_MIN )) && b=$(( b + GRE_SUBNET_MIN - 1 ))
+    (( b > GRE_SUBNET_MAX )) && b=$(( (b % (GRE_SUBNET_MAX - GRE_SUBNET_MIN + 1)) + GRE_SUBNET_MIN ))
+    echo "$b"
+}
+
+# Another GRE tunnel on THIS server already uses this subnet for a different peer
+gre_subnet_taken_locally() {
+    local byte="$1" rem="$2" f r mode
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    for f in "${files[@]}"; do
+        mode=$(conf_get_field "$f" "TunnelMode")
+        [[ "${mode:-gre}" == "gre" ]] || continue
+        [[ "$(conf_get_field "$f" "Subnet_Byte")" == "$byte" ]] || continue
+        r=$(conf_get_field "$f" "Remote_IP")
+        [[ "$r" == "$rem" ]] && continue
+        return 0
+    done
+    return 1
+}
+
+# Pick GRE subnet: reuse saved config for same peer, else deterministic pair hash (both servers match)
+allocate_gre_subnet_byte() {
+    local loc="$1" rem="$2" existing="" saved="" candidate=""
+    if existing=$(find_tunnel_for_peer "$rem" "gre"); then
+        saved=$(conf_get_field "$INSTANCES_DIR/$existing.conf" "Subnet_Byte")
+        [[ -n "$saved" ]] && { echo "$saved"; return 0; }
+    fi
+    candidate=$(gre_subnet_for_pair "$loc" "$rem")
+    if gre_subnet_taken_locally "$candidate" "$rem"; then
+        return 1
+    fi
+    echo "$candidate"
+}
+
+overlay_ip_in_use_for_role() {
+    local role="$1" subnet_byte="$2" ip=""
+    if [[ "$role" == "iran" ]]; then
+        ip="${TUNNEL_NET_PREFIX}.${subnet_byte}.2"
+    else
+        ip="${TUNNEL_NET_PREFIX}.${subnet_byte}.1"
+    fi
+    overlay_ip_on_iface "$ip"
 }
 
 # Same subnet on both servers — derived from the IP pair (no manual Subnet ID)
@@ -1109,8 +1163,8 @@ generate_unique_tunnel_name() {
 
 # Unique interface per peer — e.g. ir195158230128 (foreign) / kh575200210 (iran)
 generate_tunnel_name_from_peer() {
-    local peer="$1" role="$2" mode="${3:-gre}"
-    local digits prefix base
+    local peer="$1" role="$2" mode="${3:-gre}" subnet_byte="${4:-}"
+    local digits prefix base suffix=""
     digits=$(echo "$peer" | tr -d '.')
     if [[ "$mode" == "tun_tcp" ]]; then
         prefix="tc"
@@ -1122,14 +1176,21 @@ generate_tunnel_name_from_peer() {
         prefix="wg"
     elif [[ "$mode" == "hysteria2" ]]; then
         prefix="hy"
+    elif [[ "$mode" == "gre" && -n "$subnet_byte" ]]; then
+        prefix="gr"
+        suffix="b${subnet_byte}"
     elif [[ "$role" == "kharej" ]]; then
         prefix="ir"
     else
         prefix="kh"
     fi
-    base="${prefix}${digits}"
+    base="${prefix}${digits}${suffix}"
     if (( ${#base} > 15 )); then
-        base="${prefix}${digits: -$((15 - ${#prefix}))}"
+        if [[ -n "$suffix" ]]; then
+            base="${prefix}${digits: -$((15 - ${#prefix} - ${#suffix}))}${suffix}"
+        else
+            base="${prefix}${digits: -$((15 - ${#prefix}))}"
+        fi
     fi
     generate_unique_tunnel_name "$base"
 }
@@ -1139,14 +1200,15 @@ any_gre_present() {
 }
 
 allocate_tunnel_name() {
-    local peer="$1" role="$2" mode="${3:-gre}" base=""
+    local peer="$1" role="$2" mode="${3:-gre}" subnet_byte="${4:-}"
+    local base=""
     load_stealth_mode
     if [[ "$STEALTH_MODE" == "1" ]]; then
         base=$(generate_stealth_tunnel_name "$peer" "$role" "$mode")
         generate_unique_tunnel_name "$base"
         return 0
     fi
-    generate_tunnel_name_from_peer "$peer" "$role" "$mode"
+    generate_tunnel_name_from_peer "$peer" "$role" "$mode" "$subnet_byte"
 }
 
 wait_for_tunnel_up() {
@@ -1998,7 +2060,12 @@ deploy_tunnel() {
 
     if [[ "$tunnel_mode" == "gre" ]]; then
         gre_key=""
-        subnet_byte="$GRE_SUBNET_BYTE"
+        if [[ -z "$subnet_byte" ]]; then
+            subnet_byte=$(allocate_gre_subnet_byte "$loc_ip" "$rem_ip" "$role_conf") || return 1
+        elif gre_subnet_taken_locally "$subnet_byte" "$rem_ip"; then
+            log_error "GRE subnet $subnet_byte already used by another peer on this server."
+            return 1
+        fi
         resolve_tunnel_ips "$role_conf" "$subnet_byte" "gre"
         tun_ip="$Tun_IP"
         tun_server_ip="$Tun_Server_IP"
@@ -2232,7 +2299,16 @@ quick_add_tunnel() {
         return 1
     fi
 
-    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "gre") || {
+    subnet_byte=$(allocate_gre_subnet_byte "$loc_ip" "$rem_ip" "$role_conf") || {
+        local want
+        want=$(gre_subnet_for_pair "$loc_ip" "$rem_ip")
+        echo -e "${RED}[!] GRE subnet ${TUNNEL_NET_PREFIX}.${want}.x already used by another peer on this server.${NC}"
+        echo -e "${YELLOW}    Delete the old tunnel (Manage → 6) or use Advanced setup to pick another subnet ID on BOTH servers.${NC}"
+        sleep 4
+        return 1
+    }
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "gre" "$subnet_byte") || {
         echo -e "${RED}[!] Could not allocate unique interface name.${NC}"
         sleep 3
         return 1
@@ -2251,8 +2327,6 @@ quick_add_tunnel() {
         ins_mtu=$DEFAULT_GRE_MTU
     fi
 
-    subnet_byte=$GRE_SUBNET_BYTE
-
     resolve_tunnel_ips "$role_conf" "$subnet_byte" "gre"
     tun_ip="$Tun_IP"
     tun_remote="$Tun_Remote_IP_Raw"
@@ -2264,8 +2338,7 @@ quick_add_tunnel() {
     echo -e "  Peer IP:       $rem_ip"
     echo -e "  Tunnel subnet: ${TUNNEL_NET_PREFIX}.${subnet_byte}.0/30  (Kharej .1 / Iran .2)"
     echo -e "  Tunnel IP:     $tun_ip"
-    echo -e "  GRE:         plain (no key)  |  MTU $ins_mtu"
-    echo -e "  MTU:           $ins_mtu"
+    echo -e "  GRE:           plain (no key)  |  MTU $ins_mtu"
     [[ -n "$fwd_port" ]] && echo -e "  Forward ports: $fwd_port"
     hint "Run same on peer: sudo jojonet $loc_ip"
     echo ""
@@ -2738,6 +2811,13 @@ case "$ACTION" in
         log "ip tunnel add $Name mode gre remote $Remote_IP local $Local_IP"
         ip tunnel add "$Name" mode gre remote "$Remote_IP" local "$Local_IP" \
             || { log "ERROR: GRE creation failed"; exit 1; }
+
+        _want_ip="${Tun_IP%%/*}"
+        _busy=$(ip -o -4 addr show 2>/dev/null | awk -v ip="$_want_ip" '$4 ~ "^" ip "(/|$)" { print $2; exit }')
+        if [[ -n "$_busy" && "$_busy" != "$Name" ]]; then
+            log "ERROR: overlay IP $_want_ip already on interface $_busy"
+            exit 1
+        fi
 
         log "ip addr add $Tun_IP dev $Name"
         ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assignment failed"; exit 1; }
@@ -4543,6 +4623,10 @@ change_tunnel_peer_ip() {
             ;;
         *)
             key_dir="${KeyDir:-}"
+            subnet_byte=$(allocate_gre_subnet_byte "$loc_ip" "$rem_ip" "$role") || {
+                echo -e "${RED}[!] GRE subnet collision for this peer.${NC}"
+                sleep 2; set -e; return 1
+            }
             resolve_tunnel_ips "$role" "$subnet_byte" "gre"
             tun_ip="$Tun_IP"
             tun_remote="$Tun_Remote_IP_Raw"
@@ -4776,27 +4860,44 @@ add_new_tunnel() {
         sleep 2; return
     fi
 
-    local suggested
-    suggested=$(allocate_tunnel_name "$REM_IP" "$ROLE_CONF" "gre") || suggested="gre1"
+    local auto_subnet="" suggested_name=""
+    auto_subnet=$(gre_subnet_for_pair "$LOC_IP" "$REM_IP")
+    if gre_subnet_taken_locally "$auto_subnet" "$REM_IP"; then
+        echo -e "${YELLOW}[!] Pair subnet $auto_subnet is already used locally by another GRE tunnel.${NC}"
+        echo -e "${YELLOW}    Pick a free subnet ID (same on BOTH servers).${NC}"
+    fi
+    echo -e "\n${CYAN}Tunnel overlay:${NC} ${TUNNEL_NET_PREFIX}.X.1 (Kharej) ↔ .2 (Iran)"
+    echo -e "${YELLOW}Auto for this peer pair: subnet ID ${auto_subnet}${NC}"
+    read -r -p "Subnet ID [pair: $auto_subnet]: " subnet_input
+    subnet_input=${subnet_input:-$auto_subnet}
+
+    if ! validate_subnet_byte "$subnet_input"; then
+        echo -e "${RED}[!] Subnet ID must be ${GRE_SUBNET_MIN}-${GRE_SUBNET_MAX}.${NC}"
+        sleep 2; return
+    fi
+    subnet_byte=$subnet_input
+
+    if gre_subnet_taken_locally "$subnet_byte" "$REM_IP"; then
+        echo -e "${RED}[!] Subnet $subnet_byte already used by another peer on this server.${NC}"
+        sleep 2; return
+    fi
+
+    suggested_name=$(generate_tunnel_name_from_peer "$REM_IP" "$ROLE_CONF" "gre" "$subnet_byte") || suggested="gre1"
     while true; do
-        read -r -p "Tunnel interface name (unique) [$suggested]: " INS_NAME
-        INS_NAME=${INS_NAME:-$suggested}
+        read -r -p "Tunnel interface name (unique) [$suggested_name]: " INS_NAME
+        INS_NAME=${INS_NAME:-$suggested_name}
         if ! validate_interface_name "$INS_NAME"; then
             echo -e "${RED}[!] Invalid name (max 15 chars).${NC}"
             continue
         fi
         if [[ -f "$INSTANCES_DIR/$INS_NAME.conf" ]] || ip link show "$INS_NAME" >/dev/null 2>&1; then
             echo -e "${RED}[!] Name already in use — try another.${NC}"
-            suggested=$(generate_tunnel_name_from_peer "$REM_IP" "$ROLE_CONF") || true
+            suggested=$(generate_tunnel_name_from_peer "$REM_IP" "$ROLE_CONF" "gre" "$subnet_byte") || true
             continue
         fi
         break
     done
     CONF_FILE="$INSTANCES_DIR/$INS_NAME.conf"
-
-    local auto_subnet=$GRE_SUBNET_BYTE
-    echo -e "\n${CYAN}Tunnel overlay:${NC} ${TUNNEL_NET_PREFIX}.${GRE_SUBNET_BYTE}.1 (Kharej) ↔ .2 (Iran)"
-    subnet_byte=$GRE_SUBNET_BYTE
 
     if [[ "$ROLE_CONF" == "iran" ]]; then
         resolve_tunnel_ips "iran" "$subnet_byte" "gre"

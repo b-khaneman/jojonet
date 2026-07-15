@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1
+- **Multi-tunnel GRE**: each peer pair gets its own subnet (`172.20.X.1` Kharej / `.2` Iran), auto from IP pair hash
+- Interface names include subnet hint (`gr…b11`) — unique per peer + subnet
+- Second tunnel on same server no longer reuses `172.20.10.2` if another peer already owns that subnet
+
 ## 1.3.0
 - **GRE matches proven manual setup**: no GRE key, fixed overlay `172.20.10.1/30` (Kharej) ↔ `.2` (Iran)
 - MTU default **1436** for GRE
