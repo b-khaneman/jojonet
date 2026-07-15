@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.5"
+readonly JOJONET_VERSION="1.2.6"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -578,6 +578,7 @@ Usage:
   sudo jojonet --check-update          Check for new version only
   sudo jojonet --stealth               Enable stealth for this session
   sudo jojonet --refresh-templates     Regenerate systemd runner scripts
+  sudo jojonet --fix-tunnels             Repair overlay IPs + restart all tunnels
   sudo jojonet --list-tunnels            List all tunnels (map view)
   sudo jojonet --list-tunnels --detail   Full details per tunnel
   sudo jojonet --export-keys <PEER> [FILE]  Export TUN/Paqet keys (no SSH)
@@ -877,12 +878,12 @@ apply_global_sysctl() {
     if [[ ! -f "$SYSCTL_FILE" ]]; then
         echo -e "${YELLOW}[*] Applying global network tuning (BBR + forwarding)...${NC}"
         cat <<EOF > "$SYSCTL_FILE"
-# JojoNet network profile (v1.1+)
-# rp_filter is NOT disabled globally anymore (anti-spoofing preserved).
-# GRE/VXLAN runners set rp_filter=0 only on the tunnel interface when needed.
+# JojoNet network profile
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 net.ipv4.ip_forward=1
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
 net.ipv4.tcp_fastopen=3
 net.core.rmem_max=67108864
 net.core.wmem_max=67108864
@@ -893,26 +894,37 @@ net.ipv4.ip_local_port_range=1024 65535
 net.ipv4.tcp_fin_timeout=15
 fs.file-max=2097152
 EOF
-        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
-            cat <<EOF >> "$SYSCTL_FILE"
-# Explicitly requested via JOJONET_DISABLE_RP_FILTER=1
-net.ipv4.conf.all.rp_filter=0
-net.ipv4.conf.default.rp_filter=0
-EOF
-        fi
         sysctl --system >/dev/null 2>&1 || true
     fi
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-    if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
-        # Prefer interface-scoped rp_filter disable (keeps global anti-spoofing)
-        # Fallback to global only if JOJONET_DISABLE_RP_FILTER=1
-        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
-            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
-            sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
-        fi
-    fi
+    sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
 }
 
+# Fix overlay IPs in saved configs (e.g. after v1.2.2 Iran/Kharej .1/.2 swap)
+repair_tunnel_overlay_ips() {
+    local conf="$1" name role subnet mode old_tun
+    [[ -f "$conf" ]] || return 1
+    mode=$(conf_get_field "$conf" "TunnelMode")
+    mode=${mode:-gre}
+    [[ "$mode" =~ ^(gre|vxlan|wireguard)$ ]] || return 1
+    name=$(conf_get_field "$conf" "Name")
+    role=$(conf_get_field "$conf" "Role")
+    subnet=$(conf_get_field "$conf" "Subnet_Byte")
+    [[ -n "$name" && -n "$role" && -n "$subnet" ]] || return 1
+    old_tun=$(conf_get_field "$conf" "Tun_IP")
+    resolve_tunnel_ips "$role" "$subnet" "$mode"
+    [[ "$old_tun" == "$Tun_IP" ]] && return 1
+    grep -q '^Tun_IP=' "$conf" && sed -i "s/^Tun_IP=.*/Tun_IP=\"$Tun_IP\"/" "$conf"
+    grep -q '^Tun_Server_IP=' "$conf" && sed -i "s/^Tun_Server_IP=.*/Tun_Server_IP=\"$Tun_Server_IP\"/" "$conf"
+    grep -q '^Tun_Client_IP=' "$conf" && sed -i "s/^Tun_Client_IP=.*/Tun_Client_IP=\"$Tun_Client_IP\"/" "$conf"
+    if [[ "$role" == "iran" ]]; then
+        grep -q '^Tun_Remote_IP_Raw=' "$conf" && \
+            sed -i "s/^Tun_Remote_IP_Raw=.*/Tun_Remote_IP_Raw=\"$Tun_Remote_IP_Raw\"/" "$conf"
+    fi
+    echo -e "${YELLOW}[*] Repaired overlay IPs [$name]: $old_tun -> $Tun_IP${NC}" >&2
+    return 0
+}
 clamp_mtu() {
     local mtu="$1"
     if ! [[ "$mtu" =~ ^[0-9]+$ ]]; then
@@ -1145,6 +1157,7 @@ verify_tunnel_ping() {
 repair_single_config() {
     local conf="$1" loc rem gre mode name changed=0
     [[ -f "$conf" ]] || return 0
+    repair_tunnel_overlay_ips "$conf" && changed=1
     mode=$(conf_get_field "$conf" "TunnelMode")
     name=$(conf_get_field "$conf" "Name")
     [[ -n "$name" ]] || return 0
@@ -1232,6 +1245,15 @@ refresh_runtime_templates() {
     create_hy2_runner_script || return 1
     create_hy2_service || return 1
     return 0
+}
+
+fix_all_tunnels() {
+    echo -e "${CYAN}=== Repair & restart all tunnels ===${NC}"
+    refresh_runtime_templates || true
+    repair_all_instances
+    restart_all_tunnels
+    echo ""
+    list_all_tunnels 0 || true
 }
 
 count_configured_tunnels() {
@@ -2680,12 +2702,6 @@ case "$ACTION" in
 
         log "Starting tunnel instance..."
         modprobe ip_gre 2>/dev/null || true
-        # Prefer interface-scoped rp_filter disable (keeps global anti-spoofing)
-        # Fallback to global only if JOJONET_DISABLE_RP_FILTER=1
-        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
-            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
-            sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
-        fi
 
         if ip link show "$Name" >/dev/null 2>&1; then
             log "Removing stale interface $Name"
@@ -2712,7 +2728,14 @@ case "$ACTION" in
         log "Set MTU=$Suggested_MTU and bring interface UP"
         ip link set "$Name" mtu "$Suggested_MTU"
         ip link set "$Name" up || { log "ERROR: interface up failed"; exit 1; }
+
+        DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+        log "sysctl: ip_forward=1, rp_filter=0 on $Name${DEFAULT_IFACE:+ and $DEFAULT_IFACE}"
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
         sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+        [[ -n "$DEFAULT_IFACE" ]] && sysctl -w "net.ipv4.conf.${DEFAULT_IFACE}.rp_filter=0" >/dev/null 2>&1 || true
+        sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
 
         if ! ip link show "$Name" 2>/dev/null | grep -qE '<.*UP.*>|state UP'; then
             log "ERROR: interface not in UP state after start"
@@ -2720,10 +2743,7 @@ case "$ACTION" in
         fi
 
         if [[ "$Role" == "iran" ]]; then
-            log "Iran role: enabling ip_forward and nftables NAT"
-            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-
-            DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+            log "Iran role: nftables NAT (port forward -> Kharej tunnel IP)"
             [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default interface not found"; exit 1; }
             [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tunnel IP missing"; exit 1; }
 
@@ -3260,12 +3280,6 @@ case "$ACTION" in
 
         log "Starting VXLAN tunnel..."
         modprobe vxlan 2>/dev/null || true
-        # Prefer interface-scoped rp_filter disable (keeps global anti-spoofing)
-        # Fallback to global only if JOJONET_DISABLE_RP_FILTER=1
-        if [[ "${JOJONET_DISABLE_RP_FILTER:-0}" == "1" ]]; then
-            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
-            sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
-        fi
 
         DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
         [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default interface not found"; exit 1; }
@@ -3302,7 +3316,13 @@ case "$ACTION" in
         log "Set MTU=$Suggested_MTU and bring interface UP"
         ip link set "$Name" mtu "$Suggested_MTU"
         ip link set "$Name" up || { log "ERROR: interface up failed"; exit 1; }
+
+        log "sysctl: ip_forward=1, rp_filter=0 on $Name${DEFAULT_IFACE:+ and $DEFAULT_IFACE}"
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
         sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+        [[ -n "$DEFAULT_IFACE" ]] && sysctl -w "net.ipv4.conf.${DEFAULT_IFACE}.rp_filter=0" >/dev/null 2>&1 || true
+        sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
 
         if ! ip link show "$Name" 2>/dev/null | grep -qE '<.*UP.*>|state UP'; then
             log "ERROR: interface not in UP state after start"
@@ -3310,8 +3330,7 @@ case "$ACTION" in
         fi
 
         if [[ "$Role" == "iran" ]]; then
-            log "Iran role: enabling ip_forward and nftables NAT"
-            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+            log "Iran role: nftables NAT (port forward -> Kharej tunnel IP)"
             [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tunnel IP missing"; exit 1; }
 
             NFT_CONF="table ip $table_name {
@@ -3567,10 +3586,14 @@ case "$ACTION" in
         ip addr add "$Tun_IP" dev "$Name" || { log "ERROR: IP assign"; exit 1; }
         ip link set "$Name" mtu "$mtu"
         ip link set "$Name" up || { log "ERROR: up failed"; exit 1; }
+        DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
+        log "sysctl: ip_forward=1, rp_filter=0 on $Name${DEFAULT_IFACE:+ and $DEFAULT_IFACE}"
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
         sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+        [[ -n "$DEFAULT_IFACE" ]] && sysctl -w "net.ipv4.conf.${DEFAULT_IFACE}.rp_filter=0" >/dev/null 2>&1 || true
+        sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
         if [[ "$Role" == "iran" ]]; then
-            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-            DEFAULT_IFACE=$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $5}')
             [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default iface"; exit 1; }
             [[ -n "$Tun_Remote_IP_Raw" ]] || { log "ERROR: remote tun IP"; exit 1; }
             NFT_CONF="table ip $table_name {
@@ -4328,9 +4351,11 @@ show_tunnel_plan() {
     echo "  ip addr add $tun_ip dev $name"
     echo "  ip link set $name mtu $mtu"
     echo "  ip link set $name up"
+    echo "  sysctl -w net.ipv4.ip_forward=1"
+    echo "  sysctl -w net.ipv4.conf.$name.rp_filter=0"
+    echo "  sysctl -w net.ipv4.conf.all.rp_filter=0"
 
     if [[ "$role" == "iran" ]]; then
-        echo "  sysctl -w net.ipv4.ip_forward=1"
         if [[ -n "$ports" && -n "$tun_remote" ]]; then
             IFS=',' read -ra _ports <<< "$ports"
             local p
@@ -4989,6 +5014,10 @@ fi
 if [[ "${1:-}" == "--refresh-templates" ]]; then
     refresh_runtime_templates && echo -e "${GREEN}[+] Templates updated.${NC}"
     repair_all_instances
+    exit 0
+fi
+if [[ "${1:-}" == "--fix-tunnels" ]]; then
+    fix_all_tunnels
     exit 0
 fi
 if [[ "${1:-}" == "--role" && -n "${2:-}" ]]; then
