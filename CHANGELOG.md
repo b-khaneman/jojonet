@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.3
+- **Hysteria2 Hop Port hardened / debug pass**
+  - Require `nft` or `iptables` on Kharej before hop deploy (hard fail)
+  - Auto-open UDP hop range in UFW / firewalld when active
+  - Pre-flight: large-range warning, first-port busy warning
+  - Random hop interval option (`15s-45s` → minHopInterval/maxHopInterval)
+  - Repair rebuilds stale YAML if hop range/interval missing
+  - Runner refuses start without firewall tools when hop enabled
+  - Healthcheck + pairing card show hop status
+  - Env: `JOJONET_HY2_HOP_RANGE`, `JOJONET_HY2_HOP_INTERVAL`
+  - Fix interval normalize under `set -e` (`((sec<5))` edge case)
+
 ## 1.4.2
 - **Hysteria2 Hop Port** (native): UDP port range hopping so traffic is not stuck on one filtered port
   - Prompt at setup (default range `20000-50000`, interval `30s`)

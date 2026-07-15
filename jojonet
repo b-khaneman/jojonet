@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.4.2"
+readonly JOJONET_VERSION="1.4.3"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -566,6 +566,17 @@ healthcheck_tunnel() {
             else
                 echo -e "  process: ${RED}not running${NC}"
             fi
+            if [[ -n "${HyHopRange:-}" ]]; then
+                echo -e "  hop:     ${GREEN}${HyHopRange}${NC} every ${HyHopInterval:-$DEFAULT_HY2_HOP_INTERVAL}"
+                if [[ "${Role:-}" == "kharej" ]]; then
+                    if hy2_hop_has_firewall_tools; then
+                        echo -e "  hop fw:  ${GREEN}nft/iptables available${NC}"
+                        ok=$((ok + 1))
+                    else
+                        echo -e "  hop fw:  ${RED}missing nft/iptables — hop will fail${NC}"
+                    fi
+                fi
+            fi
             ;;
     esac
     (( ok > 0 ))
@@ -642,9 +653,28 @@ preflight_tunnel_check() {
 
     echo -e "${CYAN}=== Pre-flight check ===${NC}"
 
-    if [[ "$mode" == "wireguard" && -n "$extra_port" ]] && wg_udp_port_in_use "$extra_port"; then
+    if [[ "$mode" == "wireguard" && -n "$extra_port" ]] && [[ "$extra_port" =~ ^[0-9]+$ ]] && wg_udp_port_in_use "$extra_port"; then
         echo -e "  ${YELLOW}[!] UDP $extra_port in use (e.g. wg0) — pick another port${NC}"
         warns=$((warns + 1))
+    fi
+
+    if [[ "$mode" == "hysteria2" && -n "$extra_port" && "$extra_port" =~ - ]]; then
+        local span
+        span=$(hy2_hop_span "$extra_port" 2>/dev/null || echo 0)
+        if ! hy2_hop_has_firewall_tools; then
+            echo -e "  ${RED}[!] Hop Port needs nft or iptables on this server${NC}"
+            issues=$((issues + 1))
+        else
+            echo -e "  ${GREEN}[+] Hop Port tools: nft/iptables OK${NC}"
+        fi
+        if (( span > 15000 )); then
+            echo -e "  ${YELLOW}[!] Large hop range (${span} ports) — HY2 DNAT may be heavy; consider 10000-wide${NC}"
+            warns=$((warns + 1))
+        fi
+        if [[ "$role" == "kharej" ]] && hy2_first_port_busy "$extra_port"; then
+            echo -e "  ${YELLOW}[!] First port of hop range may be busy — HY2 listens on that port${NC}"
+            warns=$((warns + 1))
+        fi
     fi
 
     if ip link show GRETun >/dev/null 2>&1; then
@@ -710,6 +740,10 @@ show_pairing_card() {
     case "$mode" in
         paqet|hysteria2)
             echo -e "  ${CYAN}Pair ID:${NC}      ${subnet_byte}  (keys/auth sync from IP pair)"
+            if [[ "$mode" == "hysteria2" && -n "${HyHopRange:-}" ]]; then
+                echo -e "  ${CYAN}Hop Port:${NC}    ${HyHopRange}  every ${HyHopInterval:-$DEFAULT_HY2_HOP_INTERVAL}"
+                echo -e "  ${YELLOW}Peer MUST use the same hop range${NC}"
+            fi
             ;;
         *)
             if [[ "$mode" == "tun_tcp" ]]; then
@@ -957,6 +991,8 @@ Usage:
 Environment:
   JOJONET_ROLE=iran|kharej
   JOJONET_WEBHOOK_URL=...              Notify on tunnel up/down
+  JOJONET_HY2_HOP_RANGE=20000-50000    Force Hysteria2 hop range
+  JOJONET_HY2_HOP_INTERVAL=30s         Or random: 15s-45s
   JOJONET_ALLOW_UNSIGNED=1
   JOJONET_QUICK_PROBE_MTU=1
 
@@ -1654,7 +1690,7 @@ repair_single_config() {
             echo -e "${YELLOW}[*] Repaired Paqet YAML for [$name]${NC}"
         fi
     elif [[ "${mode:-gre}" == "hysteria2" ]]; then
-        local yaml tcp_port key_dir role rem fwd sni hop_range hop_interval
+        local yaml tcp_port key_dir role rem fwd sni hop_range hop_interval need_rebuild=0
         yaml=$(conf_get_field "$conf" "HyYaml")
         tcp_port=$(conf_get_field "$conf" "TcpPort")
         key_dir=$(conf_get_field "$conf" "KeyDir")
@@ -1668,19 +1704,35 @@ repair_single_config() {
         if [[ -z "$hop_range" && "$tcp_port" =~ ^[0-9]+-[0-9]+$ ]]; then
             hop_range="$tcp_port"
         fi
-        if [[ -n "$key_dir" && -f "$key_dir/hy2.auth" ]]; then
-            if [[ -z "$yaml" || ! -f "$yaml" || ! -s "$yaml" ]]; then
-                yaml=$(build_hy2_runtime_config "$name" "$role" "$rem" \
-                    "${tcp_port:-$DEFAULT_HY2_PORT}" "$key_dir" "$fwd" "$sni" \
-                    "$hop_range" "$hop_interval") && changed=1
-                if [[ -n "$yaml" ]]; then
-                    if grep -q '^HyYaml=' "$conf"; then
-                        sed -i "s|^HyYaml=.*|HyYaml=\"$yaml\"|" "$conf"
-                    else
-                        echo "HyYaml=\"$yaml\"" >> "$conf"
-                    fi
-                    echo -e "${YELLOW}[*] Repaired Hysteria2 YAML for [$name]${NC}"
+        if [[ -z "$yaml" || ! -f "$yaml" || ! -s "$yaml" ]]; then
+            need_rebuild=1
+        elif [[ -n "$hop_range" ]]; then
+            # YAML stale if missing hop range or hopInterval
+            if ! grep -qE "listen: :${hop_range}|server: .*:${hop_range}" "$yaml" 2>/dev/null; then
+                need_rebuild=1
+            elif [[ "$role" == "iran" ]] && ! grep -qE 'hopInterval:|minHopInterval:' "$yaml" 2>/dev/null; then
+                need_rebuild=1
+            fi
+        fi
+        if (( need_rebuild == 1 )) && [[ -n "$key_dir" && -f "$key_dir/hy2.auth" ]]; then
+            yaml=$(build_hy2_runtime_config "$name" "$role" "$rem" \
+                "${tcp_port:-$DEFAULT_HY2_PORT}" "$key_dir" "$fwd" "$sni" \
+                "$hop_range" "$hop_interval") && changed=1
+            if [[ -n "$yaml" ]]; then
+                if grep -q '^HyYaml=' "$conf"; then
+                    sed -i "s|^HyYaml=.*|HyYaml=\"$yaml\"|" "$conf"
+                else
+                    echo "HyYaml=\"$yaml\"" >> "$conf"
                 fi
+                if [[ -n "$hop_range" ]]; then
+                    if grep -q '^HyHopRange=' "$conf"; then
+                        sed -i "s|^HyHopRange=.*|HyHopRange=\"$hop_range\"|" "$conf"
+                    else
+                        echo "HyHopRange=\"$hop_range\"" >> "$conf"
+                    fi
+                    [[ "$role" == "kharej" ]] && ensure_hy2_hop_firewall "$hop_range" || true
+                fi
+                echo -e "${YELLOW}[*] Repaired Hysteria2 YAML for [$name]${hop_range:+ (hop $hop_range)}${NC}"
             fi
         fi
     fi
@@ -2518,6 +2570,14 @@ deploy_tunnel() {
         if [[ -n "$hy_hop_range" ]]; then
             hy_hop_interval=$(normalize_hy2_hop_interval "${hy_hop_interval:-$DEFAULT_HY2_HOP_INTERVAL}")
             tcp_port="$hy_hop_range"
+            export HyHopRange="$hy_hop_range"
+            export HyHopInterval="$hy_hop_interval"
+            if [[ "$role_conf" == "kharej" ]]; then
+                ensure_hy2_hop_firewall "$hy_hop_range" || return 1
+            fi
+        else
+            export HyHopRange=""
+            export HyHopInterval=""
         fi
         hy_yaml=$(build_hy2_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
             "$fwd_port" "$hy_sni" "$hy_hop_range" "$hy_hop_interval") || return 1
@@ -4347,9 +4407,20 @@ DEFAULT_HY2_HOP_RANGE="20000-50000"
 DEFAULT_HY2_HOP_INTERVAL="30s"
 
 normalize_hy2_hop_interval() {
-    local raw="${1:-$DEFAULT_HY2_HOP_INTERVAL}" sec=""
+    local raw="${1:-$DEFAULT_HY2_HOP_INTERVAL}" sec="" a b
     raw="${raw//' '/}"
     [[ -z "$raw" ]] && { echo "$DEFAULT_HY2_HOP_INTERVAL"; return 0; }
+
+    # Random interval form: 15s-45s or 15-45
+    if [[ "$raw" =~ ^([0-9]+)s?-([0-9]+)s?$ ]]; then
+        a="${BASH_REMATCH[1]}"
+        b="${BASH_REMATCH[2]}"
+        if (( a < 5 )); then a=5; fi
+        if (( b < a )); then b=$((a + 15)); fi
+        echo "${a}s-${b}s"
+        return 0
+    fi
+
     if [[ "$raw" =~ ^[0-9]+$ ]]; then
         sec="$raw"
     elif [[ "$raw" =~ ^([0-9]+)s$ ]]; then
@@ -4360,8 +4431,59 @@ normalize_hy2_hop_interval() {
         echo "$DEFAULT_HY2_HOP_INTERVAL"
         return 1
     fi
-    (( sec < 5 )) && sec=5
+    if (( sec < 5 )); then
+        sec=5
+    fi
     echo "${sec}s"
+}
+
+hy2_hop_span() {
+    local range="$1" a b
+    [[ "$range" =~ ^([0-9]+)-([0-9]+)$ ]] || { echo 0; return 1; }
+    a="${BASH_REMATCH[1]}"
+    b="${BASH_REMATCH[2]}"
+    echo $(( b - a + 1 ))
+}
+
+hy2_hop_has_firewall_tools() {
+    command -v nft >/dev/null 2>&1 || command -v iptables >/dev/null 2>&1
+}
+
+ensure_hy2_hop_firewall() {
+    local range="$1" a b ufw_range
+    [[ "$range" =~ ^([0-9]+)-([0-9]+)$ ]] || return 0
+    a="${BASH_REMATCH[1]}"
+    b="${BASH_REMATCH[2]}"
+    if ! hy2_hop_has_firewall_tools; then
+        log_error "Hop Port needs nftables (nft) or iptables on Kharej."
+        return 1
+    fi
+    # Open UDP range in UFW when enabled
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+        ufw_range="${a}:${b}/udp"
+        if ! ufw status 2>/dev/null | grep -qE "${a}:${b}/udp|${a}:${b} .*UDP"; then
+            ufw allow proto udp from any to any port "${a}:${b}" comment 'jojonet-hy2-hop' >/dev/null 2>&1 || \
+                ufw allow "${a}:${b}/udp" >/dev/null 2>&1 || \
+                log_warn "UFW active — open UDP ${a}-${b} manually: ufw allow ${a}:${b}/udp"
+        fi
+    fi
+    # firewalld
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then
+        firewall-cmd --permanent --add-port="${a}-${b}/udp" >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+hy2_first_port_busy() {
+    local range="$1" first
+    [[ "$range" =~ ^([0-9]+)- ]] || return 1
+    first="${BASH_REMATCH[1]}"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ulnH 2>/dev/null | awk -v p=":$first" '$4 ~ p"$" { found=1 } END { exit !found }'
+        return $?
+    fi
+    return 1
 }
 
 validate_hy2_port_or_range() {
@@ -4449,9 +4571,16 @@ build_hy2_runtime_config() {
         listen_addr=":${hop_range}"
         server_addr="${rem}:${hop_range}"
         hop_interval=$(normalize_hy2_hop_interval "${hop_interval:-$DEFAULT_HY2_HOP_INTERVAL}")
-        hop_block="transport:
+        if [[ "$hop_interval" =~ ^([0-9]+)s-([0-9]+)s$ ]]; then
+            hop_block="transport:
+  udp:
+    minHopInterval: ${BASH_REMATCH[1]}s
+    maxHopInterval: ${BASH_REMATCH[2]}s"
+        else
+            hop_block="transport:
   udp:
     hopInterval: ${hop_interval}"
+        fi
     else
         validate_hy2_port_or_range "$port" || return 1
         listen_addr=":${port}"
@@ -4569,6 +4698,18 @@ case "$ACTION" in
         stop_hy2
         [[ -x "$HY2_BIN" ]] || { echo "hysteria binary missing" >&2; exit 1; }
         [[ -f "$yaml" ]] || { echo "yaml missing: $yaml" >&2; exit 1; }
+        # Hop Port (Linux): server needs nft or iptables for UDP range redirect
+        if [[ "$Role" == "kharej" ]]; then
+            _hop="${HyHopRange:-}"
+            [[ -z "$_hop" && "${TcpPort:-}" =~ ^[0-9]+-[0-9]+$ ]] && _hop="$TcpPort"
+            if [[ -n "$_hop" && "$_hop" =~ - ]]; then
+                if ! command -v nft >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
+                    echo "ERROR: Hop Port requires nftables (nft) or iptables" >&2
+                    exit 1
+                fi
+                echo "[jojonet-hy2:${Name}] Hop Port enabled: $_hop"
+            fi
+        fi
         if [[ "$Role" == "kharej" ]]; then
             exec "$HY2_BIN" server -c "$yaml"
         else
@@ -4633,8 +4774,10 @@ quick_add_tunnel_hy2() {
     local peer_ip="${1:-}"
     local ins_name="" role_conf="" loc_ip="" rem_ip=""
     local fwd_port="" key_dir="" hy_port="$DEFAULT_HY2_PORT" sni="$DEFAULT_HY2_SNI"
-    local existing="" hy_yaml="" hop_enable="y" hop_range="$DEFAULT_HY2_HOP_RANGE"
-    local hop_interval="$DEFAULT_HY2_HOP_INTERVAL"
+    local existing="" hy_yaml="" hop_enable="y"
+    local hop_range="${JOJONET_HY2_HOP_RANGE:-$DEFAULT_HY2_HOP_RANGE}"
+    local hop_interval="${JOJONET_HY2_HOP_INTERVAL:-$DEFAULT_HY2_HOP_INTERVAL}"
+    local hop_style="1" span=0
 
     set +e
     command -v clear >/dev/null && clear
@@ -4676,10 +4819,16 @@ quick_add_tunnel_hy2() {
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "hysteria2") || { set -e; return 1; }
 
     echo ""
-    echo -e "${CYAN}Hop Port${NC} — UDP range hopping (بسیار موثر وقتی UDP روی یک پورت محدود می‌شود)"
-    echo -e "  Server listens on full range; client rotates ports every N seconds."
-    read -r -p "Enable Hop Port? [Y/n]: " hop_enable
-    hop_enable=$(printf '%s' "${hop_enable:-y}" | tr '[:upper:]' '[:lower:]')
+    echo -e "${CYAN}Hop Port${NC} — UDP range hopping (ضد محدودیت پورت UDP)"
+    echo -e "  Kharej: listen on full range (needs nft/iptables)"
+    echo -e "  Iran:   rotates UDP port every N seconds (transparent to traffic)"
+    if [[ -n "${JOJONET_HY2_HOP_RANGE:-}" ]]; then
+        hop_enable="y"
+        echo -e "  ${YELLOW}Env JOJONET_HY2_HOP_RANGE=${JOJONET_HY2_HOP_RANGE}${NC}"
+    else
+        read -r -p "Enable Hop Port? [Y/n]: " hop_enable
+        hop_enable=$(printf '%s' "${hop_enable:-y}" | tr '[:upper:]' '[:lower:]')
+    fi
 
     if [[ "$hop_enable" == "n" || "$hop_enable" == "no" ]]; then
         hop_range=""
@@ -4700,6 +4849,13 @@ quick_add_tunnel_hy2() {
             sleep 2; set -e; return 1
         fi
     else
+        if [[ "$role_conf" == "kharej" ]] && ! hy2_hop_has_firewall_tools; then
+            echo -e "${RED}[!] Hop Port requires nftables (nft) or iptables on Kharej.${NC}"
+            echo -e "${YELLOW}    Install: apt install iptables  OR  apt install nftables${NC}"
+            sleep 3
+            set -e
+            return 1
+        fi
         read -r -p "Hop port range [$hop_range]: " _hr
         hop_range=${_hr:-$hop_range}
         hop_range="${hop_range//' '/}"
@@ -4707,8 +4863,20 @@ quick_add_tunnel_hy2() {
             echo -e "${RED}[!] Invalid range. Example: 20000-50000${NC}"
             sleep 2; set -e; return 1
         fi
-        read -r -p "Hop interval [${hop_interval}] (min 5s): " _hi
-        hop_interval=$(normalize_hy2_hop_interval "${_hi:-$hop_interval}")
+        span=$(hy2_hop_span "$hop_range")
+        if (( span > 15000 )); then
+            echo -e "${YELLOW}[!] Wide range (${span} ports). Prefer e.g. 20000-30000 for lighter DNAT.${NC}"
+        fi
+        echo -e "  Hop timing: 1) fixed interval  2) random interval (harder to detect)"
+        read -r -p "Choose [1/2] (default 1): " hop_style
+        if [[ "${hop_style:-1}" == "2" ]]; then
+            hop_interval="15s-45s"
+            read -r -p "Random hop min-max [${hop_interval}]: " _hi
+            hop_interval=$(normalize_hy2_hop_interval "${_hi:-$hop_interval}")
+        else
+            read -r -p "Hop interval [${hop_interval}] (min 5s): " _hi
+            hop_interval=$(normalize_hy2_hop_interval "${_hi:-$hop_interval}")
+        fi
         hy_port="$hop_range"
         if [[ "$role_conf" == "iran" ]]; then
             fwd_port=$(allocate_iran_forward_port "443")
@@ -4736,6 +4904,7 @@ quick_add_tunnel_hy2() {
     echo -e "  Peer:  $rem_ip"
     if [[ -n "$hop_range" ]]; then
         echo -e "  Hop:   ${GREEN}ON${NC}  range ${hop_range}  every ${hop_interval}"
+        [[ "$role_conf" == "kharej" ]] && echo -e "  Note:  server listens on first port + DNAT for the rest"
     else
         echo -e "  Port:  UDP $hy_port (fixed)"
     fi
@@ -4764,13 +4933,16 @@ quick_add_tunnel_hy2() {
         fi
         echo -e "${GREEN}[+] Hysteria2 [$ins_name] is up.${NC}"
         if [[ -n "$hop_range" ]]; then
-            hint "Peer must use the SAME hop range: $hop_range (interval $hop_interval)"
+            hint "Peer MUST use the SAME hop range: $hop_range (interval $hop_interval)"
+            [[ "$role_conf" == "kharej" ]] && hint "If UFW/firewalld blocks UDP, range ${hop_range} was attempted to open"
         fi
         [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --hy2 $loc_ip"
+        unset HyHopRange HyHopInterval HySni JOJONET_HY2_SNI 2>/dev/null || true
         sleep 2
         set -e
         return 0
     fi
+    unset HyHopRange HyHopInterval HySni JOJONET_HY2_SNI 2>/dev/null || true
     sleep 3
     set -e
     return 1
