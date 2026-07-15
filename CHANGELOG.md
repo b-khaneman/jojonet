@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.8
+- **Manage → Change peer IP**: replace tunnel with new Iran/Kharej peer (recomputes subnet, overlay, keys)
+- CLI: `sudo jojonet --change-peer <NAME> <NEW_PEER_IP>`
+
 ## 1.2.7
 - Fix `--list-tunnels --detail` crash (set -e + empty optional fields)
 - Detail card shows suggested ping target (peer overlay IP)

@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.7"
+readonly JOJONET_VERSION="1.2.8"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -578,7 +578,7 @@ Usage:
   sudo jojonet --check-update          Check for new version only
   sudo jojonet --stealth               Enable stealth for this session
   sudo jojonet --refresh-templates     Regenerate systemd runner scripts
-  sudo jojonet --fix-tunnels             Repair overlay IPs + restart all tunnels
+  sudo jojonet --change-peer <NAME> <IP>  Change tunnel peer IP and redeploy
   sudo jojonet --list-tunnels            List all tunnels (map view)
   sudo jojonet --list-tunnels --detail   Full details per tunnel
   sudo jojonet --export-keys <PEER> [FILE]  Export TUN/Paqet keys (no SSH)
@@ -4292,6 +4292,253 @@ restart_all_tunnels() {
     sleep 2
 }
 
+stop_tunnel_runtime() {
+    local name="$1" unit=""
+    unit=$(tunnel_service_unit "$name")
+    systemctl stop "$unit" >/dev/null 2>&1 || true
+    pkill -f "tun-server.*-device ${name}" >/dev/null 2>&1 || true
+    pkill -f "tun-client.*-device ${name}" >/dev/null 2>&1 || true
+    pkill -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 || true
+    ip link show "$name" >/dev/null 2>&1 && ip link delete "$name" >/dev/null 2>&1 || true
+    nft list table ip "jojonet_$name" >/dev/null 2>&1 && \
+        nft delete table ip "jojonet_$name" >/dev/null 2>&1 || true
+}
+
+tunnel_peer_setup_cmd() {
+    local mode="$1" loc_ip="$2"
+    case "$mode" in
+        tun_tcp)     printf 'sudo jojonet --tun-tcp %s' "$loc_ip" ;;
+        paqet)       printf 'sudo jojonet --paqet %s' "$loc_ip" ;;
+        vxlan)       printf 'sudo jojonet --vxlan %s' "$loc_ip" ;;
+        wireguard)   printf 'sudo jojonet --wg %s' "$loc_ip" ;;
+        hysteria2)   printf 'sudo jojonet --hy2 %s' "$loc_ip" ;;
+        *)           printf 'sudo jojonet %s' "$loc_ip" ;;
+    esac
+}
+
+# Replace tunnel peer IP: recomputes subnet/overlay/keys and redeploys same tunnel name
+change_tunnel_peer_ip() {
+    local tunnel_name="${1:-}" new_peer="${2:-}"
+    local conf="" mode="" role="" loc_ip="" rem_ip="" subnet_byte=""
+    local tun_ip="" tun_remote="" mtu="" fwd_port="" tcp_port="" key_dir=""
+    local tun_server="" tun_client="" fwd_proto="" pair_id="" backup="" existing=""
+    local peer_label="" old_peer="" Name="" TunnelMode="" Role="" Local_IP="" Remote_IP=""
+    local Subnet_Byte="" Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" ForwardProto=""
+    local old_subnet="" old_tun_client="" old_tun_server=""
+
+    set +e
+    [[ -n "$tunnel_name" ]] || read -r -p "Tunnel name: " tunnel_name
+    tunnel_name="${tunnel_name// /}"
+    conf="$INSTANCES_DIR/$tunnel_name.conf"
+    if [[ ! -r "$conf" ]]; then
+        echo -e "${RED}[!] Tunnel not found: $tunnel_name${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    if ! load_instance_config "$conf"; then
+        echo -e "${RED}[!] Invalid config: $conf${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    mode="${TunnelMode:-gre}"
+    role="${Role:-}"
+    old_peer="${Remote_IP:-}"
+    mtu="${Suggested_MTU:-$DEFAULT_MTU_FALLBACK}"
+    fwd_port="${Ports:-}"
+    tcp_port="${TcpPort:-$DEFAULT_TCP_PORT}"
+    fwd_proto="${ForwardProto:-tcp}"
+
+    if [[ "$role" == "iran" ]]; then
+        peer_label="Kharej / خارج"
+    else
+        peer_label="Iran / ایران"
+    fi
+
+    echo -e "\n${CYAN}=== Change peer IP [$tunnel_name] ===${NC}"
+    echo -e "  Mode:         $(tunnel_mode_label "$mode")"
+    echo -e "  This server:  ${Local_IP:-?}  ($(tunnel_role_label "$role"))"
+    echo -e "  Current peer: ${old_peer}  (${peer_label})"
+
+    [[ -n "$new_peer" ]] || read -r -p "New ${peer_label} IP: " new_peer
+    new_peer="${new_peer// /}"
+    if [[ -z "$new_peer" ]] || ! validate_ipv4 "$new_peer"; then
+        echo -e "${RED}[!] Invalid IP.${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+    if [[ "$new_peer" == "$old_peer" ]]; then
+        echo -e "${YELLOW}[!] Same peer IP — no change.${NC}"
+        sleep 2
+        set -e
+        return 0
+    fi
+
+    if auto_detect_network; then
+        loc_ip="$DETECTED_IP"
+        [[ "$loc_ip" != "${Local_IP:-}" ]] && \
+            echo -e "${YELLOW}[*] Local IP updated: ${Local_IP:-?} -> $loc_ip${NC}"
+    else
+        loc_ip="${Local_IP:-}"
+    fi
+    if [[ -z "$loc_ip" ]] || ! validate_ipv4 "$loc_ip"; then
+        echo -e "${RED}[!] Cannot resolve local IP.${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+    if [[ "$new_peer" == "$loc_ip" ]]; then
+        echo -e "${RED}[!] Peer IP cannot be the same as this server.${NC}"
+        sleep 2
+        set -e
+        return 1
+    fi
+
+    if existing=$(find_tunnel_for_peer "$new_peer" "$mode"); then
+        if [[ "$existing" != "$tunnel_name" ]]; then
+            echo -e "${RED}[!] Another tunnel [$existing] already uses peer $new_peer.${NC}"
+            echo -e "${YELLOW}    Delete it first or pick a different peer.${NC}"
+            sleep 3
+            set -e
+            return 1
+        fi
+    fi
+
+    rem_ip="$new_peer"
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+    old_subnet="${Subnet_Byte:-}"
+    old_tun_client="${Tun_Client_IP:-}"
+    old_tun_server="${Tun_Server_IP:-}"
+
+    case "$mode" in
+        tun_tcp)
+            tcp_port="${TcpPort:-$DEFAULT_TCP_PORT}"
+            key_dir=$(ensure_tun_tcp_keys "$subnet_byte" "$rem_ip") || {
+                echo -e "${RED}[!] TUN/TCP key setup failed.${NC}"
+                sleep 2
+                set -e
+                return 1
+            }
+            resolve_tunnel_ips "$role" "$subnet_byte" "tun_tcp"
+            tun_ip="$Tun_IP"
+            tun_remote="$Tun_Remote_IP_Raw"
+            tun_server="$Tun_Server_IP"
+            tun_client="$Tun_Client_IP"
+            ;;
+        paqet)
+            tcp_port="${TcpPort:-$DEFAULT_PAQET_PORT}"
+            key_dir=$(ensure_paqet_secret "$subnet_byte" "$rem_ip") || {
+                echo -e "${RED}[!] Paqet secret setup failed.${NC}"
+                sleep 2
+                set -e
+                return 1
+            }
+            tun_ip=""
+            tun_remote=""
+            tun_server=""
+            tun_client=""
+            ;;
+        vxlan)
+            tcp_port="${VxlanPort:-${TcpPort:-$DEFAULT_VXLAN_PORT}}"
+            key_dir="${KeyDir:-}"
+            resolve_tunnel_ips "$role" "$subnet_byte" "vxlan"
+            tun_ip="$Tun_IP"
+            tun_remote="$Tun_Remote_IP_Raw"
+            tun_server="$Tun_Server_IP"
+            tun_client="$Tun_Client_IP"
+            ;;
+        wireguard)
+            tcp_port="${TcpPort:-$DEFAULT_WG_PORT}"
+            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+            key_dir=$(ensure_wg_keys "$pair_id" "$rem_ip" "$role") || {
+                echo -e "${RED}[!] WireGuard key setup failed.${NC}"
+                sleep 2
+                set -e
+                return 1
+            }
+            resolve_tunnel_ips "$role" "$subnet_byte" "wireguard"
+            tun_ip="$Tun_IP"
+            tun_remote="$Tun_Remote_IP_Raw"
+            tun_server="$Tun_Server_IP"
+            tun_client="$Tun_Client_IP"
+            ;;
+        hysteria2)
+            tcp_port="${TcpPort:-$DEFAULT_HY2_PORT}"
+            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+            key_dir=$(ensure_hy2_auth "$pair_id" "$rem_ip") || {
+                echo -e "${RED}[!] Hysteria2 auth setup failed.${NC}"
+                sleep 2
+                set -e
+                return 1
+            }
+            tun_ip=""
+            tun_remote=""
+            tun_server=""
+            tun_client=""
+            ;;
+        *)
+            key_dir="${KeyDir:-}"
+            resolve_tunnel_ips "$role" "$subnet_byte" "gre"
+            tun_ip="$Tun_IP"
+            tun_remote="$Tun_Remote_IP_Raw"
+            tun_server="$Tun_Server_IP"
+            tun_client="$Tun_Client_IP"
+            ;;
+    esac
+
+    echo -e "\n${CYAN}--- New tunnel plan (replaces current) ---${NC}"
+    echo -e "  Peer:      ${old_peer}  ->  ${GREEN}${rem_ip}${NC}"
+    echo -e "  Subnet:    ${old_subnet:-?}  ->  ${GREEN}${subnet_byte}${NC}"
+    if [[ "$mode" =~ ^(gre|vxlan|wireguard|tun_tcp)$ ]]; then
+        echo -e "  Overlay:   ${old_tun_client:-?} (Iran) <-> ${old_tun_server:-?} (Kharej)"
+        echo -e "          -> ${GREEN}${tun_client} (Iran) <-> ${tun_server} (Kharej)${NC}"
+    fi
+    [[ -n "$fwd_port" ]] && echo -e "  Forward:   $fwd_port (kept)"
+    echo -e "  MTU:       $mtu (kept)"
+
+    read -r -p "Apply change and redeploy tunnel? [y/N]: " _confirm
+    _confirm=$(echo "$_confirm" | tr '[:upper:]' '[:lower:]')
+    if [[ "$_confirm" != "y" ]]; then
+        echo -e "${YELLOW}Cancelled.${NC}"
+        sleep 1
+        set -e
+        return 0
+    fi
+
+    backup=$(mktemp /tmp/jojonet-peer-backup.XXXXXX) || backup=""
+    [[ -n "$backup" ]] && cp "$conf" "$backup"
+
+    echo -e "${YELLOW}[*] Stopping current tunnel...${NC}"
+    stop_tunnel_runtime "$tunnel_name"
+
+    if deploy_tunnel "$tunnel_name" "$role" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$tun_ip" "$tun_remote" "$mtu" "$fwd_port" "$mode" "$tcp_port" "$key_dir" \
+        "$tun_server" "$tun_client" "$fwd_proto"; then
+        [[ -n "$backup" ]] && rm -f "$backup"
+        echo -e "${GREEN}[+] Peer IP updated. Tunnel [$tunnel_name] redeployed.${NC}"
+        hint "Run on the NEW peer server: $(tunnel_peer_setup_cmd "$mode" "$loc_ip")"
+        sleep 2
+        set -e
+        return 0
+    fi
+
+    echo -e "${RED}[!] Redeploy failed.${NC}"
+    if [[ -n "$backup" && -f "$backup" ]]; then
+        cp "$backup" "$conf"
+        rm -f "$backup"
+        echo -e "${YELLOW}[*] Restored previous config; trying restart...${NC}"
+        restart_tunnel "$tunnel_name" || true
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
 ensure_boot_persistence() {
     shopt -s nullglob
     local files=("$INSTANCES_DIR"/*.conf)
@@ -4627,7 +4874,8 @@ manage_tunnels() {
         menu_line "2) Troubleshoot, Logs & Restart"
         menu_line "3) Restart ALL Tunnels"
         menu_line "4) Enable Boot Persistence"
-        menu_line "5) Delete Tunnel"
+        menu_line "5) Change peer IP (Iran ↔ Kharej)"
+        menu_line "6) Delete Tunnel"
         menu_line "0) Back to Main Menu"
         echo ""
 
@@ -4693,6 +4941,12 @@ manage_tunnels() {
             3) restart_all_tunnels ;;
             4) ensure_boot_persistence ;;
             5)
+                local chg_name="" chg_peer=""
+                read -r -p "Tunnel name to change peer: " chg_name
+                read -r -p "New peer IP (Kharej on Iran / Iran on Kharej): " chg_peer
+                change_tunnel_peer_ip "$chg_name" "$chg_peer" || true
+                ;;
+            6)
                 local REM_NAME
                 read -r -p "Tunnel name to delete: " REM_NAME
                 local rem_conf="$INSTANCES_DIR/$REM_NAME.conf"
@@ -4943,7 +5197,7 @@ main_menu() {
         menu_line "5) WireGuard Tunnel (low latency)"
         menu_line "6) Hysteria2 Tunnel (high speed)"
         menu_line "7) Advanced GRE Setup"
-        menu_line "8) Manage Tunnels (map + restart/delete)"
+        menu_line "8) Manage Tunnels (map / change peer / restart / delete)"
         menu_line "9) Network Status"
         menu_line "10) Stealth Mode (history + quiet)"
         menu_line "11) Healthcheck tunnel"
@@ -5022,6 +5276,10 @@ fi
 if [[ "${1:-}" == "--fix-tunnels" ]]; then
     fix_all_tunnels
     exit 0
+fi
+if [[ "${1:-}" == "--change-peer" && -n "${2:-}" && -n "${3:-}" ]]; then
+    change_tunnel_peer_ip "$2" "$3"
+    exit $?
 fi
 if [[ "${1:-}" == "--role" && -n "${2:-}" ]]; then
     export JOJONET_ROLE="$2"
