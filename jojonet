@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.4.0"
+readonly JOJONET_VERSION="1.4.1"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -521,15 +521,44 @@ healthcheck_tunnel() {
             fi
             ;;
         tun_tcp)
-            if pgrep -f "tun-(server|client).*${name}" >/dev/null 2>&1; then
+            if pgrep -f "tun-(server|client).*${name}" >/dev/null 2>&1 || \
+               ip link show "$name" >/dev/null 2>&1; then
+                echo -e "  process: ${GREEN}running${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  process: ${RED}not running${NC}"
+            fi
+            if [[ -n "${Tun_Remote_IP_Raw:-}" ]]; then
+                if ping -c1 -W2 "$Tun_Remote_IP_Raw" >/dev/null 2>&1; then
+                    local _ms
+                    _ms=$(ping -c1 -W2 "$Tun_Remote_IP_Raw" 2>/dev/null | grep -oE 'time=[0-9.]+' | head -1 | cut -d= -f2)
+                    echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${GREEN}ok${NC}${_ms:+ (${_ms} ms)}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  Kharej ping ${Tun_Remote_IP_Raw}: ${YELLOW}fail${NC}"
+                fi
+            elif [[ "${Role:-}" == "kharej" && -n "${Tun_Client_IP:-}" ]]; then
+                if ping -c1 -W2 "$Tun_Client_IP" >/dev/null 2>&1; then
+                    local _ms
+                    _ms=$(ping -c1 -W2 "$Tun_Client_IP" 2>/dev/null | grep -oE 'time=[0-9.]+' | head -1 | cut -d= -f2)
+                    echo -e "  Iran ping ${Tun_Client_IP}: ${GREEN}ok${NC}${_ms:+ (${_ms} ms)}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  Iran ping ${Tun_Client_IP}: ${YELLOW}fail${NC}"
+                fi
+            fi
+            ;;
+        paqet)
+            if pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1; then
                 echo -e "  process: ${GREEN}running${NC}"
                 ok=$((ok + 1))
             else
                 echo -e "  process: ${RED}not running${NC}"
             fi
             ;;
-        paqet)
-            if pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1; then
+        hysteria2)
+            if pgrep -f "hysteria.*${name}" >/dev/null 2>&1 || \
+               pgrep -f "hysteria.*${name}\\.yaml" >/dev/null 2>&1; then
                 echo -e "  process: ${GREEN}running${NC}"
                 ok=$((ok + 1))
             else
@@ -573,6 +602,37 @@ allocate_iran_forward_port() {
     return 1
 }
 
+tunnel_net_prefix_for_mode() {
+    case "${1:-gre}" in
+        tun_tcp) echo "$TUN_TCP_NET_PREFIX" ;;
+        vxlan) echo "$VXLAN_NET_PREFIX" ;;
+        wireguard) echo "$WG_NET_PREFIX" ;;
+        *) echo "$TUNNEL_NET_PREFIX" ;;
+    esac
+}
+
+resolve_iran_forward_port() {
+    local preferred="${1:-443}" current="${2:-}" first="" allocated=""
+    if [[ -z "$current" ]]; then
+        allocate_iran_forward_port "$preferred"
+        return $?
+    fi
+    first="${current%%,*}"
+    first="${first// /}"
+    if ! iran_dnat_port_in_use "$first"; then
+        echo "$current"
+        return 0
+    fi
+    allocated=$(allocate_iran_forward_port "$first") || allocated="$first"
+    if [[ "$current" == "$first" ]]; then
+        echo "$allocated"
+    elif [[ "$allocated" != "$first" ]]; then
+        echo "${current/$first/$allocated}"
+    else
+        echo "$current"
+    fi
+}
+
 preflight_tunnel_check() {
     local mode="${1:-gre}" role="${2:-}" loc_ip="${3:-}" rem_ip="${4:-}" \
         subnet_byte="${5:-}" tun_ip="${6:-}" extra_port="${7:-}"
@@ -606,12 +666,17 @@ preflight_tunnel_check() {
         }
     fi
 
-    if [[ "$role" == "iran" && "$mode" == "gre" ]]; then
-        local fp="${8:-443}"
-        if iran_dnat_port_in_use "$fp"; then
-            echo -e "  ${YELLOW}[!] Forward port $fp already used — use allocate_iran_forward_port or Advanced setup${NC}"
-            warns=$((warns + 1))
-        fi
+    if [[ "$role" == "iran" ]]; then
+        local fp="${8:-443}" first="${fp%%,*}"
+        first="${first// /}"
+        case "$mode" in
+            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2)
+                if [[ -n "$first" ]] && iran_dnat_port_in_use "$first"; then
+                    echo -e "  ${YELLOW}[!] Forward port $first already used — will auto-pick alternate${NC}"
+                    warns=$((warns + 1))
+                fi
+                ;;
+        esac
     fi
 
     if (( issues == 0 && warns == 0 )); then
@@ -627,19 +692,33 @@ preflight_tunnel_check() {
 
 show_pairing_card() {
     local role="$1" loc_ip="$2" rem_ip="$3" subnet_byte="$4" name="$5" mode="${6:-gre}" fwd_port="${7:-}"
+    local prefix peer_cmd net_line
     [[ "$STEALTH_MODE" == "1" ]] && return 0
+    peer_cmd=$(tunnel_peer_setup_cmd "$mode" "$loc_ip")
+    prefix=$(tunnel_net_prefix_for_mode "$mode")
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}  Pairing — next step on peer server${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     if [[ "$role" == "kharej" ]]; then
-        echo -e "  ${CYAN}Iran server:${NC}  sudo jojonet --role iran ${loc_ip}"
-        echo -e "  ${CYAN}Or:${NC}           sudo jojonet ${loc_ip}"
+        echo -e "  ${CYAN}Iran server:${NC}  ${peer_cmd} --role iran"
     else
-        echo -e "  ${CYAN}Kharej server:${NC} sudo jojonet --role kharej ${loc_ip}"
-        echo -e "  ${CYAN}Or:${NC}            sudo jojonet ${loc_ip}"
+        echo -e "  ${CYAN}Kharej server:${NC} ${peer_cmd} --role kharej"
     fi
-    echo -e "  ${CYAN}Subnet ID:${NC}    ${subnet_byte}  →  ${TUNNEL_NET_PREFIX}.${subnet_byte}.1 (Kharej) ↔ .2 (Iran)"
+    case "$mode" in
+        paqet|hysteria2)
+            echo -e "  ${CYAN}Pair ID:${NC}      ${subnet_byte}  (keys/auth sync from IP pair)"
+            ;;
+        *)
+            if [[ "$mode" == "tun_tcp" ]]; then
+                net_line="${prefix}.${subnet_byte}.1 (Kharej) ↔ .2 (Iran) /24"
+            else
+                net_line="${prefix}.${subnet_byte}.1 (Kharej) ↔ .2 (Iran)"
+            fi
+            echo -e "  ${CYAN}Subnet ID:${NC}    ${subnet_byte}  →  ${net_line}"
+            ;;
+    esac
+    echo -e "  ${CYAN}Mode:${NC}         ${mode}"
     echo -e "  ${CYAN}Interface:${NC}    ${name}"
     [[ -n "$fwd_port" ]] && echo -e "  ${CYAN}Iran forward:${NC} public:${fwd_port} → Kharej tunnel IP"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -2336,8 +2415,15 @@ deploy_tunnel() {
 
     apply_global_sysctl || return 1
 
-    if [[ "$role_conf" == "iran" && "$tunnel_mode" == "gre" && -z "$fwd_port" ]]; then
-        fwd_port=$(allocate_iran_forward_port "443")
+    if [[ "$role_conf" == "iran" ]]; then
+        case "$tunnel_mode" in
+            gre|vxlan|tun_tcp|wireguard)
+                fwd_port=$(resolve_iran_forward_port "443" "${fwd_port:-}")
+                ;;
+            paqet|hysteria2)
+                fwd_port=$(resolve_iran_forward_port "443" "${fwd_port:-}")
+                ;;
+        esac
     fi
     preflight_tunnel_check "$tunnel_mode" "$role_conf" "$loc_ip" "$rem_ip" \
         "${subnet_byte:-}" "${tun_ip:-}" "${tcp_port:-}" "${fwd_port:-}" || return 1
@@ -2702,7 +2788,12 @@ quick_add_tunnel_tun_tcp() {
     fi
 
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "tun_tcp") || { set -e; return 1; }
-    [[ "$role_conf" == "iran" ]] && fwd_port="443" || fwd_port=""
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port=$(allocate_iran_forward_port "443")
+        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use — forward port $fwd_port${NC}"
+    else
+        fwd_port=""
+    fi
 
     if [[ "$role_conf" == "kharej" ]]; then
         read -r -p "TCP listen port [$tcp_port]: " _tp
@@ -2826,7 +2917,7 @@ quick_add_tunnel_paqet() {
         tcp_port=${_tp:-$tcp_port}
         fwd_port=""
     else
-        fwd_port="443"
+        fwd_port=$(allocate_iran_forward_port "443")
         read -r -p "Forward ports on Iran [$fwd_port]: " _fp
         fwd_port=${_fp:-$fwd_port}
         fwd_port=$(normalize_port_list "$fwd_port")
@@ -2954,7 +3045,12 @@ quick_add_tunnel_vxlan() {
     fi
 
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "vxlan") || { set -e; return 1; }
-    [[ "$role_conf" == "iran" ]] && fwd_port="443" || fwd_port=""
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port=$(allocate_iran_forward_port "443")
+        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use — forward port $fwd_port${NC}"
+    else
+        fwd_port=""
+    fi
 
     read -r -p "VXLAN UDP port [$vxlan_port]: " _vp
     vxlan_port=${_vp:-$vxlan_port}
@@ -4134,7 +4230,12 @@ quick_add_tunnel_wg() {
     echo -e "${GREEN}[*] Role:${NC} $role_conf"
 
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "wireguard") || { set -e; return 1; }
-    [[ "$role_conf" == "iran" ]] && fwd_port="443" || fwd_port=""
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port=$(allocate_iran_forward_port "443")
+        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use — forward port $fwd_port${NC}"
+    else
+        fwd_port=""
+    fi
 
     read -r -p "WireGuard UDP port [$wg_port]: " _wp
     wg_port=${_wp:-$wg_port}
@@ -4468,7 +4569,7 @@ quick_add_tunnel_hy2() {
         hy_port=${_hp:-$hy_port}
         fwd_port=""
     else
-        fwd_port="443"
+        fwd_port=$(allocate_iran_forward_port "443")
         read -r -p "Server UDP port [$hy_port]: " _hp
         hy_port=${_hp:-$hy_port}
         read -r -p "Forward ports on Iran [$fwd_port]: " _fp

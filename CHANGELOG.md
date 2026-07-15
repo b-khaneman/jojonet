@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+- **All tunnel modes**: auto forward port on Iran (not only GRE)
+- **Pairing card**: correct CLI per mode (`--wg`, `--tun-tcp`, …) + subnet prefix per mode
+- **Healthcheck**: Hysteria2 process check; ping for TUN/TCP and WireGuard
+- **Pre-flight**: forward port warning for all Iran modes
+
 ## 1.4.0
 - **Pre-flight check** before deploy (wg0 port, GRETun, overlay IP conflicts)
 - **Auto forward port** on Iran when 443 is taken (8443, 2053, …)
