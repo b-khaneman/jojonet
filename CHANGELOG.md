@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.7
+- Fix `--list-tunnels --detail` crash (set -e + empty optional fields)
+- Detail card shows suggested ping target (peer overlay IP)
+
 ## 1.2.6
 - **Fix ping between tunnel endpoints**: `ip_forward=1` and `rp_filter=0` on both Iran and Kharej (GRE/VXLAN/WG)
 - Global sysctl always applies `rp_filter=0` at runtime (fixes ICMP/GRE drops on eth0)

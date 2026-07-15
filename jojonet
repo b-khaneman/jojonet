@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.2.6"
+readonly JOJONET_VERSION="1.2.7"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -1398,9 +1398,9 @@ format_tunnel_map_line() {
     esac
     extra=$(tunnel_endpoint_summary)
     [[ -n "${Ports:-}" && "${TunnelMode:-gre}" != "paqet" && "${TunnelMode:-gre}" != "hysteria2" ]] && \
-        fwd=" | forward ${Ports}"
+        fwd=" | forward ${Ports}" || true
     echo -e "  ${st_c}  $(tunnel_country_tag iran) ${CYAN}${iran_ip}${NC}  ──${YELLOW}[${mode_l}]${NC}──►  $(tunnel_country_tag kharej) ${CYAN}${kharej_ip}${NC}"
-    [[ -n "$extra$fwd" ]] && echo -e "         ${extra}${fwd}"
+    [[ -n "$extra$fwd" ]] && echo -e "         ${extra}${fwd}" || true
 }
 
 # Print all configured tunnels (detail: 0=compact header+lines, 1=full cards)
@@ -1429,7 +1429,7 @@ list_all_tunnels() {
             echo -e "  ${RED}[!] Invalid config: $(basename "$file")${NC}"
             continue
         fi
-        [[ "$(tunnel_status_word "$Name")" == "UP" ]] && total_up=$((total_up + 1))
+        [[ "$(tunnel_status_word "$Name")" == "UP" ]] && total_up=$((total_up + 1)) || true
 
         if (( detail == 0 )); then
             echo -e "${BLUE}#${idx} ${Name}${NC}"
@@ -1477,8 +1477,8 @@ show_tunnel_detail_card() {
             ;;
         paqet)
             echo -e "  ${GREEN}Port:${NC}         ${TcpPort:-?}  |  forward ${ForwardProto:-tcp}"
-            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}"
-            [[ -n "${PaqetYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${PaqetYaml}"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}" || true
+            [[ -n "${PaqetYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${PaqetYaml}" || true
             ;;
         vxlan)
             echo -e "  ${GREEN}VNI:${NC}              ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
@@ -1490,13 +1490,13 @@ show_tunnel_detail_card() {
             ;;
         hysteria2)
             echo -e "  ${GREEN}UDP port:${NC}     ${TcpPort:-?}  |  SNI ${HySni:-${DEFAULT_HY2_SNI}}"
-            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}"
-            [[ -n "${HyYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${HyYaml}"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}      ${Ports}" || true
+            [[ -n "${HyYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${HyYaml}" || true
             ;;
     esac
 
     [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" ]] && \
-        echo -e "  ${GREEN}Port forward:${NC}   ${Ports} → Kharej tunnel IP"
+        echo -e "  ${GREEN}Port forward:${NC}   ${Ports} → Kharej tunnel IP" || true
     echo -e "  ${GREEN}MTU:${NC}          ${Suggested_MTU:-default}"
     echo -e "  ${GREEN}Subnet ID:${NC}    ${Subnet_Byte:-?}"
     echo -e "  ${GREEN}Service:${NC}      ${svc}"
@@ -1505,7 +1505,10 @@ show_tunnel_detail_card() {
     else
         echo -e "  ${GREEN}Boot:${NC}         ${YELLOW}disabled${NC}"
     fi
-    [[ -n "${KeyDir:-}" ]] && echo -e "  ${GREEN}Keys:${NC}         ${KeyDir}"
+    [[ -n "${KeyDir:-}" ]] && echo -e "  ${GREEN}Keys:${NC}         ${KeyDir}" || true
+    local peer_ping="${Tun_Remote_IP_Raw:-}"
+    [[ -z "$peer_ping" && "$Role" == "kharej" ]] && peer_ping="${Tun_Client_IP:-}"
+    [[ -n "$peer_ping" ]] && echo -e "  ${GREEN}Ping test:${NC}     ping ${peer_ping}  (peer overlay on this link)" || true
 }
 
 show_tunnel_overview_menu() {
