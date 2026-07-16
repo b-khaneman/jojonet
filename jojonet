@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 
 # Safe Bash mode (-e omitted: interactive menu + many intentional test failures)
 set -Euo pipefail
 IFS=$'\n\t'
 
 # =========================================================
-# JOJONET — Iran ↔ Foreign Tunnel Manager
+# JOJONET ظ¤ Iran ظ¤ Foreign Tunnel Manager
 # Modes: GRE | TUN/TCP | Paqet | VXLAN
 # Author: @B_KHANEMAN
 # Support: @B_KHANEMAN
@@ -94,6 +94,11 @@ DEFAULT_RATHOLE_FWD="443"
 RATHOLE_CONFIG_DIR="$JOJONET_ROOT/rathole"
 RATHOLE_BIN="/usr/local/bin/rathole"
 RATHOLE_VERSION="${JOJONET_RATHOLE_VERSION:-v0.5.0}"
+DEFAULT_WSTUNNEL_CTRL_PORT=8080
+DEFAULT_WSTUNNEL_FWD="443"
+WSTUNNEL_CONFIG_DIR="$JOJONET_ROOT/wstunnel"
+WSTUNNEL_BIN="/usr/local/bin/wstunnel"
+WSTUNNEL_VERSION="${JOJONET_WSTUNNEL_VERSION:-v10.1.9}"
 DEFAULT_VXLAN_PORT=4789
 DEFAULT_VXLAN_MTU=1450
 DEFAULT_TCP_PORT=8443
@@ -104,7 +109,7 @@ STEALTH_FLAG_FILE="$JOJONET_ROOT/stealth.enabled"
 STEALTH_MODE=0
 
 
-# Safe config loader — whitelist keys only (never source shell)
+# Safe config loader ظ¤ whitelist keys only (never source shell)
 _JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
 
 load_safe_config() {
@@ -113,7 +118,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -310,7 +315,7 @@ check_jojonet_update() {
     return 2
 }
 
-# $1=force(0/1)  $2=ask_confirm(0/1) — CLI passes ask=0
+# $1=force(0/1)  $2=ask_confirm(0/1) ظ¤ CLI passes ask=0
 self_update_jojonet() {
     local tmp sums_tmp un_tmp backup remote_ver="" expected="" actual="" new_ver=""
     local force="${1:-0}"
@@ -380,7 +385,7 @@ self_update_jojonet() {
         install -d -m700 /etc/jojonet
         install -m644 "$sums_tmp" /etc/jojonet/checksums.sha256
     else
-        echo -e "${YELLOW}[!] No checksum file from mirrors — installing without verify${NC}"
+        echo -e "${YELLOW}[!] No checksum file from mirrors ظ¤ installing without verify${NC}"
     fi
     rm -f "${sums_tmp:-}"
 
@@ -414,7 +419,7 @@ self_update_jojonet() {
     if "$JOJONET_BIN_PATH" --refresh-templates >/dev/null 2>&1; then
         echo -e "${GREEN}[+] Runtime templates refreshed${NC}"
     else
-        echo -e "${YELLOW}[!] Template refresh warning — run: sudo jojonet --refresh-templates${NC}"
+        echo -e "${YELLOW}[!] Template refresh warning ظ¤ run: sudo jojonet --refresh-templates${NC}"
     fi
 
     echo ""
@@ -585,7 +590,7 @@ healthcheck_tunnel() {
                         echo -e "  hop fw:  ${GREEN}nft/iptables available${NC}"
                         ok=$((ok + 1))
                     else
-                        echo -e "  hop fw:  ${RED}missing nft/iptables — hop will fail${NC}"
+                        echo -e "  hop fw:  ${RED}missing nft/iptables ظ¤ hop will fail${NC}"
                     fi
                 fi
             fi
@@ -603,24 +608,11 @@ healthcheck_tunnel() {
             [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
             [[ -n "${RatholeToml:-}" ]] && echo -e "  config:  ${RatholeToml}"
             ;;
-        wstunnel|ws)
-            if pgrep -f "wstunnel.*${name}" >/dev/null 2>&1 || \
-               pgrep -f "${name}\\.cmd.sh" >/dev/null 2>&1; then
-                echo -e "  process: ${GREEN}running${NC}"
-                ok=$((ok + 1))
-            else
-                echo -e "  process: ${RED}not running${NC}"
-            fi
-            echo -e "  role:    ${Role:-?} ($([[ "${Role:-}" == "iran" ]] && echo SERVER || echo CLIENT))"
-            echo -e "  control: WS TCP ${TcpPort:-?}"
-            [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
-            [[ -n "${WstunnelCmd:-}" ]] && echo -e "  config:  ${WstunnelCmd}"
-            ;;
     esac
     (( ok > 0 ))
 }
 
-# ── v1.4: preflight, auto-port, status, backup, import GRETun, pairing ──
+# ظ¤ظ¤ v1.4: preflight, auto-port, status, backup, import GRETun, pairing ظ¤ظ¤
 
 iran_dnat_port_in_use() {
     local port="$1" f ports p
@@ -692,7 +684,7 @@ preflight_tunnel_check() {
     echo -e "${CYAN}=== Pre-flight check ===${NC}"
 
     if [[ "$mode" == "wireguard" && -n "$extra_port" ]] && [[ "$extra_port" =~ ^[0-9]+$ ]] && wg_udp_port_in_use "$extra_port"; then
-        echo -e "  ${YELLOW}[!] UDP $extra_port in use (e.g. wg0) — pick another port${NC}"
+        echo -e "  ${YELLOW}[!] UDP $extra_port in use (e.g. wg0) ظ¤ pick another port${NC}"
         warns=$((warns + 1))
     fi
 
@@ -706,11 +698,11 @@ preflight_tunnel_check() {
             echo -e "  ${GREEN}[+] Hop Port tools: nft/iptables OK${NC}"
         fi
         if (( span > 15000 )); then
-            echo -e "  ${YELLOW}[!] Large hop range (${span} ports) — HY2 DNAT may be heavy; consider 10000-wide${NC}"
+            echo -e "  ${YELLOW}[!] Large hop range (${span} ports) ظ¤ HY2 DNAT may be heavy; consider 10000-wide${NC}"
             warns=$((warns + 1))
         fi
         if [[ "$role" == "kharej" ]] && hy2_first_port_busy "$extra_port"; then
-            echo -e "  ${YELLOW}[!] First port of hop range may be busy — HY2 listens on that port${NC}"
+            echo -e "  ${YELLOW}[!] First port of hop range may be busy ظ¤ HY2 listens on that port${NC}"
             warns=$((warns + 1))
         fi
     fi
@@ -723,7 +715,7 @@ preflight_tunnel_check() {
         done
         shopt -u nullglob
         (( jn == 0 )) && {
-            echo -e "  ${YELLOW}[!] Manual interface GRETun detected — import: sudo jojonet --import-gretun${NC}"
+            echo -e "  ${YELLOW}[!] Manual interface GRETun detected ظ¤ import: sudo jojonet --import-gretun${NC}"
             warns=$((warns + 1))
         }
     fi
@@ -742,7 +734,7 @@ preflight_tunnel_check() {
         case "$mode" in
             gre|vxlan|tun_tcp|wireguard|paqet|hysteria2|rathole|wstunnel|ws)
                 if [[ -n "$first" ]] && iran_dnat_port_in_use "$first"; then
-                    echo -e "  ${YELLOW}[!] Forward port $first already used — will auto-pick alternate${NC}"
+                    echo -e "  ${YELLOW}[!] Forward port $first already used ظ¤ will auto-pick alternate${NC}"
                     warns=$((warns + 1))
                 fi
                 ;;
@@ -762,36 +754,10 @@ preflight_tunnel_check() {
         fi
     fi
 
-    if [[ "$mode" == "wstunnel" || "$mode" == "ws" ]] && [[ -n "$extra_port" ]]; then
-        if ! [[ "$extra_port" =~ ^[0-9]+$ ]] || (( extra_port < 1 || extra_port > 65535 )); then
-            echo -e "  ${RED}[!] Invalid Wstunnel control port: $extra_port${NC}"
-            issues=$((issues + 1))
-        elif command -v ss >/dev/null 2>&1 && ss -tlnH 2>/dev/null | awk -v p=":$extra_port" '$4 ~ p"$" { found=1 } END { exit !found }'; then
-            echo -e "  ${YELLOW}[!] WS control port $extra_port already listening${NC}"
-            warns=$((warns + 1))
-        fi
-        if [[ "$role" == "iran" ]]; then
-            echo -e "  ${CYAN}[*] Wstunnel: open firewall TCP $extra_port (WS control) + forward ports${NC}"
-        fi
-    fi
-
-    if [[ "$mode" == "wstunnel" || "$mode" == "ws" ]] && [[ -n "$extra_port" ]]; then
-        if ! [[ "$extra_port" =~ ^[0-9]+$ ]] || (( extra_port < 1 || extra_port > 65535 )); then
-            echo -e "  ${RED}[!] Invalid Wstunnel control port: $extra_port${NC}"
-            issues=$((issues + 1))
-        elif command -v ss >/dev/null 2>&1 && ss -tlnH 2>/dev/null | awk -v p=":$extra_port" '$4 ~ p"$" { found=1 } END { exit !found }'; then
-            echo -e "  ${YELLOW}[!] WS control port $extra_port already listening${NC}"
-            warns=$((warns + 1))
-        fi
-        if [[ "$role" == "iran" ]]; then
-            echo -e "  ${CYAN}[*] Wstunnel: open firewall TCP $extra_port (WS control) + forward ports${NC}"
-        fi
-    fi
-
     if (( issues == 0 && warns == 0 )); then
         echo -e "  ${GREEN}[+] Pre-flight OK${NC}"
     elif (( issues == 0 )); then
-        echo -e "  ${YELLOW}[*] $warns warning(s) — continuing${NC}"
+        echo -e "  ${YELLOW}[*] $warns warning(s) ظ¤ continuing${NC}"
     else
         echo -e "  ${RED}[!] $issues blocking issue(s)${NC}"
         return 1
@@ -806,9 +772,9 @@ show_pairing_card() {
     peer_cmd=$(tunnel_peer_setup_cmd "$mode" "$loc_ip")
     prefix=$(tunnel_net_prefix_for_mode "$mode")
     echo ""
-    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${GREEN}  Pairing — next step on peer server${NC}"
-    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤${NC}"
+    echo -e "${GREEN}  Pairing ظ¤ next step on peer server${NC}"
+    echo -e "${GREEN}ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤${NC}"
     if [[ "$role" == "kharej" ]]; then
         echo -e "  ${CYAN}Iran server:${NC}  ${peer_cmd} --role iran"
     else
@@ -824,23 +790,20 @@ show_pairing_card() {
             if [[ "$mode" == "rathole" ]]; then
                 echo -e "  ${CYAN}Note:${NC}        Iran=SERVER, Kharej=CLIENT (reverse TCP)"
             fi
-            if [[ "$mode" == "wstunnel" || "$mode" == "ws" ]]; then
-                echo -e "  ${CYAN}Note:${NC}        Iran=SERVER, Kharej=CLIENT (WebSocket reverse)"
-            fi
             ;;
         *)
             if [[ "$mode" == "tun_tcp" ]]; then
-                net_line="${prefix}.${subnet_byte}.1 (Kharej) ↔ .2 (Iran) /24"
+                net_line="${prefix}.${subnet_byte}.1 (Kharej) ظ¤ .2 (Iran) /24"
             else
-                net_line="${prefix}.${subnet_byte}.1 (Kharej) ↔ .2 (Iran)"
+                net_line="${prefix}.${subnet_byte}.1 (Kharej) ظ¤ .2 (Iran)"
             fi
-            echo -e "  ${CYAN}Subnet ID:${NC}    ${subnet_byte}  →  ${net_line}"
+            echo -e "  ${CYAN}Subnet ID:${NC}    ${subnet_byte}  ظْ  ${net_line}"
             ;;
     esac
     echo -e "  ${CYAN}Mode:${NC}         ${mode}"
     echo -e "  ${CYAN}Interface:${NC}    ${name}"
-    [[ -n "$fwd_port" ]] && echo -e "  ${CYAN}Iran forward:${NC} public:${fwd_port} → Kharej tunnel IP"
-    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    [[ -n "$fwd_port" ]] && echo -e "  ${CYAN}Iran forward:${NC} public:${fwd_port} ظْ Kharej tunnel IP"
+    echo -e "${GREEN}ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤${NC}"
     echo ""
 }
 
@@ -858,7 +821,7 @@ show_global_status() {
     echo ""
 
     if ip link show GRETun >/dev/null 2>&1; then
-        echo -e "  ${YELLOW}[!] Manual GRETun present${NC} — ${CYAN}sudo jojonet --import-gretun${NC}"
+        echo -e "  ${YELLOW}[!] Manual GRETun present${NC} ظ¤ ${CYAN}sudo jojonet --import-gretun${NC}"
     fi
     if command -v wg >/dev/null 2>&1 && wg show wg0 >/dev/null 2>&1; then
         local wgp
@@ -1001,7 +964,7 @@ import_manual_gretun() {
     if deploy_tunnel "$ins_name" "$role" "$loc" "$rem" "$subnet_byte" \
         "$Tun_IP" "$Tun_Remote_IP_Raw" "$DEFAULT_GRE_MTU" "$fwd" "gre" \
         "$DEFAULT_TCP_PORT" "" "$Tun_Server_IP" "$Tun_Client_IP"; then
-        echo -e "${GREEN}[+] Imported $ifname → JojoNet [$ins_name]${NC}"
+        echo -e "${GREEN}[+] Imported $ifname ظْ JojoNet [$ins_name]${NC}"
         show_pairing_card "$role" "$loc" "$rem" "$subnet_byte" "$ins_name" "gre" "$fwd"
     fi
     sleep 2
@@ -1045,72 +1008,65 @@ print_banner() {
 show_changelog() {
     local only="${1:-}"
     cat <<EOF
-JOJONET — Changelog / تغییرات نسخه‌ها
+JOJONET ظ¤ Changelog / ╪ز╪║█î█î╪▒╪د╪ز ┘╪│╪«┘çظî┘ç╪د
 Repo: ${JOJONET_REPO}
 
-────────────────────────────────────────
-## 1.5.3
-- تانل جدید: Wstunnel Reverse WebSocket (ریورس)
-  ایران=SERVER | خارج=CLIENT (-R reverse)
-  منو 8 / دستور: sudo jojonet --wstunnel <PEER_IP>
-- Control پیش‌فرض 8080، forward 443، باینری wstunnel v10.1.9
-- Repair / فایروال / mirror download / rollback / uninstall
-
+ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤
 ## 1.5.2
-- دیباگ Rathole: repair toml، فایروال UFW، دانلود با mirror، rollback تمیز
-- Pre-flight برای control port / پورت فوروارد Rathole
-- Uninstall کامل برای WG / HY2 / Rathole
-- توکن: راهنمای --export-keys اگر SSH sync نشد
+- ╪»█î╪ذ╪د┌» Rathole: repair toml╪î ┘╪د█î╪▒┘ê╪د┘ UFW╪î ╪»╪د┘┘┘ê╪» ╪ذ╪د mirror╪î rollback ╪ز┘à█î╪▓
+- Pre-flight ╪ذ╪▒╪د█î control port / ┘╛┘ê╪▒╪ز ┘┘ê╪▒┘ê╪د╪▒╪» Rathole
+- Uninstall ┌ر╪د┘à┘ ╪ذ╪▒╪د█î WG / HY2 / Rathole
+- ╪ز┘ê┌ر┘: ╪▒╪د┘ç┘┘à╪د█î --export-keys ╪د┌»╪▒ SSH sync ┘╪┤╪»
 
 ## 1.5.1
-- راهنما: اعلام تغییرات هر نسخه در --help و --changelog
-- README به‌روز با Rathole و تاریخچه نسخه‌ها
+- ╪▒╪د┘ç┘┘à╪د: ╪د╪╣┘╪د┘à ╪ز╪║█î█î╪▒╪د╪ز ┘ç╪▒ ┘╪│╪«┘ç ╪»╪▒ --help ┘ê --changelog
+- README ╪ذ┘çظî╪▒┘ê╪▓ ╪ذ╪د Rathole ┘ê ╪ز╪د╪▒█î╪«┌┘ç ┘╪│╪«┘çظî┘ç╪د
 
 ## 1.5.0
-- تانل جدید: Rathole Reverse TCP (ریورس)
-  ایران=SERVER | خارج=CLIENT
-  منو 7 / دستور: sudo jojonet --rathole <PEER_IP>
-- مناسب وقتی GRE/UDP بسته است ولی TCP معکوس کار می‌کند
+- ╪ز╪د┘┘ ╪ش╪»█î╪»: Rathole Reverse TCP (╪▒█î┘ê╪▒╪│)
+  ╪د█î╪▒╪د┘=SERVER | ╪«╪د╪▒╪ش=CLIENT
+  ┘à┘┘ê 7 / ╪»╪│╪ز┘ê╪▒: sudo jojonet --rathole <PEER_IP>
+- ┘à┘╪د╪│╪ذ ┘ê┘é╪ز█î GRE/UDP ╪ذ╪│╪ز┘ç ╪د╪│╪ز ┘ê┘█î TCP ┘à╪╣┌ر┘ê╪│ ┌ر╪د╪▒ ┘à█îظî┌ر┘╪»
 
 ## 1.4.3
-- Hop Port هیستریا۲ سخت‌گیرانه شد (nft/iptables، UFW، random interval)
+- Hop Port ┘ç█î╪│╪ز╪▒█î╪د█▓ ╪│╪«╪زظî┌»█î╪▒╪د┘┘ç ╪┤╪» (nft/iptables╪î UFW╪î random interval)
 - Env: JOJONET_HY2_HOP_RANGE / JOJONET_HY2_HOP_INTERVAL
 
 ## 1.4.2
-- Hop Port برای Hysteria2 (رنج UDP مثل 20000-50000 + hopInterval)
+- Hop Port ╪ذ╪▒╪د█î Hysteria2 (╪▒┘╪ش UDP ┘à╪س┘ 20000-50000 + hopInterval)
 
 ## 1.4.1
-- Auto forward port برای همه تانل‌های ایران (نه فقط GRE)
-- Pairing card درست برای هر mode (--wg / --tun-tcp / …)
+- Auto forward port ╪ذ╪▒╪د█î ┘ç┘à┘ç ╪ز╪د┘┘ظî┘ç╪د█î ╪د█î╪▒╪د┘ (┘┘ç ┘┘é╪╖ GRE)
+- Pairing card ╪»╪▒╪│╪ز ╪ذ╪▒╪د█î ┘ç╪▒ mode (--wg / --tun-tcp / ظخ)
 
 ## 1.4.0
-- Pre-flight قبل از deploy
+- Pre-flight ┘é╪ذ┘ ╪د╪▓ deploy
 - --status / --logs / --import-gretun / backup-restore
 - Pairing card + webhook
 
 ## 1.3.1
-- GRE چندتانلی: subnet یکتا per peer (172.20.X)
+- GRE ┌┘╪»╪ز╪د┘┘█î: subnet █î┌ر╪ز╪د per peer (172.20.X)
 
 ## 1.3.0
-- GRE مثل setup دستی: 172.20.10.x، MTU 1436، iptables DNAT+MASQUERADE
+- GRE ┘à╪س┘ setup ╪»╪│╪ز█î: 172.20.10.x╪î MTU 1436╪î iptables DNAT+MASQUERADE
 
 ## 1.2.8
-- تغییر IP طرف مقابل: --change-peer / Manage منو
+- ╪ز╪║█î█î╪▒ IP ╪╖╪▒┘ ┘à┘é╪د╪ذ┘: --change-peer / Manage ┘à┘┘ê
 
 ## 1.2.7
-- فیکس کرش --list-tunnels --detail
+- ┘█î┌ر╪│ ┌ر╪▒╪┤ --list-tunnels --detail
 
 ## 1.2.6
-- فیکس ping: ip_forward + rp_filter | --fix-tunnels
+- ┘█î┌ر╪│ ping: ip_forward + rp_filter | --fix-tunnels
 
-## 1.2.0 – 1.2.5
-- Self-update از GitHub، نقشه تانل ایران/خارج، لیبل‌ها
+## 1.2.0 ظô 1.2.5
+- Self-update ╪د╪▓ GitHub╪î ┘┘é╪┤┘ç ╪ز╪د┘┘ ╪د█î╪▒╪د┘/╪«╪د╪▒╪ش╪î ┘█î╪ذ┘ظî┘ç╪د
 
 ## 1.1.0
-- WireGuard (--wg) و Hysteria2 (--hy2)
+- WireGuard (--wg) ┘ê Hysteria2 (--hy2)
 
 ## 1.0.0
-- اولین انتشار: GRE / TUN-TCP / Paqet / VXLAN
+- ╪د┘ê┘█î┘ ╪د┘╪ز╪┤╪د╪▒: GRE / TUN-TCP / Paqet / VXLAN
 
 Full detail: ${JOJONET_REPO}/blob/main/CHANGELOG.md
 EOF
@@ -1118,7 +1074,7 @@ EOF
 
 show_help() {
     cat <<EOF
-JOJONET v${JOJONET_VERSION} — Iran ↔ Kharej tunnel manager
+JOJONET v${JOJONET_VERSION} ظ¤ Iran ظ¤ Kharej tunnel manager
 
 Usage:
   sudo jojonet                         Interactive menu
@@ -1130,7 +1086,6 @@ Usage:
   sudo jojonet --wg <PEER_IP>          WireGuard tunnel (low latency)
   sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed / hop port)
   sudo jojonet --rathole <PEER_IP>     Rathole reverse TCP (Iran=server)
-  sudo jojonet --wstunnel <PEER_IP>    Wstunnel reverse WebSocket (Iran=server)
   sudo jojonet --status                Full status (ping, forward, tunnels)
   sudo jojonet --logs <NAME> [N]       Tunnel journal (default 50 lines)
   sudo jojonet --import-gretun [IFACE] Import manual GRETun into JojoNet
@@ -1140,7 +1095,7 @@ Usage:
   sudo jojonet --change-peer <NAME> <IP>  Change peer IP and redeploy
   sudo jojonet --list-tunnels [--detail] List tunnels
   sudo jojonet --health <NAME>         Healthcheck one tunnel
-  sudo jojonet --changelog             Show version history / تغییرات نسخه‌ها
+  sudo jojonet --changelog             Show version history / ╪ز╪║█î█î╪▒╪د╪ز ┘╪│╪«┘çظî┘ç╪د
   sudo jojonet --export-keys <PEER> [FILE]
   sudo jojonet --import-keys <PEER> <FILE>
   sudo jojonet --update [--force]      Update from GitHub
@@ -1149,11 +1104,10 @@ Usage:
   sudo jojonet --version | --help
 
 What's new in v${JOJONET_VERSION}:
-  • Wstunnel Reverse WebSocket (menu 8 / --wstunnel)
-  • از 1.5.2: Rathole repair / فایروال / mirror
-  • راهنمای تغییرات نسخه (--changelog)
-  • از 1.5.0: Rathole Reverse TCP
-  • از 1.4.x: Hop Port هیستریا۲، --status، pairing، auto-port
+  ظت ╪»█î╪ذ╪د┌» Rathole (repair / ┘╪د█î╪▒┘ê╪د┘ / mirror download)
+  ظت ╪▒╪د┘ç┘┘à╪د█î ╪ز╪║█î█î╪▒╪د╪ز ┘╪│╪«┘ç (--changelog)
+  ظت ╪د╪▓ 1.5.0: Rathole Reverse TCP
+  ظت ╪د╪▓ 1.4.x: Hop Port ┘ç█î╪│╪ز╪▒█î╪د█▓╪î --status╪î pairing╪î auto-port
   Full list:  sudo jojonet --changelog
 
 Environment:
@@ -1173,15 +1127,11 @@ Rathole reverse:
   1) Iran:   sudo jojonet --rathole <KHAREJ_IP>
   2) Kharej: sudo jojonet --rathole <IRAN_IP>
 
-Wstunnel reverse:
-  1) Iran:   sudo jojonet --wstunnel <KHAREJ_IP>
-  2) Kharej: sudo jojonet --wstunnel <IRAN_IP>
-
 Support: ${JOJONET_SUPPORT}  |  ${JOJONET_REPO}
 EOF
 }
 
-# Fast paths — no initialization side effects
+# Fast paths ظ¤ no initialization side effects
 case "${1:-}" in
     --help|-h)
         show_help
@@ -1202,7 +1152,7 @@ case "${1:-}" in
     --update)
         _force=0
         [[ "${2:-}" == "--force" || "${2:-}" == "-f" ]] && _force=1
-        # ask_confirm=0 → no Y/n prompt on CLI
+        # ask_confirm=0 ظْ no Y/n prompt on CLI
         self_update_jojonet "$_force" 0
         exit $?
         ;;
@@ -1550,7 +1500,7 @@ overlay_ip_on_iface() {
     [[ -n "$got" ]] && printf '%s' "$got"
 }
 
-# Deterministic GRE subnet id (10-250) for a public IP pair — same value on both servers
+# Deterministic GRE subnet id (10-250) for a public IP pair ظ¤ same value on both servers
 gre_subnet_for_pair() {
     local ip1="$1" ip2="$2" b
     b=$(compute_pair_subnet_byte "$ip1" "$ip2")
@@ -1600,7 +1550,7 @@ overlay_ip_in_use_for_role() {
     overlay_ip_on_iface "$ip"
 }
 
-# Same subnet on both servers — derived from the IP pair (no manual Subnet ID)
+# Same subnet on both servers ظ¤ derived from the IP pair (no manual Subnet ID)
 compute_pair_subnet_byte() {
     local ip1="$1" ip2="$2" u1 u2 key h
     u1=$(ipv4_to_uint "$ip1")
@@ -1736,7 +1686,7 @@ generate_unique_tunnel_name() {
     return 1
 }
 
-# Unique interface per peer — e.g. ir195158230128 (foreign) / kh575200210 (iran)
+# Unique interface per peer ظ¤ e.g. ir195158230128 (foreign) / kh575200210 (iran)
 generate_tunnel_name_from_peer() {
     local peer="$1" role="$2" mode="${3:-gre}" subnet_byte="${4:-}"
     local digits prefix base suffix=""
@@ -1753,8 +1703,6 @@ generate_tunnel_name_from_peer() {
         prefix="hy"
     elif [[ "$mode" == "rathole" ]]; then
         prefix="rh"
-    elif [[ "$mode" == "wstunnel" || "$mode" == "ws" ]]; then
-        prefix="ws"
     elif [[ "$mode" == "gre" && -n "$subnet_byte" ]]; then
         prefix="gr"
         suffix="b${subnet_byte}"
@@ -1812,16 +1760,6 @@ wait_for_tunnel_up() {
             if systemctl is-active --quiet "jojonet-rathole@${name}.service" 2>/dev/null; then
                 return 0
             fi
-        elif [[ "$mode" == "wstunnel" || "$mode" == "ws" ]]; then
-            if pgrep -f "wstunnel.*${name}" >/dev/null 2>&1; then
-                return 0
-            fi
-            if pgrep -f "${name}\\.cmd.sh" >/dev/null 2>&1; then
-                return 0
-            fi
-            if systemctl is-active --quiet "jojonet-wstunnel@${name}.service" 2>/dev/null; then
-                return 0
-            fi
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             return 0
         fi
@@ -1850,7 +1788,7 @@ repair_single_config() {
     [[ -n "$name" ]] || return 0
 
     if [[ "${mode:-gre}" == "gre" ]]; then
-        : # plain GRE — no key
+        : # plain GRE ظ¤ no key
     elif [[ "${mode:-gre}" == "vxlan" ]]; then
         local vni port
         vni=$(conf_get_field "$conf" "VxlanVni")
@@ -1963,31 +1901,27 @@ repair_single_config() {
                 echo -e "${YELLOW}[*] Repaired Rathole TOML for [$name]${NC}"
             fi
         fi
-    elif [[ "${mode:-gre}" == "wstunnel" || "${mode:-gre}" == "ws" ]]; then
-        local cmdsh tcp_port key_dir role rem fwd need_rebuild=0
-        cmdsh=$(conf_get_field "$conf" "WstunnelCmd")
+    elif [[ "${mode:-gre}" == "wstunnel" ]]; then
+        local cmd tcp_port key_dir role rem fwd need_rebuild=0
+        cmd=$(conf_get_field "$conf" "WstunnelCmd")
         tcp_port=$(conf_get_field "$conf" "TcpPort")
         key_dir=$(conf_get_field "$conf" "KeyDir")
         role=$(conf_get_field "$conf" "Role")
         rem=$(conf_get_field "$conf" "Remote_IP")
         fwd=$(conf_get_field "$conf" "Ports")
-        if [[ -z "$cmdsh" || ! -f "$cmdsh" || ! -s "$cmdsh" ]]; then
-            need_rebuild=1
-        elif ! grep -q 'WSTUNNEL_BIN' "$cmdsh" 2>/dev/null; then
+        if [[ -z "$cmd" || ! -f "$cmd" || ! -x "$cmd" ]]; then
             need_rebuild=1
         fi
         if (( need_rebuild == 1 )) && [[ -n "$key_dir" && -f "$key_dir/wstunnel.token" ]]; then
-            cmdsh=$(build_wstunnel_runtime_config "$name" "$role" "$rem" \
-                "${tcp_port:-$DEFAULT_WSTUNNEL_CTRL_PORT}" "$key_dir" \
-                "${fwd:-$DEFAULT_WSTUNNEL_FWD}") && changed=1
-            if [[ -n "$cmdsh" ]]; then
+            cmd=$(build_wstunnel_runtime_config "$name" "$role" "$rem"                 "${tcp_port:-$DEFAULT_WSTUNNEL_CTRL_PORT}" "$key_dir"                 "${fwd:-$DEFAULT_WSTUNNEL_FWD}") && changed=1
+            if [[ -n "$cmd" ]]; then
                 if grep -q '^WstunnelCmd=' "$conf"; then
-                    sed -i "s|^WstunnelCmd=.*|WstunnelCmd=\"$cmdsh\"|" "$conf"
+                    sed -i "s|^WstunnelCmd=.*|WstunnelCmd="$cmd"|" "$conf"
                 else
-                    echo "WstunnelCmd=\"$cmdsh\"" >> "$conf"
+                    echo "WstunnelCmd="$cmd"" >> "$conf"
                 fi
                 [[ "$role" == "iran" ]] && ensure_wstunnel_firewall "${tcp_port:-$DEFAULT_WSTUNNEL_CTRL_PORT}" "${fwd:-$DEFAULT_WSTUNNEL_FWD}" || true
-                echo -e "${YELLOW}[*] Repaired Wstunnel cmd script for [$name]${NC}"
+                echo -e "${YELLOW}[*] Repaired Wstunnel cmd for [$name]${NC}"
             fi
         fi
     fi
@@ -2056,8 +1990,6 @@ tunnel_mode_label() {
         wireguard|wg)  printf '%s' "WireGuard" ;;
         hysteria2|hy2) printf '%s' "Hysteria2" ;;
         rathole|rh)    printf '%s' "Rathole Reverse" ;;
-        wstunnel|ws)  printf '%s' "Wstunnel Reverse" ;;
-        wstunnel|ws)  printf '%s' "Wstunnel Reverse" ;;
         *)             printf '%s' "${1:-?}" ;;
     esac
 }
@@ -2107,11 +2039,11 @@ resolve_iran_foreign_ips() {
 # Colored country tag for display
 tunnel_country_tag() {
     case "${1:-}" in
-        iran|Iran|ایران)
-            echo -e "${GREEN}[Iran/ایران]${NC}"
+        iran|Iran|╪د█î╪▒╪د┘)
+            echo -e "${GREEN}[Iran/╪د█î╪▒╪د┘]${NC}"
             ;;
-        kharej|Kharej|خارج)
-            echo -e "${MAGENTA}[Kharej/خارج]${NC}"
+        kharej|Kharej|╪«╪د╪▒╪ش)
+            echo -e "${MAGENTA}[Kharej/╪«╪د╪▒╪ش]${NC}"
             ;;
         *)
             echo -e "${YELLOW}[?]${NC}"
@@ -2133,7 +2065,7 @@ tunnel_overlay_iran_foreign() {
             ;;
     esac
     if [[ -n "$iran_tun" && -n "$kharej_tun" ]]; then
-        printf 'overlay %s (Iran/ایران) ↔ %s (Kharej/خارج)' "$iran_tun" "$kharej_tun"
+        printf 'overlay %s (Iran/╪د█î╪▒╪د┘) ظ¤ %s (Kharej/╪«╪د╪▒╪ش)' "$iran_tun" "$kharej_tun"
     fi
 }
 # Overlay / port summary for a loaded instance config
@@ -2181,7 +2113,7 @@ format_tunnel_map_line() {
     extra=$(tunnel_endpoint_summary)
     [[ -n "${Ports:-}" && "${TunnelMode:-gre}" != "paqet" && "${TunnelMode:-gre}" != "hysteria2" ]] && \
         fwd=" | forward ${Ports}" || true
-    echo -e "  ${st_c}  $(tunnel_country_tag iran) ${CYAN}${iran_ip}${NC}  ──${YELLOW}[${mode_l}]${NC}──►  $(tunnel_country_tag kharej) ${CYAN}${kharej_ip}${NC}"
+    echo -e "  ${st_c}  $(tunnel_country_tag iran) ${CYAN}${iran_ip}${NC}  ظ¤ظ¤${YELLOW}[${mode_l}]${NC}ظ¤ظ¤ظû║  $(tunnel_country_tag kharej) ${CYAN}${kharej_ip}${NC}"
     [[ -n "$extra$fwd" ]] && echo -e "         ${extra}${fwd}" || true
 }
 
@@ -2203,7 +2135,7 @@ list_all_tunnels() {
     local Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd="" WstunnelCmd="" WstunnelCmd=""
+    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
 
     for file in "${files[@]}"; do
         idx=$((idx + 1))
@@ -2238,23 +2170,23 @@ show_tunnel_detail_card() {
         *)    st_c="${YELLOW}${st}${NC}" ;;
     esac
 
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤${NC}"
     echo -e "${BLUE}#${num} ${Name}${NC}  |  ${st_c}  |  ${YELLOW}${mode_l}${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤ظ¤${NC}"
     resolve_iran_foreign_ips
-    echo -e "  ${GREEN}Iran / ایران:${NC}     ${CYAN}${TUNNEL_IRAN_IP}${NC}  $(tunnel_country_tag iran)"
-    echo -e "  ${GREEN}Kharej / خارج:${NC}    ${CYAN}${TUNNEL_KHAREJ_IP}${NC}  $(tunnel_country_tag kharej)"
+    echo -e "  ${GREEN}Iran / ╪د█î╪▒╪د┘:${NC}     ${CYAN}${TUNNEL_IRAN_IP}${NC}  $(tunnel_country_tag iran)"
+    echo -e "  ${GREEN}Kharej / ╪«╪د╪▒╪ش:${NC}    ${CYAN}${TUNNEL_KHAREJ_IP}${NC}  $(tunnel_country_tag kharej)"
     echo -e "  ${GREEN}This server:${NC}      ${CYAN}${Local_IP:-?}${NC}  ($(tunnel_role_label "${Role:-}"))"
     echo -e "  ${GREEN}Method:${NC}           ${YELLOW}${mode_l}${NC} (${mode})"
 
     case "$mode" in
         gre)
             echo -e "  ${GREEN}GRE:${NC}             plain (no key)"
-            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
+            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ظ¤ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         tun_tcp)
             echo -e "  ${GREEN}TCP port:${NC}         ${TcpPort:-?}"
-            echo -e "  ${GREEN}Private IP:${NC}       ${Tun_Server_IP:-?} (Kharej) ↔ ${Tun_Client_IP:-?} (Iran)"
+            echo -e "  ${GREEN}Private IP:${NC}       ${Tun_Server_IP:-?} (Kharej) ظ¤ ${Tun_Client_IP:-?} (Iran)"
             echo -e "  ${GREEN}Local TUN:${NC}        ${Tun_IP:-?} ($(tunnel_role_label "${Role:-}"))"
             ;;
         paqet)
@@ -2264,11 +2196,11 @@ show_tunnel_detail_card() {
             ;;
         vxlan)
             echo -e "  ${GREEN}VNI:${NC}              ${VxlanVni:-?}  |  UDP ${VxlanPort:-?}"
-            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
+            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ظ¤ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         wireguard)
             echo -e "  ${GREEN}WG port:${NC}          UDP ${TcpPort:-?}"
-            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)"
+            echo -e "  ${GREEN}Overlay:${NC}          ${Tun_Client_IP:-?} (Iran) ظ¤ ${Tun_Server_IP:-?} (Kharej)"
             ;;
         hysteria2)
             if [[ -n "${HyHopRange:-}" ]]; then
@@ -2281,21 +2213,15 @@ show_tunnel_detail_card() {
             [[ -n "${HyYaml:-}" ]] && echo -e "  ${GREEN}Config:${NC}       ${HyYaml}" || true
             ;;
         rathole)
-            echo -e "  ${GREEN}Control:${NC}     TCP ${TcpPort:-?} (Kharej → Iran dial)"
+            echo -e "  ${GREEN}Control:${NC}     TCP ${TcpPort:-?} (Kharej ظْ Iran dial)"
             echo -e "  ${GREEN}Side:${NC}        $([[ "${Role:-}" == "iran" ]] && echo "SERVER (Iran)" || echo "CLIENT (Kharej)")"
             [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}" || true
             [[ -n "${RatholeToml:-}" ]] && echo -e "  ${GREEN}Config:${NC}      ${RatholeToml}" || true
             ;;
-        wstunnel|ws)
-            echo -e "  ${GREEN}Control:${NC}     WS TCP ${TcpPort:-?} (Kharej → Iran dial)"
-            echo -e "  ${GREEN}Side:${NC}        $([[ "${Role:-}" == "iran" ]] && echo "SERVER (Iran)" || echo "CLIENT (Kharej)")"
-            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}" || true
-            [[ -n "${WstunnelCmd:-}" ]] && echo -e "  ${GREEN}Config:${NC}      ${WstunnelCmd}" || true
-            ;;
     esac
 
-    [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" && "$mode" != "rathole" && "$mode" != "wstunnel" && "$mode" != "ws" ]] && \
-        echo -e "  ${GREEN}Port forward:${NC}   ${Ports} → Kharej tunnel IP" || true
+    [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" && "$mode" != "rathole" && "$mode" != "wstunnel" ]] && \
+        echo -e "  ${GREEN}Port forward:${NC}   ${Ports} ظْ Kharej tunnel IP" || true
     echo -e "  ${GREEN}MTU:${NC}          ${Suggested_MTU:-default}"
     echo -e "  ${GREEN}Subnet ID:${NC}    ${Subnet_Byte:-?}"
     echo -e "  ${GREEN}Service:${NC}      ${svc}"
@@ -2314,7 +2240,7 @@ show_tunnel_overview_menu() {
     while true; do
         command -v clear >/dev/null && clear
         logo
-        print_banner "Tunnel Map — Overview"
+        print_banner "Tunnel Map ظ¤ Overview"
         list_all_tunnels 1 || true
         echo ""
         menu_line "1) Refresh"
@@ -2353,7 +2279,7 @@ resolve_tunnel_ips() {
             Tun_IP="${Tun_Client_IP}/24"
             Tun_Remote_IP_Raw="$Tun_Server_IP"
         else
-            # Foreign=.1 (server), Iran=.2 (client) — same as TUN/TCP
+            # Foreign=.1 (server), Iran=.2 (client) ظ¤ same as TUN/TCP
             Tun_IP="${Tun_Client_IP}/30"
             Tun_Remote_IP_Raw="$Tun_Server_IP"
         fi
@@ -2522,13 +2448,13 @@ install_paqet_binary() {
         latest="${PAQET_CORE_VERSION:-v1.0.0-alpha.16}"
         core_file="paqet-linux-${arch}-${latest}.tar.gz"
         url="https://github.com/${PAQET_CORE_REPO}/releases/download/${latest}/${core_file}"
-        echo -e "${YELLOW}[*] Optimized build unavailable — trying pinned core: $core_file${NC}" >&2
+        echo -e "${YELLOW}[*] Optimized build unavailable ظ¤ trying pinned core: $core_file${NC}" >&2
         if download_verified "$url" "$tmpdir/paqet.tar.gz" "$core_file"; then
             ok=1
         fi
     fi
     if (( ok == 0 )); then
-        echo -e "${RED}[!] Paqet download failed (or checksum missing — set JOJONET_ALLOW_UNSIGNED=1 once).${NC}" >&2
+        echo -e "${RED}[!] Paqet download failed (or checksum missing ظ¤ set JOJONET_ALLOW_UNSIGNED=1 once).${NC}" >&2
         rm -rf "$tmpdir"
         return 1
     fi
@@ -2574,7 +2500,7 @@ get_paqet_network_info() {
 paqet_configure_iptables() {
     local port="$1" protocol="${2:-tcp}"
     command -v iptables >/dev/null 2>&1 || {
-        echo -e "${YELLOW}[!] iptables not found — Paqet may need manual firewall rules.${NC}"
+        echo -e "${YELLOW}[!] iptables not found ظ¤ Paqet may need manual firewall rules.${NC}"
         return 0
     }
     local protos=()
@@ -2775,7 +2701,7 @@ deploy_tunnel() {
     local conf_file="$INSTANCES_DIR/$ins_name.conf" tmp_conf="" svc_unit="" gre_key=""
     local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port="" hy_yaml=""
     local wg_priv="" wg_pub="" wg_peer="" hy_sni="${DEFAULT_HY2_SNI}" hy_hop_range="" hy_hop_interval=""
-    local rh_toml="" ws_cmd="" ws_cmd=""
+    local rh_toml=""
 
     apply_global_sysctl || return 1
 
@@ -2869,14 +2795,13 @@ deploy_tunnel() {
             ensure_rathole_firewall "$tcp_port" "$fwd_port" || true
         fi
         svc_unit="jojonet-rathole@${ins_name}.service"
-    elif [[ "$tunnel_mode" == "wstunnel" || "$tunnel_mode" == "ws" ]]; then
+    elif [[ "$tunnel_mode" == "wstunnel" ]]; then
         install_wstunnel_binary || return 1
         create_wstunnel_runner_script || return 1
         create_wstunnel_service || return 1
         [[ -n "$fwd_port" ]] || fwd_port="$DEFAULT_WSTUNNEL_FWD"
         [[ -n "$tcp_port" ]] || tcp_port="$DEFAULT_WSTUNNEL_CTRL_PORT"
-        ws_cmd=$(build_wstunnel_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
-            "$fwd_port") || return 1
+        ws_cmd=$(build_wstunnel_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir"             "$fwd_port") || return 1
         if [[ "$role_conf" == "iran" ]]; then
             ensure_wstunnel_firewall "$tcp_port" "$fwd_port" || true
         fi
@@ -2968,10 +2893,6 @@ EOF
         elif [[ "$tunnel_mode" == "rathole" ]]; then
             pgrep -f "rathole.*${ins_name}\\.toml" >/dev/null 2>&1 && iface_ok=1
             [[ -f "${rh_toml:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
-        elif [[ "$tunnel_mode" == "wstunnel" || "$tunnel_mode" == "ws" ]]; then
-            pgrep -f "wstunnel.*${ins_name}" >/dev/null 2>&1 && iface_ok=1
-            pgrep -f "${ins_name}\\.cmd.sh" >/dev/null 2>&1 && iface_ok=1
-            [[ -f "${ws_cmd:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
         elif ip link show "$ins_name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             iface_ok=1
         fi
@@ -2988,9 +2909,6 @@ EOF
             elif [[ "$tunnel_mode" == "rathole" ]]; then
                 echo -e "  Control TCP: $tcp_port  |  Forward: ${fwd_port:-?}  |  Config: ${rh_toml:-n/a}"
                 echo -e "  Mode: Iran=server / Kharej=client (reverse)"
-            elif [[ "$tunnel_mode" == "wstunnel" || "$tunnel_mode" == "ws" ]]; then
-                echo -e "  Control WS TCP: $tcp_port  |  Forward: ${fwd_port:-?}  |  Config: ${ws_cmd:-n/a}"
-                echo -e "  Mode: Iran=server / Kharej=client (WebSocket reverse)"
             elif [[ "$tunnel_mode" == "wireguard" ]]; then
                 echo -e "  UDP port: $tcp_port  |  Interface: $ins_name  |  IP: $tun_ip"
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
@@ -3103,7 +3021,7 @@ quick_add_tunnel() {
         local want
         want=$(gre_subnet_for_pair "$loc_ip" "$rem_ip")
         echo -e "${RED}[!] GRE subnet ${TUNNEL_NET_PREFIX}.${want}.x already used by another peer on this server.${NC}"
-        echo -e "${YELLOW}    Delete the old tunnel (Manage → 6) or use Advanced setup to pick another subnet ID on BOTH servers.${NC}"
+        echo -e "${YELLOW}    Delete the old tunnel (Manage ظْ 6) or use Advanced setup to pick another subnet ID on BOTH servers.${NC}"
         sleep 4
         return 1
     }
@@ -3117,7 +3035,7 @@ quick_add_tunnel() {
     if [[ "$role_conf" == "iran" ]]; then
         fwd_port=$(allocate_iran_forward_port "443")
         if [[ "$fwd_port" != "443" ]]; then
-            echo -e "${YELLOW}[*] Port 443 already forwarded — using port ${fwd_port} for this tunnel${NC}"
+            echo -e "${YELLOW}[*] Port 443 already forwarded ظ¤ using port ${fwd_port} for this tunnel${NC}"
         fi
     else
         fwd_port=""
@@ -3216,7 +3134,7 @@ quick_add_tunnel_tun_tcp() {
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "tun_tcp") || { set -e; return 1; }
     if [[ "$role_conf" == "iran" ]]; then
         fwd_port=$(allocate_iran_forward_port "443")
-        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use — forward port $fwd_port${NC}"
+        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use ظ¤ forward port $fwd_port${NC}"
     else
         fwd_port=""
     fi
@@ -3434,7 +3352,7 @@ quick_add_tunnel_vxlan() {
     loc_ip="$DETECTED_IP"
     tunnel_count=$(count_configured_tunnels)
     echo -e "\n${GREEN}Your IP:${NC} ${CYAN}$loc_ip${NC}  ${YELLOW}(${tunnel_count} tunnel(s))${NC}"
-    hint "VXLAN over UDP — useful when GRE is blocked but UDP works"
+    hint "VXLAN over UDP ظ¤ useful when GRE is blocked but UDP works"
     show_existing_tunnels_summary
 
     [[ -z "$peer_ip" ]] && read -r -p "Peer server IP: " peer_ip
@@ -3473,7 +3391,7 @@ quick_add_tunnel_vxlan() {
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "vxlan") || { set -e; return 1; }
     if [[ "$role_conf" == "iran" ]]; then
         fwd_port=$(allocate_iran_forward_port "443")
-        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use — forward port $fwd_port${NC}"
+        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use ظ¤ forward port $fwd_port${NC}"
     else
         fwd_port=""
     fi
@@ -3497,7 +3415,7 @@ quick_add_tunnel_vxlan() {
             in_b && $0 ~ /Remote_IP/ { print $2; exit }
         ' "$INSTANCES_DIR"/*.conf 2>/dev/null || true)
         if [[ -n "$other_peer" && "$other_peer" != "$rem_ip" ]]; then
-            echo -e "${YELLOW}[!] Subnet ID $subnet_byte used by peer $other_peer (continuing — VXLAN uses 172.21.x).${NC}"
+            echo -e "${YELLOW}[!] Subnet ID $subnet_byte used by peer $other_peer (continuing ظ¤ VXLAN uses 172.21.x).${NC}"
         fi
     fi
 
@@ -3535,7 +3453,7 @@ create_template_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Safe config loader — whitelist keys only (never source shell)
+# Safe config loader ظ¤ whitelist keys only (never source shell)
 _JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
 
 load_safe_config() {
@@ -3544,7 +3462,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -3763,7 +3681,7 @@ create_tuntcp_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Safe config loader — whitelist keys only (never source shell)
+# Safe config loader ظ¤ whitelist keys only (never source shell)
 _JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
 
 load_safe_config() {
@@ -3772,7 +3690,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -3913,7 +3831,7 @@ case "$ACTION" in
             trap 'kill "$client_pid" 2>/dev/null; stop_tuntcp' EXIT TERM INT
 
             wait_for_iface || { log "ERROR: TUN interface not created"; exit 1; }
-            log "Interface $Name is up — applying NAT"
+            log "Interface $Name is up ظ¤ applying NAT"
             apply_iran_nat || { log "ERROR: NAT setup failed"; exit 1; }
             log "SUCCESS: TUN/TCP client running (pid $client_pid)"
             wait "$client_pid"
@@ -3981,7 +3899,7 @@ create_paqet_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Safe config loader — whitelist keys only (never source shell)
+# Safe config loader ظ¤ whitelist keys only (never source shell)
 _JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
 
 load_safe_config() {
@@ -3990,7 +3908,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4111,7 +4029,7 @@ create_vxlan_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Safe config loader — whitelist keys only (never source shell)
+# Safe config loader ظ¤ whitelist keys only (never source shell)
 _JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
 
 load_safe_config() {
@@ -4120,7 +4038,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4401,7 +4319,7 @@ create_wg_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Safe config loader — whitelist keys only (never source shell)
+# Safe config loader ظ¤ whitelist keys only (never source shell)
 _JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
 
 load_safe_config() {
@@ -4410,7 +4328,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4506,7 +4424,7 @@ case "$ACTION" in
                     peer "$_peer_key" allowed-ips "$allow" \
                     || { log "ERROR: wg set failed (server)"; exit 1; }
             else
-                log "WARN: peer key not ready — listen-only until Iran runs --wg"
+                log "WARN: peer key not ready ظ¤ listen-only until Iran runs --wg"
                 wg set "$Name" private-key "$priv" listen-port "$listen_port" \
                     || { log "ERROR: wg set failed (server, listen-only)"; exit 1; }
             fi
@@ -4658,7 +4576,7 @@ quick_add_tunnel_wg() {
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "wireguard") || { set -e; return 1; }
     if [[ "$role_conf" == "iran" ]]; then
         fwd_port=$(allocate_iran_forward_port "443")
-        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use — forward port $fwd_port${NC}"
+        [[ "$fwd_port" != "443" ]] && echo -e "${YELLOW}[*] Port 443 in use ظ¤ forward port $fwd_port${NC}"
     else
         fwd_port=""
     fi
@@ -4778,7 +4696,7 @@ ensure_hy2_hop_firewall() {
         if ! ufw status 2>/dev/null | grep -qE "${a}:${b}/udp|${a}:${b} .*UDP"; then
             ufw allow proto udp from any to any port "${a}:${b}" comment 'jojonet-hy2-hop' >/dev/null 2>&1 || \
                 ufw allow "${a}:${b}/udp" >/dev/null 2>&1 || \
-                log_warn "UFW active — open UDP ${a}-${b} manually: ufw allow ${a}:${b}/udp"
+                log_warn "UFW active ظ¤ open UDP ${a}-${b} manually: ufw allow ${a}:${b}/udp"
         fi
     fi
     # firewalld
@@ -4974,7 +4892,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -5133,7 +5051,7 @@ quick_add_tunnel_hy2() {
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "hysteria2") || { set -e; return 1; }
 
     echo ""
-    echo -e "${CYAN}Hop Port${NC} — UDP range hopping (ضد محدودیت پورت UDP)"
+    echo -e "${CYAN}Hop Port${NC} ظ¤ UDP range hopping (╪╢╪» ┘à╪ص╪»┘ê╪»█î╪ز ┘╛┘ê╪▒╪ز UDP)"
     echo -e "  Kharej: listen on full range (needs nft/iptables)"
     echo -e "  Iran:   rotates UDP port every N seconds (transparent to traffic)"
     if [[ -n "${JOJONET_HY2_HOP_RANGE:-}" ]]; then
@@ -5265,7 +5183,7 @@ quick_add_tunnel_hy2() {
 
 # ==========================================
 # Rathole reverse tunnel (Iran=server, Kharej=client)
-# Users → Iran:Ports → reverse TCP → Kharej localhost:Ports
+# Users ظْ Iran:Ports ظْ reverse TCP ظْ Kharej localhost:Ports
 # ==========================================
 
 RATHOLE_RUNNER="/usr/local/bin/jojonet-run-rathole.sh"
@@ -5364,7 +5282,7 @@ ensure_rathole_token() {
             ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
                 "root@${peer_ip}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || true
             if ! scp -o ConnectTimeout=8 -q "$keydir/rathole.token" "root@${peer_ip}:${keydir}/" 2>/dev/null; then
-                log_warn "Token not copied via SSH — sync manually:"
+                log_warn "Token not copied via SSH ظ¤ sync manually:"
                 hint "sudo jojonet --export-keys $peer_ip /root/jojonet-keys.tar.gz"
                 hint "On peer: sudo jojonet --import-keys <THIS_IP> /root/jojonet-keys.tar.gz"
             fi
@@ -5417,8 +5335,8 @@ local_addr = \"127.0.0.1:${p}\"
 
     if [[ "$role" == "iran" ]]; then
         cat > "$toml" <<EOF
-# JojoNet Rathole SERVER (Iran) — reverse TCP
-# Users → Iran:Ports → Kharej localhost:Ports
+# JojoNet Rathole SERVER (Iran) ظ¤ reverse TCP
+# Users ظْ Iran:Ports ظْ Kharej localhost:Ports
 [server]
 bind_addr = "0.0.0.0:${ctrl_port}"
 default_token = "${token}"
@@ -5426,7 +5344,7 @@ ${block}
 EOF
     else
         cat > "$toml" <<EOF
-# JojoNet Rathole CLIENT (Kharej) — reverse TCP
+# JojoNet Rathole CLIENT (Kharej) ظ¤ reverse TCP
 # Connects out to Iran control port
 [client]
 remote_addr = "${rem}:${ctrl_port}"
@@ -5451,7 +5369,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -5597,7 +5515,7 @@ quick_add_tunnel_rathole() {
 
     ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "rathole") || { set -e; return 1; }
 
-    read -r -p "Control port (Kharej→Iran dial) [$ctrl_port]: " _cp
+    read -r -p "Control port (KharejظْIran dial) [$ctrl_port]: " _cp
     ctrl_port=${_cp:-$ctrl_port}
     if ! [[ "$ctrl_port" =~ ^[0-9]+$ ]] || (( ctrl_port < 1 || ctrl_port > 65535 )); then
         echo -e "${RED}[!] Invalid control port.${NC}"
@@ -5627,7 +5545,7 @@ quick_add_tunnel_rathole() {
     echo -e "  Forward:  $fwd_port"
     echo -e "  Token:    $key_dir/rathole.token"
     if [[ "$role_conf" == "iran" ]]; then
-        hint "Kharej must dial this Iran IP on TCP $ctrl_port — open firewall if needed"
+        hint "Kharej must dial this Iran IP on TCP $ctrl_port ظ¤ open firewall if needed"
         hint "Now run on Kharej: sudo jojonet --rathole $loc_ip"
     else
         hint "Panel must listen on 127.0.0.1 (or all) for ports: $fwd_port"
@@ -5640,6 +5558,378 @@ quick_add_tunnel_rathole() {
         "" "" "tcp"; then
         echo -e "${GREEN}[+] Rathole [$ins_name] is up.${NC}"
         [[ "$role_conf" == "iran" ]] && hint "Run on Kharej: sudo jojonet --rathole $loc_ip"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+
+# ==========================================
+# Wstunnel reverse tunnel (WebSocket)
+# Iran=server, Kharej=client (-R TCP forwards)
+# ==========================================
+
+
+# Wstunnel reverse tunnel (Iran=server, Kharej=client)
+# Users → Iran:Ports → reverse TCP → Kharej localhost:Ports
+# ==========================================
+
+WSTUNNEL_RUNNER="/usr/local/bin/jojonet-run-wstunnel.sh"
+WSTUNNEL_SERVICE="/etc/systemd/system/jojonet-wstunnel@.service"
+
+detect_cpu_arch_wstunnel() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "linux_amd64" ;;
+        aarch64|arm64) echo "linux_arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
+install_wstunnel_binary() {
+    if [[ -x "$WSTUNNEL_BIN" ]]; then
+        return 0
+    fi
+    local arch ver_no fname tmpdir ok=0
+    arch=$(detect_cpu_arch_wstunnel) || { log_error "Unsupported CPU for Wstunnel"; return 1; }
+    command -v tar >/dev/null 2>&1 || { log_error "tar required for Wstunnel"; return 1; }
+    ver_no="${WSTUNNEL_VERSION#v}"
+    fname="wstunnel_${ver_no}_${arch}.tar.gz"
+    tmpdir=$(mktemp -d /tmp/jojonet-wstunnel.XXXXXX) || return 1
+    log_note "Downloading Wstunnel ${WSTUNNEL_VERSION} ($fname)..."
+    for url in \
+        "https://github.com/erebe/wstunnel/releases/download/${WSTUNNEL_VERSION}/${fname}" \
+        "https://ghproxy.net/https://github.com/erebe/wstunnel/releases/download/${WSTUNNEL_VERSION}/${fname}" \
+        "https://mirror.ghproxy.com/https://github.com/erebe/wstunnel/releases/download/${WSTUNNEL_VERSION}/${fname}"
+    do
+        echo -e "  ${CYAN}try${NC} $url" >&2
+        if JOJONET_ALLOW_UNSIGNED=1 download_verified "$url" "$tmpdir/$fname" "$fname"; then
+            ok=1
+            break
+        fi
+        rm -f "$tmpdir/$fname"
+    done
+    if (( ok != 1 )); then
+        rm -rf "$tmpdir"
+        log_error "Failed to download Wstunnel"
+        return 1
+    fi
+    tar -xzf "$tmpdir/$fname" -C "$tmpdir" || { rm -rf "$tmpdir"; return 1; }
+    if [[ -f "$tmpdir/wstunnel" ]]; then
+        install -m755 "$tmpdir/wstunnel" "$WSTUNNEL_BIN"
+    else
+        local found=""
+        found=$(find "$tmpdir" -type f -name wstunnel 2>/dev/null | head -1)
+        [[ -n "$found" ]] || { rm -rf "$tmpdir"; log_error "wstunnel binary missing in archive"; return 1; }
+        install -m755 "$found" "$WSTUNNEL_BIN"
+    fi
+    rm -rf "$tmpdir"
+    log_info "wstunnel installed: $WSTUNNEL_BIN"
+    return 0
+}
+
+
+ensure_wstunnel_firewall() {
+    local ctrl="${1:-$DEFAULT_WSTUNNEL_CTRL_PORT}" ports="${2:-$DEFAULT_WSTUNNEL_FWD}" p
+    # Open control + public forward ports (Iran server side)
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+        ufw allow "${ctrl}/tcp" comment 'jojonet-wstunnel-ctrl' >/dev/null 2>&1 || true
+        IFS=',' read -ra _pl <<< "$ports"
+        for p in "${_pl[@]}"; do
+            p="${p// /}"
+            [[ "$p" =~ ^[0-9]+$ ]] || continue
+            ufw allow "${p}/tcp" comment "jojonet-wstunnel-fwd-${p}" >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then
+        firewall-cmd --permanent --add-port="${ctrl}/tcp" >/dev/null 2>&1 || true
+        IFS=',' read -ra _pl <<< "$ports"
+        for p in "${_pl[@]}"; do
+            p="${p// /}"
+            [[ "$p" =~ ^[0-9]+$ ]] || continue
+            firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true
+        done
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+ensure_wstunnel_token() {
+    local pair_id="$1" peer_ip="${2:-}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}" created=0
+    install -d -m700 "$keydir"
+    if [[ ! -f "$keydir/wstunnel.token" ]]; then
+        if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
+            scp -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -q \
+                "root@${peer_ip}:${keydir}/wstunnel.token" "$keydir/" 2>/dev/null || true
+        fi
+    fi
+    if [[ ! -f "$keydir/wstunnel.token" ]]; then
+        openssl rand -hex 24 > "$keydir/wstunnel.token"
+        chmod 600 "$keydir/wstunnel.token"
+        created=1
+        if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
+            ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+                "root@${peer_ip}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || true
+            if ! scp -o ConnectTimeout=8 -q "$keydir/wstunnel.token" "root@${peer_ip}:${keydir}/" 2>/dev/null; then
+                log_warn "Token not copied via SSH — sync manually:"
+                hint "sudo jojonet --export-keys $peer_ip /root/jojonet-keys.tar.gz"
+                hint "On peer: sudo jojonet --import-keys <THIS_IP> /root/jojonet-keys.tar.gz"
+            fi
+        elif (( created )); then
+            log_warn "New Wstunnel token created. Peer must use the same token (export/import keys)."
+        fi
+    fi
+    printf '%s' "$keydir"
+}
+
+build_wstunnel_runtime_config() {
+    local name="$1" role="$2" rem="$3" ctrl_port="$4" keydir="$5" ports="${6:-$DEFAULT_WSTUNNEL_FWD}"
+    local token cmdsh p r_args="" nsvc=0
+    install -d -m700 "$WSTUNNEL_CONFIG_DIR"
+    [[ -f "$keydir/wstunnel.token" ]] || return 1
+    token=$(tr -d '
+' < "$keydir/wstunnel.token")
+    [[ -n "$token" ]] || return 1
+    if ! [[ "$ctrl_port" =~ ^[0-9]+$ ]] || (( ctrl_port < 1 || ctrl_port > 65535 )); then
+        log_error "Invalid Wstunnel control port: $ctrl_port"
+        return 1
+    fi
+    cmdsh="$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh"
+    IFS=',' read -ra _plist <<< "$ports"
+    for p in "${_plist[@]}"; do
+        p="${p// /}"
+        [[ "$p" =~ ^[0-9]+$ ]] || continue
+        nsvc=$((nsvc + 1))
+        r_args="${r_args} -R tcp://0.0.0.0:${p}:127.0.0.1:${p}"
+    done
+    if (( nsvc < 1 )); then
+        log_error "Wstunnel needs at least one valid forward port"
+        return 1
+    fi
+    if [[ "$role" == "iran" ]]; then
+        cat > "$cmdsh" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+exec "$WSTUNNEL_BIN" server --restrict-http-upgrade-path-prefix "${token}" "ws://0.0.0.0:${ctrl_port}"
+EOF
+    else
+        cat > "$cmdsh" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+exec "$WSTUNNEL_BIN" client --http-upgrade-path-prefix "${token}"${r_args} "ws://${rem}:${ctrl_port}"
+EOF
+    fi
+    chmod 755 "$cmdsh"
+    echo "$cmdsh"
+}
+
+
+create_wstunnel_runner_script() {
+    if ! cat << 'EOF' > "$WSTUNNEL_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval WstunnelToml WstunnelCmd"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" WstunnelToml="" WstunnelCmd="" WstunnelCmd=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+WSTUNNEL_BIN="/usr/local/bin/wstunnel"
+
+[[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || { echo "Config missing" >&2; exit 1; }
+load_safe_config "$CONFIG_FILE" || { echo "Bad config" >&2; exit 1; }
+toml="${WstunnelToml:-}"
+
+stop_ws() {
+    pkill -x wstunnel >/dev/null 2>&1 || true
+    pkill -f "wstunnel.*${Name}" >/dev/null 2>&1 || true
+}
+
+case "$ACTION" in
+    start)
+        stop_ws
+        [[ -n "$cmd" ]] || { echo "WstunnelCmd missing" >&2; exit 1; }
+        [[ -f "$cmd" ]] || { echo "cmd missing: $cmd" >&2; exit 1; }
+        echo "[jojonet-wstunnel:${Name}] Starting ($Role) $cmd"
+        exec bash "$cmd"
+        ;;
+    stop)
+        stop_rh
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$WSTUNNEL_RUNNER"
+}
+
+create_wstunnel_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_rh_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet Wstunnel Reverse Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-wstunnel-%i
+ExecStart=/usr/local/bin/jojonet-run-wstunnel.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-wstunnel.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=90
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$WSTUNNEL_SERVICE" ]] && cmp -s "$tmp_file" "$WSTUNNEL_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$WSTUNNEL_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+quick_add_tunnel_wstunnel() {
+    local peer_ip="${1:-}"
+    local ins_name="" role_conf="" loc_ip="" rem_ip=""
+    local fwd_port="$DEFAULT_WSTUNNEL_FWD" key_dir="" ctrl_port="$DEFAULT_WSTUNNEL_CTRL_PORT"
+    local existing="" ws_cmd=""
+
+    set +e
+    command -v clear >/dev/null && clear
+    logo
+    print_banner "Wstunnel Reverse Tunnel (WebSocket)"
+
+    echo -e "${CYAN}How it works:${NC}"
+    echo -e "  Iran   = wstunnel ${GREEN}SERVER${NC} (users hit Iran ports)"
+    echo -e "  Kharej = wstunnel ${GREEN}CLIENT${NC} (dials Iran, exposes local panel)"
+    echo -e "  Good when GRE/UDP is blocked but TCP reverse works."
+    echo ""
+
+    install_wstunnel_binary || { sleep 2; set -e; return 1; }
+    install -d -m700 "$WSTUNNEL_CONFIG_DIR"
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+
+    if [[ -z "$peer_ip" ]]; then
+        read -r -p "Peer server IP: " peer_ip
+    fi
+    peer_ip="${peer_ip// /}"
+    if ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip" "wstunnel"); then
+        echo -e "${YELLOW}[!] Wstunnel to $rem_ip exists [$existing]. Restarting...${NC}"
+        restart_tunnel "$existing"
+        sleep 2; set -e; return $?
+    fi
+
+    if ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Role required. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2; set -e; return 1
+    fi
+    echo -e "${GREEN}[*] Role:${NC} $role_conf ($([[ "$role_conf" == "iran" ]] && echo SERVER || echo CLIENT))"
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "wstunnel") || { set -e; return 1; }
+
+    read -r -p "Control port (Kharej→Iran dial) [$ctrl_port]: " _cp
+    ctrl_port=${_cp:-$ctrl_port}
+    if ! [[ "$ctrl_port" =~ ^[0-9]+$ ]] || (( ctrl_port < 1 || ctrl_port > 65535 )); then
+        echo -e "${RED}[!] Invalid control port.${NC}"
+        sleep 2; set -e; return 1
+    fi
+
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port=$(allocate_iran_forward_port "443")
+        read -r -p "Public forward ports on Iran [$fwd_port]: " _fp
+        fwd_port=${_fp:-$fwd_port}
+        fwd_port=$(normalize_port_list "$fwd_port")
+    else
+        read -r -p "Local panel ports on Kharej (must match Iran) [$fwd_port]: " _fp
+        fwd_port=${_fp:-$fwd_port}
+        fwd_port=$(normalize_port_list "$fwd_port")
+    fi
+
+    local pair_id
+    pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+    key_dir=$(ensure_wstunnel_token "$pair_id" "$rem_ip") || { set -e; return 1; }
+
+    echo -e "\n${CYAN}--- Wstunnel plan ---${NC}"
+    echo -e "  Name:     $ins_name"
+    echo -e "  Role:     $role_conf ($([[ "$role_conf" == "iran" ]] && echo server || echo client))"
+    echo -e "  Peer:     $rem_ip"
+    echo -e "  Control:  TCP $ctrl_port"
+    echo -e "  Forward:  $fwd_port"
+    echo -e "  Token:    $key_dir/wstunnel.token"
+    if [[ "$role_conf" == "iran" ]]; then
+        hint "Kharej must dial this Iran IP on TCP $ctrl_port — open firewall if needed"
+        hint "Now run on Kharej: sudo jojonet --wstunnel $loc_ip"
+    else
+        hint "Panel must listen on 127.0.0.1 (or all) for ports: $fwd_port"
+        hint "Iran must already be running wstunnel server"
+    fi
+    echo ""
+
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "0" \
+        "" "" "0" "$fwd_port" "wstunnel" "$ctrl_port" "$key_dir" \
+        "" "" "tcp"; then
+        echo -e "${GREEN}[+] Wstunnel [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "iran" ]] && hint "Run on Kharej: sudo jojonet --wstunnel $loc_ip"
         sleep 2
         set -e
         return 0
@@ -5818,7 +6108,7 @@ create_wstunnel_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval RatholeToml WstunnelCmd"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval WstunnelToml WstunnelCmd"
 
 load_safe_config() {
     local file="$1" line key val
@@ -5826,7 +6116,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd="" WstunnelCmd=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" WstunnelToml="" WstunnelCmd="" WstunnelCmd="" WstunnelCmd=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -5936,7 +6226,7 @@ quick_add_tunnel_wstunnel() {
     echo -e "${CYAN}How it works:${NC}"
     echo -e "  Iran   = wstunnel ${GREEN}SERVER${NC} (users hit Iran ports via WS reverse)"
     echo -e "  Kharej = wstunnel ${GREEN}CLIENT${NC} (dials Iran WS, exposes local panel)"
-    echo -e "  Good when TCP reverse over WebSocket works better than raw Rathole."
+    echo -e "  Good when TCP reverse over WebSocket works better than raw Wstunnel."
     echo ""
 
     install_wstunnel_binary || { sleep 2; set -e; return 1; }
@@ -6045,7 +6335,6 @@ for conf in "$INSTANCES_DIR"/*.conf; do
         wireguard) svc="jojonet-wg@${name}.service" ;;
         hysteria2) svc="jojonet-hy2@${name}.service" ;;
         rathole)   svc="jojonet-rathole@${name}.service" ;;
-        wstunnel|ws) svc="jojonet-wstunnel@${name}.service" ;;
         *)         svc="jojonet@${name}.service" ;;
     esac
     echo "[jojonet-boot] Ensuring $svc"
@@ -6106,7 +6395,6 @@ tunnel_service_unit() {
         wireguard)  echo "jojonet-wg@${name}.service" ;;
         hysteria2)  echo "jojonet-hy2@${name}.service" ;;
         rathole)    echo "jojonet-rathole@${name}.service" ;;
-        wstunnel|ws) echo "jojonet-wstunnel@${name}.service" ;;
         *)          echo "jojonet@${name}.service" ;;
     esac
 }
@@ -6262,7 +6550,6 @@ tunnel_peer_setup_cmd() {
         wireguard)   printf 'sudo jojonet --wg %s' "$loc_ip" ;;
         hysteria2)   printf 'sudo jojonet --hy2 %s' "$loc_ip" ;;
         rathole)     printf 'sudo jojonet --rathole %s' "$loc_ip" ;;
-        wstunnel|ws) printf 'sudo jojonet --wstunnel %s' "$loc_ip" ;;
         *)           printf 'sudo jojonet %s' "$loc_ip" ;;
     esac
 }
@@ -6305,9 +6592,9 @@ change_tunnel_peer_ip() {
     fwd_proto="${ForwardProto:-tcp}"
 
     if [[ "$role" == "iran" ]]; then
-        peer_label="Kharej / خارج"
+        peer_label="Kharej / ╪«╪د╪▒╪ش"
     else
-        peer_label="Iran / ایران"
+        peer_label="Iran / ╪د█î╪▒╪د┘"
     fi
 
     echo -e "\n${CYAN}=== Change peer IP [$tunnel_name] ===${NC}"
@@ -6324,7 +6611,7 @@ change_tunnel_peer_ip() {
         return 1
     fi
     if [[ "$new_peer" == "$old_peer" ]]; then
-        echo -e "${YELLOW}[!] Same peer IP — no change.${NC}"
+        echo -e "${YELLOW}[!] Same peer IP ظ¤ no change.${NC}"
         sleep 2
         set -e
         return 0
@@ -6443,20 +6730,6 @@ change_tunnel_peer_ip() {
             pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
             key_dir=$(ensure_rathole_token "$pair_id" "$rem_ip") || {
                 echo -e "${RED}[!] Rathole token setup failed.${NC}"
-                sleep 2
-                set -e
-                return 1
-            }
-            tun_ip=""
-            tun_remote=""
-            tun_server=""
-            tun_client=""
-            ;;
-        wstunnel|ws)
-            tcp_port="${TcpPort:-$DEFAULT_WSTUNNEL_CTRL_PORT}"
-            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
-            key_dir=$(ensure_wstunnel_token "$pair_id" "$rem_ip") || {
-                echo -e "${RED}[!] Wstunnel token setup failed.${NC}"
                 sleep 2
                 set -e
                 return 1
@@ -6621,7 +6894,6 @@ rollback_new_tunnel() {
         wireguard) unit="jojonet-wg@${name}.service" ;;
         hysteria2) unit="jojonet-hy2@${name}.service" ;;
         rathole)   unit="jojonet-rathole@${name}.service" ;;
-        wstunnel|ws) unit="jojonet-wstunnel@${name}.service" ;;
         *)         unit="jojonet@${name}.service" ;;
     esac
     echo -e "${RED}[*] Rolling back tunnel [$name]...${NC}"
@@ -6634,11 +6906,10 @@ rollback_new_tunnel() {
     pkill -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1
     pkill -f "hysteria.*${name}" >/dev/null 2>&1
     pkill -f "rathole.*${name}\\.toml" >/dev/null 2>&1
-    pkill -f "wstunnel.*${name}" >/dev/null 2>&1
-    pkill -f "${name}\\.cmd.sh" >/dev/null 2>&1
     rm -f "$PAQET_CONFIG_DIR/${name}.yaml" >/dev/null 2>&1
     rm -f "$HY2_CONFIG_DIR/${name}.yaml" >/dev/null 2>&1
     rm -f "$RATHOLE_CONFIG_DIR/${name}.toml" >/dev/null 2>&1
+    pkill -x wstunnel >/dev/null 2>&1 || true
     rm -f "$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh" >/dev/null 2>&1
     rm -f "$conf" "${conf}.tmp" >/dev/null 2>&1
     ip link delete "$name" >/dev/null 2>&1 || true
@@ -6720,7 +6991,7 @@ add_new_tunnel() {
         echo -e "${YELLOW}[!] Pair subnet $auto_subnet is already used locally by another GRE tunnel.${NC}"
         echo -e "${YELLOW}    Pick a free subnet ID (same on BOTH servers).${NC}"
     fi
-    echo -e "\n${CYAN}Tunnel overlay:${NC} ${TUNNEL_NET_PREFIX}.X.1 (Kharej) ↔ .2 (Iran)"
+    echo -e "\n${CYAN}Tunnel overlay:${NC} ${TUNNEL_NET_PREFIX}.X.1 (Kharej) ظ¤ .2 (Iran)"
     echo -e "${YELLOW}Auto for this peer pair: subnet ID ${auto_subnet}${NC}"
     read -r -p "Subnet ID [pair: $auto_subnet]: " subnet_input
     subnet_input=${subnet_input:-$auto_subnet}
@@ -6745,7 +7016,7 @@ add_new_tunnel() {
             continue
         fi
         if [[ -f "$INSTANCES_DIR/$INS_NAME.conf" ]] || ip link show "$INS_NAME" >/dev/null 2>&1; then
-            echo -e "${RED}[!] Name already in use — try another.${NC}"
+            echo -e "${RED}[!] Name already in use ظ¤ try another.${NC}"
             suggested=$(generate_tunnel_name_from_peer "$REM_IP" "$ROLE_CONF" "gre" "$subnet_byte") || true
             continue
         fi
@@ -6820,7 +7091,7 @@ manage_tunnels() {
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
         local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports="" TcpPort=""
         local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd="" WstunnelCmd="" WstunnelCmd="" WstunnelCmd=""
+        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" RatholeToml="" WstunnelCmd=""
         local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
         local file iran_ip kharej_ip
 
@@ -6870,7 +7141,7 @@ manage_tunnels() {
         menu_line "2) Troubleshoot, Logs & Restart"
         menu_line "3) Restart ALL Tunnels"
         menu_line "4) Enable Boot Persistence"
-        menu_line "5) Change peer IP (Iran ↔ Kharej)"
+        menu_line "5) Change peer IP (Iran ظ¤ Kharej)"
         menu_line "6) Delete Tunnel"
         menu_line "0) Back to Main Menu"
         echo ""
@@ -6965,11 +7236,10 @@ manage_tunnels() {
                     pkill -f "paqet run -c.*/${REM_NAME}\\.yaml" >/dev/null 2>&1 || true
                     pkill -f "hysteria.*${REM_NAME}" >/dev/null 2>&1 || true
                     pkill -f "rathole.*${REM_NAME}\\.toml" >/dev/null 2>&1 || true
-                    pkill -f "wstunnel.*${REM_NAME}" >/dev/null 2>&1 || true
-                    pkill -f "${REM_NAME}\\.cmd.sh" >/dev/null 2>&1 || true
                     rm -f "$PAQET_CONFIG_DIR/${REM_NAME}.yaml" 2>/dev/null || true
                     rm -f "$HY2_CONFIG_DIR/${REM_NAME}.yaml" 2>/dev/null || true
                     rm -f "$RATHOLE_CONFIG_DIR/${REM_NAME}.toml" 2>/dev/null || true
+                    pkill -x wstunnel >/dev/null 2>&1 || true
                     rm -f "$WSTUNNEL_CONFIG_DIR/${REM_NAME}.cmd.sh" 2>/dev/null || true
                     ip link show "$REM_NAME" >/dev/null 2>&1 && ip link delete "$REM_NAME" >/dev/null 2>&1 || true
                     nft list table ip "jojonet_$REM_NAME" >/dev/null 2>&1 && \
@@ -7072,52 +7342,52 @@ _logo_glyph() {
     case "$ch" in
         J)
             case "$row" in
-                0) printf '%-8s' '   ██╗  ' ;;
-                1) printf '%-8s' '   ██║  ' ;;
-                2) printf '%-8s' '   ██║  ' ;;
-                3) printf '%-8s' '   ██║  ' ;;
-                4) printf '%-8s' '█ ██║  ' ;;
-                5) printf '%-8s' ' ███╔╝ ' ;;
+                0) printf '%-8s' '   ظûêظûêظـù  ' ;;
+                1) printf '%-8s' '   ظûêظûêظـّ  ' ;;
+                2) printf '%-8s' '   ظûêظûêظـّ  ' ;;
+                3) printf '%-8s' '   ظûêظûêظـّ  ' ;;
+                4) printf '%-8s' 'ظûê ظûêظûêظـّ  ' ;;
+                5) printf '%-8s' ' ظûêظûêظûêظـ¤ظـإ ' ;;
             esac
             ;;
         O)
             case "$row" in
-                0) printf '%-9s' ' ██████╗ ' ;;
-                1) printf '%-9s' '██╔═══██╗' ;;
-                2) printf '%-9s' '██║   ██║' ;;
-                3) printf '%-9s' '██║   ██║' ;;
-                4) printf '%-9s' '╚██████╔╝' ;;
-                5) printf '%-9s' ' ╚═════╝ ' ;;
+                0) printf '%-9s' ' ظûêظûêظûêظûêظûêظûêظـù ' ;;
+                1) printf '%-9s' 'ظûêظûêظـ¤ظـظـظـظûêظûêظـù' ;;
+                2) printf '%-9s' 'ظûêظûêظـّ   ظûêظûêظـّ' ;;
+                3) printf '%-9s' 'ظûêظûêظـّ   ظûêظûêظـّ' ;;
+                4) printf '%-9s' 'ظـأظûêظûêظûêظûêظûêظûêظـ¤ظـإ' ;;
+                5) printf '%-9s' ' ظـأظـظـظـظـظـظـإ ' ;;
             esac
             ;;
         N)
             case "$row" in
-                0) printf '%-10s' '███╗   ██╗' ;;
-                1) printf '%-10s' '████╗  ██║' ;;
-                2) printf '%-10s' '██╔██╗ ██║' ;;
-                3) printf '%-10s' '██║╚██╗██║' ;;
-                4) printf '%-10s' '██║ ╚████║' ;;
-                5) printf '%-10s' '╚═╝  ╚═══╝' ;;
+                0) printf '%-10s' 'ظûêظûêظûêظـù   ظûêظûêظـù' ;;
+                1) printf '%-10s' 'ظûêظûêظûêظûêظـù  ظûêظûêظـّ' ;;
+                2) printf '%-10s' 'ظûêظûêظـ¤ظûêظûêظـù ظûêظûêظـّ' ;;
+                3) printf '%-10s' 'ظûêظûêظـّظـأظûêظûêظـùظûêظûêظـّ' ;;
+                4) printf '%-10s' 'ظûêظûêظـّ ظـأظûêظûêظûêظûêظـّ' ;;
+                5) printf '%-10s' 'ظـأظـظـإ  ظـأظـظـظـظـإ' ;;
             esac
             ;;
         E)
             case "$row" in
-                0) printf '%-9s' '███████╗ ' ;;
-                1) printf '%-9s' '██╔════╝ ' ;;
-                2) printf '%-9s' '█████╗   ' ;;
-                3) printf '%-9s' '██╔══╝   ' ;;
-                4) printf '%-9s' '███████╗ ' ;;
-                5) printf '%-9s' '╚══════╝ ' ;;
+                0) printf '%-9s' 'ظûêظûêظûêظûêظûêظûêظûêظـù ' ;;
+                1) printf '%-9s' 'ظûêظûêظـ¤ظـظـظـظـظـإ ' ;;
+                2) printf '%-9s' 'ظûêظûêظûêظûêظûêظـù   ' ;;
+                3) printf '%-9s' 'ظûêظûêظـ¤ظـظـظـإ   ' ;;
+                4) printf '%-9s' 'ظûêظûêظûêظûêظûêظûêظûêظـù ' ;;
+                5) printf '%-9s' 'ظـأظـظـظـظـظـظـظـإ ' ;;
             esac
             ;;
         T)
             case "$row" in
-                0) printf '%-9s' '████████╗' ;;
-                1) printf '%-9s' '╚══██╔══╝' ;;
-                2) printf '%-9s' '   ██║   ' ;;
-                3) printf '%-9s' '   ██║   ' ;;
-                4) printf '%-9s' '   ██║   ' ;;
-                5) printf '%-9s' '   ╚═╝   ' ;;
+                0) printf '%-9s' 'ظûêظûêظûêظûêظûêظûêظûêظûêظـù' ;;
+                1) printf '%-9s' 'ظـأظـظـظûêظûêظـ¤ظـظـظـإ' ;;
+                2) printf '%-9s' '   ظûêظûêظـّ   ' ;;
+                3) printf '%-9s' '   ظûêظûêظـّ   ' ;;
+                4) printf '%-9s' '   ظûêظûêظـّ   ' ;;
+                5) printf '%-9s' '   ظـأظـظـإ   ' ;;
             esac
             ;;
     esac
@@ -7144,14 +7414,14 @@ _logo_art_row() {
 _logo_box_edge() {
     local kind="$1" inner_w="$2"
     local bar="" end i
-    for (( i=0; i<inner_w + 4; i++ )); do bar+='═'; done
-    [[ "$kind" == '╔' ]] && end='╗' || end='╝'
+    for (( i=0; i<inner_w + 4; i++ )); do bar+='ظـ'; done
+    [[ "$kind" == 'ظـ¤' ]] && end='ظـù' || end='ظـإ'
     echo -e "${CYAN}  ${kind}${bar}${end}${NC}"
 }
 
 _logo_box_blank() {
     local inner_w="$1"
-    printf "${CYAN}  ║${NC}%*s${CYAN}║${NC}\n" "$((inner_w + 4))" ""
+    printf "${CYAN}  ظـّ${NC}%*s${CYAN}ظـّ${NC}\n" "$((inner_w + 4))" ""
 }
 
 logo() {
@@ -7167,29 +7437,29 @@ logo() {
     done
 
     echo ""
-    _logo_box_edge '╔' "$inner_w"
+    _logo_box_edge 'ظـ¤' "$inner_w"
     _logo_box_blank "$inner_w"
 
     for row in "${art[@]}"; do
-        printf "${CYAN}  ║${NC}  ${YELLOW}%-*s${NC}  ${CYAN}║${NC}\n" "$inner_w" "$row"
+        printf "${CYAN}  ظـّ${NC}  ${YELLOW}%-*s${NC}  ${CYAN}ظـّ${NC}\n" "$inner_w" "$row"
     done
 
     _logo_box_blank "$inner_w"
 
-    sub="v${JOJONET_VERSION}  |  Iran ↔ Foreign Tunnel Manager"
+    sub="v${JOJONET_VERSION}  |  Iran ظ¤ Foreign Tunnel Manager"
     left=$(( (inner_w - ${#sub}) / 2 ))
     right=$(( inner_w - ${#sub} - left ))
-    printf "${CYAN}  ║${NC}  %*s${BLUE}v${JOJONET_VERSION}${NC}  ${MAGENTA}|${NC}  Iran ↔ Foreign Tunnel Manager%*s  ${CYAN}║${NC}\n" \
+    printf "${CYAN}  ظـّ${NC}  %*s${BLUE}v${JOJONET_VERSION}${NC}  ${MAGENTA}|${NC}  Iran ظ¤ Foreign Tunnel Manager%*s  ${CYAN}ظـّ${NC}\n" \
         "$left" "" "$right" ""
 
     sup="Support: ${JOJONET_SUPPORT}"
     left=$(( (inner_w - ${#sup}) / 2 ))
     right=$(( inner_w - ${#sup} - left ))
-    printf "${CYAN}  ║${NC}  %*s${GREEN}Support:${NC} ${JOJONET_SUPPORT}%*s  ${CYAN}║${NC}\n" \
+    printf "${CYAN}  ظـّ${NC}  %*s${GREEN}Support:${NC} ${JOJONET_SUPPORT}%*s  ${CYAN}ظـّ${NC}\n" \
         "$left" "" "$right" ""
 
     _logo_box_blank "$inner_w"
-    _logo_box_edge '╚' "$inner_w"
+    _logo_box_edge 'ظـأ' "$inner_w"
     echo ""
 }
 
@@ -7205,7 +7475,7 @@ main_menu() {
         menu_line "5) WireGuard Tunnel (low latency)"
         menu_line "6) Hysteria2 Tunnel (high speed)"
         menu_line "7) Rathole Reverse (TCP reverse)"
-        menu_line "8) Wstunnel Reverse (WebSocket reverse)"
+        menu_line "8) Wstunnel Reverse (WebSocket)"
         menu_line "9) Advanced GRE Setup"
         menu_line "10) Manage Tunnels (map / change peer / restart / delete)"
         menu_line "11) System Status (ping + forward test)"
@@ -7215,7 +7485,7 @@ main_menu() {
         menu_line "15) Update JojoNet from GitHub"
         menu_line "16) Backup / Restore configs"
         menu_line "17) Import manual GRETun"
-        menu_line "18) Changelog / تغییرات نسخه‌ها"
+        menu_line "18) Changelog / ╪ز╪║█î█î╪▒╪د╪ز ┘╪│╪«┘çظî┘ç╪د"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -7296,11 +7566,8 @@ create_hy2_runner_script >/dev/null 2>&1 || true
 create_hy2_service >/dev/null 2>&1 || true
 create_rathole_runner_script >/dev/null 2>&1 || true
 create_rathole_service >/dev/null 2>&1 || true
-create_wstunnel_runner_script >/dev/null 2>&1 || true
-create_wstunnel_service >/dev/null 2>&1 || true
 install -d -m700 "$HY2_CONFIG_DIR" 2>/dev/null || true
 install -d -m700 "$RATHOLE_CONFIG_DIR" 2>/dev/null || true
-install -d -m700 "$WSTUNNEL_CONFIG_DIR" 2>/dev/null || true
 repair_all_instances
 if (( $(count_configured_tunnels) > 0 )); then
     create_boot_restore_service >/dev/null 2>&1 || true
@@ -7391,10 +7658,6 @@ if [[ "${1:-}" == "--hy2" || "${1:-}" == "--hysteria2" ]] && [[ -n "${2:-}" ]]; 
 fi
 if [[ "${1:-}" == "--rathole" || "${1:-}" == "--rh" ]] && [[ -n "${2:-}" ]]; then
     quick_add_tunnel_rathole "$2"
-    exit $?
-fi
-if [[ "${1:-}" == "--wstunnel" || "${1:-}" == "--ws" ]] && [[ -n "${2:-}" ]]; then
-    quick_add_tunnel_wstunnel "$2"
     exit $?
 fi
 if [[ "${1:-}" == "--peer" && -n "${2:-}" ]]; then
