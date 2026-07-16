@@ -2909,6 +2909,9 @@ EOF
             elif [[ "$tunnel_mode" == "rathole" ]]; then
                 echo -e "  Control TCP: $tcp_port  |  Forward: ${fwd_port:-?}  |  Config: ${rh_toml:-n/a}"
                 echo -e "  Mode: Iran=server / Kharej=client (reverse)"
+            elif [[ "$tunnel_mode" == "wstunnel" ]]; then
+                echo -e "  Control TCP: $tcp_port  |  Forward: ${fwd_port:-?}  |  Config: ${ws_cmd:-n/a}"
+                echo -e "  Mode: Iran=server / Kharej=client (WebSocket reverse)"
             elif [[ "$tunnel_mode" == "wireguard" ]]; then
                 echo -e "  UDP port: $tcp_port  |  Interface: $ins_name  |  IP: $tun_ip"
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
@@ -5691,7 +5694,8 @@ build_wstunnel_runtime_config() {
     local token cmdsh p r_args="" nsvc=0
     install -d -m700 "$WSTUNNEL_CONFIG_DIR"
     [[ -f "$keydir/wstunnel.token" ]] || return 1
-    token=$(tr -d '
+    token=$(tr -d '
+
 ' < "$keydir/wstunnel.token")
     [[ -n "$token" ]] || return 1
     if ! [[ "$ctrl_port" =~ ^[0-9]+$ ]] || (( ctrl_port < 1 || ctrl_port > 65535 )); then
