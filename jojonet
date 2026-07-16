@@ -5268,7 +5268,6 @@ quick_add_tunnel_rathole() {
     if [[ -z "$peer_ip" ]]; then
         read -r -p "Peer server IP: " peer_ip
     fi
-    peer_ip="${peer_ip//' '/}"
     peer_ip="${peer_ip// /}"
     if ! validate_ipv4 "$peer_ip"; then
         echo -e "${RED}[!] Invalid peer IP.${NC}"
