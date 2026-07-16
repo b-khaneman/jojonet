@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.5.0"
+readonly JOJONET_VERSION="1.5.1"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -423,6 +423,13 @@ self_update_jojonet() {
     echo -e "  New: $($JOJONET_BIN_PATH --version 2>/dev/null || echo "jojonet ${new_ver:-$remote_ver}")"
     echo -e "  Configs kept in: /etc/jojonet/"
     [[ -f "$backup" ]] && echo -e "  Rollback: cp -f $backup $JOJONET_BIN_PATH"
+    echo ""
+    echo -e "${CYAN}=== What's new ===${NC}"
+    if "$JOJONET_BIN_PATH" --changelog 2>/dev/null | head -n 55; then
+        :
+    else
+        echo -e "  Run: ${CYAN}sudo jojonet --changelog${NC}"
+    fi
     echo ""
     return 0
 }
@@ -980,6 +987,67 @@ print_banner() {
     echo ""
 }
 
+show_changelog() {
+    local only="${1:-}"
+    cat <<EOF
+JOJONET — Changelog / تغییرات نسخه‌ها
+Repo: ${JOJONET_REPO}
+
+────────────────────────────────────────
+## 1.5.1
+- راهنما: اعلام تغییرات هر نسخه در --help و --changelog
+- README به‌روز با Rathole و تاریخچه نسخه‌ها
+
+## 1.5.0
+- تانل جدید: Rathole Reverse TCP (ریورس)
+  ایران=SERVER | خارج=CLIENT
+  منو 7 / دستور: sudo jojonet --rathole <PEER_IP>
+- مناسب وقتی GRE/UDP بسته است ولی TCP معکوس کار می‌کند
+
+## 1.4.3
+- Hop Port هیستریا۲ سخت‌گیرانه شد (nft/iptables، UFW، random interval)
+- Env: JOJONET_HY2_HOP_RANGE / JOJONET_HY2_HOP_INTERVAL
+
+## 1.4.2
+- Hop Port برای Hysteria2 (رنج UDP مثل 20000-50000 + hopInterval)
+
+## 1.4.1
+- Auto forward port برای همه تانل‌های ایران (نه فقط GRE)
+- Pairing card درست برای هر mode (--wg / --tun-tcp / …)
+
+## 1.4.0
+- Pre-flight قبل از deploy
+- --status / --logs / --import-gretun / backup-restore
+- Pairing card + webhook
+
+## 1.3.1
+- GRE چندتانلی: subnet یکتا per peer (172.20.X)
+
+## 1.3.0
+- GRE مثل setup دستی: 172.20.10.x، MTU 1436، iptables DNAT+MASQUERADE
+
+## 1.2.8
+- تغییر IP طرف مقابل: --change-peer / Manage منو
+
+## 1.2.7
+- فیکس کرش --list-tunnels --detail
+
+## 1.2.6
+- فیکس ping: ip_forward + rp_filter | --fix-tunnels
+
+## 1.2.0 – 1.2.5
+- Self-update از GitHub، نقشه تانل ایران/خارج، لیبل‌ها
+
+## 1.1.0
+- WireGuard (--wg) و Hysteria2 (--hy2)
+
+## 1.0.0
+- اولین انتشار: GRE / TUN-TCP / Paqet / VXLAN
+
+Full detail: ${JOJONET_REPO}/blob/main/CHANGELOG.md
+EOF
+}
+
 show_help() {
     cat <<EOF
 JOJONET v${JOJONET_VERSION} — Iran ↔ Kharej tunnel manager
@@ -992,7 +1060,7 @@ Usage:
   sudo jojonet --paqet <PEER_IP>       Paqet (Raw/KCP) tunnel
   sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
   sudo jojonet --wg <PEER_IP>          WireGuard tunnel (low latency)
-  sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed)
+  sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed / hop port)
   sudo jojonet --rathole <PEER_IP>     Rathole reverse TCP (Iran=server)
   sudo jojonet --status                Full status (ping, forward, tunnels)
   sudo jojonet --logs <NAME> [N]       Tunnel journal (default 50 lines)
@@ -1003,12 +1071,19 @@ Usage:
   sudo jojonet --change-peer <NAME> <IP>  Change peer IP and redeploy
   sudo jojonet --list-tunnels [--detail] List tunnels
   sudo jojonet --health <NAME>         Healthcheck one tunnel
+  sudo jojonet --changelog             Show version history / تغییرات نسخه‌ها
   sudo jojonet --export-keys <PEER> [FILE]
   sudo jojonet --import-keys <PEER> <FILE>
   sudo jojonet --update [--force]      Update from GitHub
   sudo jojonet --refresh-templates     Regenerate runner scripts
   sudo jojonet --role iran|kharej      Force role
   sudo jojonet --version | --help
+
+What's new in v${JOJONET_VERSION}:
+  • راهنمای تغییرات نسخه (--changelog / داخل --help)
+  • از 1.5.0: Rathole Reverse TCP
+  • از 1.4.x: Hop Port هیستریا۲، --status، pairing، auto-port
+  Full list:  sudo jojonet --changelog
 
 Environment:
   JOJONET_ROLE=iran|kharej
@@ -1018,10 +1093,14 @@ Environment:
   JOJONET_ALLOW_UNSIGNED=1
   JOJONET_QUICK_PROBE_MTU=1
 
-Quick start:
+Quick start (GRE):
   1) Kharej first:  sudo jojonet <IRAN_IP>
   2) Iran second:   sudo jojonet <KHAREJ_IP>
   3) Pairing card shows exact command for peer server
+
+Rathole reverse:
+  1) Iran:   sudo jojonet --rathole <KHAREJ_IP>
+  2) Kharej: sudo jojonet --rathole <IRAN_IP>
 
 Support: ${JOJONET_SUPPORT}  |  ${JOJONET_REPO}
 EOF
@@ -1031,6 +1110,10 @@ EOF
 case "${1:-}" in
     --help|-h)
         show_help
+        exit 0
+        ;;
+    --changelog|--changes|--whats-new)
+        show_changelog
         exit 0
         ;;
     --version|-v)
@@ -6502,6 +6585,7 @@ main_menu() {
         menu_line "14) Update JojoNet from GitHub"
         menu_line "15) Backup / Restore configs"
         menu_line "16) Import manual GRETun"
+        menu_line "17) Changelog / تغییرات نسخه‌ها"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -6554,6 +6638,12 @@ main_menu() {
             16)
                 read -r -p "Interface name [GRETun]: " _gi || true
                 import_manual_gretun "${_gi:-GRETun}" || true
+                ;;
+            17)
+                command -v clear >/dev/null && clear
+                logo
+                show_changelog
+                press_enter
                 ;;
             0) command -v clear >/dev/null && clear; opsec_scrub_history; exit 0 ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;

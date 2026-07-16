@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.1
+- **راهنما**: اعلام تغییرات هر نسخه در `sudo jojonet --help` و `sudo jojonet --changelog`
+- بعد از `--update` خلاصهٔ What's new نمایش داده می‌شود
+- README به‌روز با Rathole و تاریخچه نسخه‌ها
+
 ## 1.5.0
 - **Rathole Reverse TCP tunnel** (alternative to GRE when UDP/GRE is blocked)
   - Iran = rathole **SERVER** (users hit public ports)
