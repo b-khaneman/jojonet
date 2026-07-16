@@ -1,4 +1,4 @@
-# JojoNet v1.5.2
+# JojoNet v1.5.3
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -17,6 +17,7 @@ sudo jojonet --help
 
 | نسخه | چه چیزی اضافه / عوض شد |
 |------|-------------------------|
+| **1.5.3** | **Wstunnel Reverse** — ریورس WebSocket (ایران=SERVER، خارج=CLIENT -R) |
 | **1.5.2** | دیباگ Rathole: repair، فایروال، mirror دانلود، rollback/uninstall کامل |
 | **1.5.1** | راهنمای تغییرات در `--help` / `--changelog`؛ نمایش What's new بعد از آپدیت |
 | **1.5.0** | **Rathole Reverse** — ریورس TCP (ایران=SERVER، خارج=CLIENT) |
@@ -45,7 +46,7 @@ sudo jojonet --check-update
 sudo jojonet --update
 ```
 
-یا از منو → گزینه **14) Update JojoNet from GitHub**
+یا از منو → گزینه **15) Update JojoNet from GitHub**
 
 اجبار به نصب مجدد:
 ```bash
@@ -78,9 +79,9 @@ sudo jojonet
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.5.2`
+خروجی باید باشد: `jojonet 1.5.3`
 
-> همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole که اول ایران بهتر است).
+> همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole/Wstunnel که اول ایران بهتر است).
 
 ---
 
@@ -191,7 +192,7 @@ sudo jojonet --hy2 PEER_IP
 |--|--|
 | **بهترین برای** | وقتی GRE/UDP بسته است ولی TCP معکوس کار می‌کند |
 | **منو** | گزینه `7` |
-| **دستور** | `sudo jojonet --rathole PEER_IP` |
+| **دستور** | `sudo jojonet --rathole / --wstunnel PEER_IP` |
 
 | نقش | کار |
 |-----|-----|
@@ -226,10 +227,10 @@ Control port پیش‌فرض: `2333` — روی فایروال ایران باز
 |------------|--------|
 | همه چیز باز است | **WireGuard** یا **GRE** |
 | فقط UDP خوب است | **WireGuard** / **Hysteria2** / **VXLAN** |
-| GRE بسته، TCP باز | **TUN/TCP** یا **Rathole Reverse** |
+| GRE بسته، TCP باز | **TUN/TCP** یا **Rathole** / **Wstunnel** |
 | فیلتر شدید / نیاز سرعت | **Hysteria2** (+ Hop Port) |
 | مسیر ناپایدار | **Paqet** یا **Hysteria2** |
-| ریورس (خارج dial به ایران) | **Rathole** |
+| ریورس (خارج dial به ایران) | **Rathole** / **Wstunnel** |
 
 ---
 
@@ -278,7 +279,7 @@ sudo jojonet-uninstall
 ```text
 1) روی هر دو سرور: نصب / آپدیت JojoNet
 2) نوع تانل را از جدول بالا انتخاب کن
-3) اول خارج را اجرا کن (به‌جز Rathole → اول ایران)
+3) اول خارج را اجرا کن (به‌جز Rathole/Wstunnel → اول ایران)
 4) بعد طرف مقابل را با IP درست اجرا کن
 5) با --status یا --health چک کن
 ```

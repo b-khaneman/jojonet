@@ -1,3 +1,13 @@
+## 1.5.3
+- **Wstunnel Reverse WebSocket tunnel** (alternative to Rathole over WebSocket)
+  - Iran = wstunnel **SERVER** (`--restrict-http-upgrade-path-prefix`)
+  - Kharej = wstunnel **CLIENT** with `-R tcp://0.0.0.0:PORT:127.0.0.1:PORT`
+  - Menu item 8 + CLI: `sudo jojonet --wstunnel <PEER_IP>` (alias `--ws`)
+  - Default control port **8080**, forward **443**
+  - Token: `$keydir/wstunnel.token` | runtime: `$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh`
+  - Binary pin: wstunnel **v10.1.9** (GitHub + ghproxy mirrors)
+  - Repair, firewall, rollback, uninstall wired like Rathole
+
 # Changelog
 
 ## 1.5.2

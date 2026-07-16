@@ -18,7 +18,7 @@ for conf in /etc/jojonet/instances/*.conf; do
     for unit in "jojonet@${name}.service" "jojonet-tcptun@${name}.service" \
                 "jojonet-paqet@${name}.service" "jojonet-vxlan@${name}.service" \
                 "jojonet-wg@${name}.service" "jojonet-hy2@${name}.service" \
-                "jojonet-rathole@${name}.service"; do
+                "jojonet-rathole@${name}.service" "jojonet-wstunnel@${name}.service"; do
         systemctl stop "$unit" 2>/dev/null || true
         systemctl disable "$unit" 2>/dev/null || true
     done
@@ -37,6 +37,7 @@ rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-wg@.service \
       /etc/systemd/system/jojonet-hy2@.service \
       /etc/systemd/system/jojonet-rathole@.service \
+      /etc/systemd/system/jojonet-wstunnel@.service \
       /etc/systemd/system/jojonet-boot.service
 rm -f /usr/local/bin/jojonet-run-instance.sh \
       /usr/local/bin/jojonet-run-tuntcp.sh \
@@ -45,6 +46,7 @@ rm -f /usr/local/bin/jojonet-run-instance.sh \
       /usr/local/bin/jojonet-run-wg.sh \
       /usr/local/bin/jojonet-run-hy2.sh \
       /usr/local/bin/jojonet-run-rathole.sh \
+      /usr/local/bin/jojonet-run-wstunnel.sh \
       /usr/local/bin/jojonet-boot-restore.sh \
       /usr/local/bin/jojonet \
       /usr/local/bin/jojonet-uninstall
@@ -61,11 +63,11 @@ else
     warn "Kept /etc/jojonet"
 fi
 
-read -r -p "Remove downloaded tun/paqet/hysteria/rathole binaries? [y/N]: " c3
+read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel binaries? [y/N]: " c3
 c3=$(echo "$c3" | tr '[:upper:]' '[:lower:]')
 if [[ "$c3" == "y" ]]; then
     rm -f /usr/local/bin/tun-server /usr/local/bin/tun-client \
-          /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole
+          /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole /usr/local/bin/wstunnel
 fi
 
 log "JojoNet uninstalled."
