@@ -1760,6 +1760,13 @@ wait_for_tunnel_up() {
             if systemctl is-active --quiet "jojonet-rathole@${name}.service" 2>/dev/null; then
                 return 0
             fi
+        elif [[ "$mode" == "wstunnel" ]]; then
+            if pgrep -x wstunnel >/dev/null 2>&1 || pgrep -f "wstunnel.*${name}" >/dev/null 2>&1; then
+                return 0
+            fi
+            if systemctl is-active --quiet "jojonet-wstunnel@${name}.service" 2>/dev/null; then
+                return 0
+            fi
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             return 0
         fi
