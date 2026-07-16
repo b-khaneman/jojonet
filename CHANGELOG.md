@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+- **Rathole Reverse TCP tunnel** (alternative to GRE when UDP/GRE is blocked)
+  - Iran = rathole **SERVER** (users hit public ports)
+  - Kharej = rathole **CLIENT** (dials Iran control port, exposes local panel)
+  - Menu item 7 + CLI: `sudo jojonet --rathole <PEER_IP>`
+  - Asks for control port + forward ports at setup
+  - Token sync via SSH/SCP (same pattern as HY2/Paqet)
+
 ## 1.4.3
 - **Hysteria2 Hop Port hardened / debug pass**
   - Require `nft` or `iptables` on Kharej before hop deploy (hard fail)
