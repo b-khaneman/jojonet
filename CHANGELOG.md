@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.2
+- **دیباگ Rathole**: repair برای toml گم‌شده/کهنه، فایروال UFW/firewalld روی ایران، دانلود با mirrorهای ghproxy
+- Pre-flight: اعتبارسنجی control port + هشدار پورت فوروارد
+- Rollback تمیز: kill رات‌هول + حذف toml/yaml
+- Uninstall کامل برای WG / HY2 / Rathole (unit + runner + باینری)
+- راهنمای `--export-keys` / `--import-keys` اگر sync توکن با SSH نشد
+
 ## 1.5.1
 - **راهنما**: اعلام تغییرات هر نسخه در `sudo jojonet --help` و `sudo jojonet --changelog`
 - بعد از `--update` خلاصهٔ What's new نمایش داده می‌شود

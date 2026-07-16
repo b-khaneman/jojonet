@@ -1,4 +1,4 @@
-# JojoNet v1.5.1
+# JojoNet v1.5.2
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -17,6 +17,7 @@ sudo jojonet --help
 
 | نسخه | چه چیزی اضافه / عوض شد |
 |------|-------------------------|
+| **1.5.2** | دیباگ Rathole: repair، فایروال، mirror دانلود، rollback/uninstall کامل |
 | **1.5.1** | راهنمای تغییرات در `--help` / `--changelog`؛ نمایش What's new بعد از آپدیت |
 | **1.5.0** | **Rathole Reverse** — ریورس TCP (ایران=SERVER، خارج=CLIENT) |
 | **1.4.3** | Hop Port هیستریا۲ سخت‌گیرانه (nft/iptables، UFW، random interval) |
@@ -77,7 +78,7 @@ sudo jojonet
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.5.1`
+خروجی باید باشد: `jojonet 1.5.2`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole که اول ایران بهتر است).
 

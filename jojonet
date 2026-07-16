@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.5.1"
+readonly JOJONET_VERSION="1.5.2"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -727,13 +727,26 @@ preflight_tunnel_check() {
         local fp="${8:-443}" first="${fp%%,*}"
         first="${first// /}"
         case "$mode" in
-            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2)
+            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2|rathole)
                 if [[ -n "$first" ]] && iran_dnat_port_in_use "$first"; then
                     echo -e "  ${YELLOW}[!] Forward port $first already used — will auto-pick alternate${NC}"
                     warns=$((warns + 1))
                 fi
                 ;;
         esac
+    fi
+
+    if [[ "$mode" == "rathole" && -n "$extra_port" ]]; then
+        if ! [[ "$extra_port" =~ ^[0-9]+$ ]] || (( extra_port < 1 || extra_port > 65535 )); then
+            echo -e "  ${RED}[!] Invalid Rathole control port: $extra_port${NC}"
+            issues=$((issues + 1))
+        elif command -v ss >/dev/null 2>&1 && ss -tlnH 2>/dev/null | awk -v p=":$extra_port" '$4 ~ p"$" { found=1 } END { exit !found }'; then
+            echo -e "  ${YELLOW}[!] TCP control port $extra_port already listening${NC}"
+            warns=$((warns + 1))
+        fi
+        if [[ "$role" == "iran" ]]; then
+            echo -e "  ${CYAN}[*] Rathole: open firewall TCP $extra_port (control) + forward ports${NC}"
+        fi
     fi
 
     if (( issues == 0 && warns == 0 )); then
@@ -994,6 +1007,12 @@ JOJONET — Changelog / تغییرات نسخه‌ها
 Repo: ${JOJONET_REPO}
 
 ────────────────────────────────────────
+## 1.5.2
+- دیباگ Rathole: repair toml، فایروال UFW، دانلود با mirror، rollback تمیز
+- Pre-flight برای control port / پورت فوروارد Rathole
+- Uninstall کامل برای WG / HY2 / Rathole
+- توکن: راهنمای --export-keys اگر SSH sync نشد
+
 ## 1.5.1
 - راهنما: اعلام تغییرات هر نسخه در --help و --changelog
 - README به‌روز با Rathole و تاریخچه نسخه‌ها
@@ -1080,7 +1099,8 @@ Usage:
   sudo jojonet --version | --help
 
 What's new in v${JOJONET_VERSION}:
-  • راهنمای تغییرات نسخه (--changelog / داخل --help)
+  • دیباگ Rathole (repair / فایروال / mirror download)
+  • راهنمای تغییرات نسخه (--changelog)
   • از 1.5.0: Rathole Reverse TCP
   • از 1.4.x: Hop Port هیستریا۲، --status، pairing، auto-port
   Full list:  sudo jojonet --changelog
@@ -1847,6 +1867,33 @@ repair_single_config() {
                     [[ "$role" == "kharej" ]] && ensure_hy2_hop_firewall "$hop_range" || true
                 fi
                 echo -e "${YELLOW}[*] Repaired Hysteria2 YAML for [$name]${hop_range:+ (hop $hop_range)}${NC}"
+            fi
+        fi
+    elif [[ "${mode:-gre}" == "rathole" ]]; then
+        local toml tcp_port key_dir role rem fwd need_rebuild=0
+        toml=$(conf_get_field "$conf" "RatholeToml")
+        tcp_port=$(conf_get_field "$conf" "TcpPort")
+        key_dir=$(conf_get_field "$conf" "KeyDir")
+        role=$(conf_get_field "$conf" "Role")
+        rem=$(conf_get_field "$conf" "Remote_IP")
+        fwd=$(conf_get_field "$conf" "Ports")
+        if [[ -z "$toml" || ! -f "$toml" || ! -s "$toml" ]]; then
+            need_rebuild=1
+        elif ! grep -qE '^\[(server|client)\]' "$toml" 2>/dev/null; then
+            need_rebuild=1
+        fi
+        if (( need_rebuild == 1 )) && [[ -n "$key_dir" && -f "$key_dir/rathole.token" ]]; then
+            toml=$(build_rathole_runtime_config "$name" "$role" "$rem" \
+                "${tcp_port:-$DEFAULT_RATHOLE_CTRL_PORT}" "$key_dir" \
+                "${fwd:-$DEFAULT_RATHOLE_FWD}") && changed=1
+            if [[ -n "$toml" ]]; then
+                if grep -q '^RatholeToml=' "$conf"; then
+                    sed -i "s|^RatholeToml=.*|RatholeToml=\"$toml\"|" "$conf"
+                else
+                    echo "RatholeToml=\"$toml\"" >> "$conf"
+                fi
+                [[ "$role" == "iran" ]] && ensure_rathole_firewall "${tcp_port:-$DEFAULT_RATHOLE_CTRL_PORT}" "${fwd:-$DEFAULT_RATHOLE_FWD}" || true
+                echo -e "${YELLOW}[*] Repaired Rathole TOML for [$name]${NC}"
             fi
         fi
     fi
@@ -2714,6 +2761,9 @@ deploy_tunnel() {
         [[ -n "$tcp_port" ]] || tcp_port="$DEFAULT_RATHOLE_CTRL_PORT"
         rh_toml=$(build_rathole_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
             "$fwd_port") || return 1
+        if [[ "$role_conf" == "iran" ]]; then
+            ensure_rathole_firewall "$tcp_port" "$fwd_port" || true
+        fi
         svc_unit="jojonet-rathole@${ins_name}.service"
     else
         create_template_script || return 1
@@ -5109,14 +5159,26 @@ install_rathole_binary() {
     if [[ -x "$RATHOLE_BIN" ]]; then
         return 0
     fi
-    local arch zip fname tmpdir url
+    local arch zip fname tmpdir url ok=0
     arch=$(detect_cpu_arch_rathole) || { log_error "Unsupported CPU for Rathole"; return 1; }
     command -v unzip >/dev/null 2>&1 || { log_error "unzip required for Rathole"; return 1; }
     fname="rathole-${arch}.zip"
-    url="https://github.com/rapiz1/rathole/releases/download/${RATHOLE_VERSION}/${fname}"
     tmpdir=$(mktemp -d /tmp/jojonet-rathole.XXXXXX) || return 1
     log_note "Downloading Rathole ${RATHOLE_VERSION} ($fname)..."
-    if ! JOJONET_ALLOW_UNSIGNED=1 download_verified "$url" "$tmpdir/$fname" "$fname"; then
+    # GitHub releases + Iran-friendly mirrors
+    for url in \
+        "https://github.com/rapiz1/rathole/releases/download/${RATHOLE_VERSION}/${fname}" \
+        "https://ghproxy.net/https://github.com/rapiz1/rathole/releases/download/${RATHOLE_VERSION}/${fname}" \
+        "https://mirror.ghproxy.com/https://github.com/rapiz1/rathole/releases/download/${RATHOLE_VERSION}/${fname}"
+    do
+        echo -e "  ${CYAN}try${NC} $url" >&2
+        if JOJONET_ALLOW_UNSIGNED=1 download_verified "$url" "$tmpdir/$fname" "$fname"; then
+            ok=1
+            break
+        fi
+        rm -f "$tmpdir/$fname"
+    done
+    if (( ok != 1 )); then
         rm -rf "$tmpdir"
         log_error "Failed to download Rathole"
         return 1
@@ -5135,9 +5197,34 @@ install_rathole_binary() {
     return 0
 }
 
+ensure_rathole_firewall() {
+    local ctrl="${1:-$DEFAULT_RATHOLE_CTRL_PORT}" ports="${2:-$DEFAULT_RATHOLE_FWD}" p
+    # Open control + public forward ports (Iran server side)
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+        ufw allow "${ctrl}/tcp" comment 'jojonet-rathole-ctrl' >/dev/null 2>&1 || true
+        IFS=',' read -ra _pl <<< "$ports"
+        for p in "${_pl[@]}"; do
+            p="${p// /}"
+            [[ "$p" =~ ^[0-9]+$ ]] || continue
+            ufw allow "${p}/tcp" comment "jojonet-rathole-fwd-${p}" >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then
+        firewall-cmd --permanent --add-port="${ctrl}/tcp" >/dev/null 2>&1 || true
+        IFS=',' read -ra _pl <<< "$ports"
+        for p in "${_pl[@]}"; do
+            p="${p// /}"
+            [[ "$p" =~ ^[0-9]+$ ]] || continue
+            firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true
+        done
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 ensure_rathole_token() {
     local pair_id="$1" peer_ip="${2:-}"
-    local keydir="$KEYS_ROOT/pair_${pair_id}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}" created=0
     install -d -m700 "$keydir"
     if [[ ! -f "$keydir/rathole.token" ]]; then
         if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
@@ -5148,10 +5235,17 @@ ensure_rathole_token() {
     if [[ ! -f "$keydir/rathole.token" ]]; then
         openssl rand -hex 24 > "$keydir/rathole.token"
         chmod 600 "$keydir/rathole.token"
+        created=1
         if [[ -n "$peer_ip" ]] && command -v scp >/dev/null 2>&1; then
             ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
                 "root@${peer_ip}" "mkdir -p '$keydir' && chmod 700 '$keydir'" >/dev/null 2>&1 || true
-            scp -o ConnectTimeout=8 -q "$keydir/rathole.token" "root@${peer_ip}:${keydir}/" 2>/dev/null || true
+            if ! scp -o ConnectTimeout=8 -q "$keydir/rathole.token" "root@${peer_ip}:${keydir}/" 2>/dev/null; then
+                log_warn "Token not copied via SSH — sync manually:"
+                hint "sudo jojonet --export-keys $peer_ip /root/jojonet-keys.tar.gz"
+                hint "On peer: sudo jojonet --import-keys <THIS_IP> /root/jojonet-keys.tar.gz"
+            fi
+        elif (( created )); then
+            log_warn "New Rathole token created. Peer must use the same token (export/import keys)."
         fi
     fi
     printf '%s' "$keydir"
@@ -5159,25 +5253,45 @@ ensure_rathole_token() {
 
 build_rathole_runtime_config() {
     local name="$1" role="$2" rem="$3" ctrl_port="$4" keydir="$5" ports="${6:-$DEFAULT_RATHOLE_FWD}"
-    local token toml svc p block=""
+    local token toml p block="" nsvc=0
     install -d -m700 "$RATHOLE_CONFIG_DIR"
+    [[ -f "$keydir/rathole.token" ]] || return 1
     token=$(tr -d '\r\n' < "$keydir/rathole.token")
+    [[ -n "$token" ]] || return 1
+    if ! [[ "$ctrl_port" =~ ^[0-9]+$ ]] || (( ctrl_port < 1 || ctrl_port > 65535 )); then
+        log_error "Invalid Rathole control port: $ctrl_port"
+        return 1
+    fi
     toml="$RATHOLE_CONFIG_DIR/${name}.toml"
 
-    if [[ "$role" == "iran" ]]; then
-        # Iran = rathole SERVER (users connect here; Kharej dials in)
-        block=""
-        IFS=',' read -ra _plist <<< "$ports"
-        for p in "${_plist[@]}"; do
-            p="${p// /}"
-            [[ "$p" =~ ^[0-9]+$ ]] || continue
+    block=""
+    IFS=',' read -ra _plist <<< "$ports"
+    for p in "${_plist[@]}"; do
+        p="${p// /}"
+        [[ "$p" =~ ^[0-9]+$ ]] || continue
+        nsvc=$((nsvc + 1))
+        if [[ "$role" == "iran" ]]; then
             block="${block}
 [server.services.p${p}]
 type = \"tcp\"
 token = \"${token}\"
 bind_addr = \"0.0.0.0:${p}\"
 "
-        done
+        else
+            block="${block}
+[client.services.p${p}]
+type = \"tcp\"
+token = \"${token}\"
+local_addr = \"127.0.0.1:${p}\"
+"
+        fi
+    done
+    if (( nsvc < 1 )); then
+        log_error "Rathole needs at least one valid forward port"
+        return 1
+    fi
+
+    if [[ "$role" == "iran" ]]; then
         cat > "$toml" <<EOF
 # JojoNet Rathole SERVER (Iran) — reverse TCP
 # Users → Iran:Ports → Kharej localhost:Ports
@@ -5187,19 +5301,6 @@ default_token = "${token}"
 ${block}
 EOF
     else
-        # Kharej = rathole CLIENT (dials Iran, exposes local panel)
-        block=""
-        IFS=',' read -ra _plist <<< "$ports"
-        for p in "${_plist[@]}"; do
-            p="${p// /}"
-            [[ "$p" =~ ^[0-9]+$ ]] || continue
-            block="${block}
-[client.services.p${p}]
-type = \"tcp\"
-token = \"${token}\"
-local_addr = \"127.0.0.1:${p}\"
-"
-        done
         cat > "$toml" <<EOF
 # JojoNet Rathole CLIENT (Kharej) — reverse TCP
 # Connects out to Iran control port
@@ -6013,7 +6114,11 @@ rollback_new_tunnel() {
     pkill -f "tun-server.*-device ${name}" >/dev/null 2>&1
     pkill -f "tun-client.*-device ${name}" >/dev/null 2>&1
     pkill -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1
+    pkill -f "hysteria.*${name}" >/dev/null 2>&1
+    pkill -f "rathole.*${name}\\.toml" >/dev/null 2>&1
     rm -f "$PAQET_CONFIG_DIR/${name}.yaml" >/dev/null 2>&1
+    rm -f "$HY2_CONFIG_DIR/${name}.yaml" >/dev/null 2>&1
+    rm -f "$RATHOLE_CONFIG_DIR/${name}.toml" >/dev/null 2>&1
     rm -f "$conf" "${conf}.tmp" >/dev/null 2>&1
     ip link delete "$name" >/dev/null 2>&1 || true
     nft delete table ip "jojonet_$name" >/dev/null 2>&1 || true

@@ -16,7 +16,9 @@ for conf in /etc/jojonet/instances/*.conf; do
     name=$(grep -E '^Name=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
     [[ -n "$name" ]] || continue
     for unit in "jojonet@${name}.service" "jojonet-tcptun@${name}.service" \
-                "jojonet-paqet@${name}.service" "jojonet-vxlan@${name}.service"; do
+                "jojonet-paqet@${name}.service" "jojonet-vxlan@${name}.service" \
+                "jojonet-wg@${name}.service" "jojonet-hy2@${name}.service" \
+                "jojonet-rathole@${name}.service"; do
         systemctl stop "$unit" 2>/dev/null || true
         systemctl disable "$unit" 2>/dev/null || true
     done
@@ -32,16 +34,23 @@ rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-tcptun@.service \
       /etc/systemd/system/jojonet-paqet@.service \
       /etc/systemd/system/jojonet-vxlan@.service \
+      /etc/systemd/system/jojonet-wg@.service \
+      /etc/systemd/system/jojonet-hy2@.service \
+      /etc/systemd/system/jojonet-rathole@.service \
       /etc/systemd/system/jojonet-boot.service
 rm -f /usr/local/bin/jojonet-run-instance.sh \
       /usr/local/bin/jojonet-run-tuntcp.sh \
       /usr/local/bin/jojonet-run-paqet.sh \
       /usr/local/bin/jojonet-run-vxlan.sh \
+      /usr/local/bin/jojonet-run-wg.sh \
+      /usr/local/bin/jojonet-run-hy2.sh \
+      /usr/local/bin/jojonet-run-rathole.sh \
       /usr/local/bin/jojonet-boot-restore.sh \
       /usr/local/bin/jojonet \
       /usr/local/bin/jojonet-uninstall
 rm -rf /usr/local/share/jojonet
 rm -f /etc/sysctl.d/99-jojonet.conf
+systemctl daemon-reload 2>/dev/null || true
 
 read -r -p "Also delete /etc/jojonet (keys + configs)? [y/N]: " c2
 c2=$(echo "$c2" | tr '[:upper:]' '[:lower:]')
@@ -52,11 +61,11 @@ else
     warn "Kept /etc/jojonet"
 fi
 
-read -r -p "Remove downloaded tun-server/tun-client/paqet binaries? [y/N]: " c3
+read -r -p "Remove downloaded tun/paqet/hysteria/rathole binaries? [y/N]: " c3
 c3=$(echo "$c3" | tr '[:upper:]' '[:lower:]')
 if [[ "$c3" == "y" ]]; then
-    rm -f /usr/local/bin/tun-server /usr/local/bin/tun-client /usr/local/bin/paqet
+    rm -f /usr/local/bin/tun-server /usr/local/bin/tun-client \
+          /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole
 fi
 
-systemctl daemon-reload 2>/dev/null || true
 log "JojoNet uninstalled."
