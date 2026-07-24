@@ -1,4 +1,4 @@
-# JojoNet v1.5.3
+# JojoNet v1.5.6
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -17,6 +17,9 @@ sudo jojonet --help
 
 | نسخه | چه چیزی اضافه / عوض شد |
 |------|-------------------------|
+| **1.5.6** | **Auto deploy**: نوع تانل + IP طرف مقابل؛ پیش‌فرض هوشمند (JOJONET_AUTO) |
+| **1.5.5** | **Spoof Tunnel + QS-Tunnel** به‌صورت standalone systemd integration |
+| **1.5.4** | **Hysteria2 TLS روی دامنه شخصی** (ACME / گواهی دستی) + Hop Port |
 | **1.5.3** | **Wstunnel Reverse** — ریورس WebSocket (ایران=SERVER، خارج=CLIENT -R) |
 | **1.5.2** | دیباگ Rathole: repair، فایروال، mirror دانلود، rollback/uninstall کامل |
 | **1.5.1** | راهنمای تغییرات در `--help` / `--changelog`؛ نمایش What's new بعد از آپدیت |
@@ -46,7 +49,7 @@ sudo jojonet --check-update
 sudo jojonet --update
 ```
 
-یا از منو → گزینه **15) Update JojoNet from GitHub**
+یا از منو → گزینه **17) Update JojoNet from GitHub**
 
 اجبار به نصب مجدد:
 ```bash
@@ -79,13 +82,31 @@ sudo jojonet
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.5.3`
+خروجی باید باشد: `jojonet 1.5.6`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole/Wstunnel که اول ایران بهتر است).
 
 ---
 
 # راهنمای تانل‌ها (کادر به کادر)
+
+---
+
+## ۰) Auto deploy — فقط IP طرف مقابل (از 1.5.6)
+
+منو: نوع تانل → IP سرور مقابل → Use automatic defaults? [Y/n] (پیش‌فرض Y) → ساخته می‌شود.
+
+```bash
+# خارج
+sudo jojonet --hy2 IP_ایران
+# ایران
+sudo jojonet --hy2 IP_خارج
+
+# اجبار حالت پیشرفته
+JOJONET_AUTO=0 sudo jojonet --hy2 IP_مقابل
+```
+
+نقش iran/kharej خودکار تشخیص داده می‌شود. متغیرهای JOJONET_* همچنان override می‌کنند.
 
 ---
 
@@ -184,6 +205,39 @@ export JOJONET_HY2_HOP_INTERVAL=30s
 sudo jojonet --hy2 PEER_IP
 ```
 
+### TLS روی دامنه شخصی (از 1.5.4)
+موقع ساخت، بعد از SNI یک منوی TLS می‌آید:
+
+| حالت | توضیح |
+|------|-------|
+| **1) self-signed** | پیش‌فرض؛ بدون دامنه، `insecure: true` (مثل قبل) |
+| **2) ACME** | گواهی خودکار Let's Encrypt روی دامنه شخصی، تمدید خودکار |
+| **3) custom** | فایل گواهی خودت: `cert.pem` + `key.pem` |
+
+نکته‌های مهم:
+- رکورد **A دامنه** باید به **IP سرور خارج (Kharej)** اشاره کند (چون ایران به خارج وصل می‌شود).
+- برای ACME، پورت **TCP 80 و 443** روی خارج باید باز باشد (خودکار در UFW/firewalld باز می‌شود). این با Hop Port تداخل ندارد چون داده روی رنج UDP است.
+- با گواهی واقعی، سمت ایران خودکار `insecure: false` و `sni = دامنه` می‌شود.
+- هر دو طرف باید **همان دامنه/حالت** را بزنند.
+
+با هاپینگ + دامنه شخصی به‌صورت غیرتعاملی:
+```bash
+export JOJONET_HY2_HOP_RANGE=20000-50000
+export JOJONET_HY2_TLS_MODE=acme
+export JOJONET_HY2_DOMAIN=vpn.example.com
+export JOJONET_HY2_ACME_EMAIL=you@example.com
+sudo jojonet --hy2 PEER_IP
+```
+
+گواهی دستی:
+```bash
+export JOJONET_HY2_TLS_MODE=custom
+export JOJONET_HY2_DOMAIN=vpn.example.com
+export JOJONET_HY2_CERT=/etc/ssl/vpn/cert.pem
+export JOJONET_HY2_KEY=/etc/ssl/vpn/key.pem
+sudo jojonet --hy2 PEER_IP
+```
+
 ---
 
 ## ۷) Rathole Reverse — ریورس TCP (از 1.5.0)
@@ -213,11 +267,62 @@ Control port پیش‌فرض: `2333` — روی فایروال ایران باز
 
 ---
 
-## ۸) Advanced GRE — تنظیم دستی
+## ۸) Wstunnel Reverse — ریورس WebSocket
+
+دستور: `sudo jojonet --wstunnel PEER_IP` یا `sudo jojonet --ws PEER_IP`  
+ایران server و خارج client است.
+
+---
+
+## ۹) Spoof Tunnel — انتقال مستقل با IP spoofing
+
+```bash
+# ایران = local
+sudo jojonet --role iran --spoof-tunnel IP_خارج
+
+# خارج = remote
+sudo jojonet --role kharej --spoof IP_ایران
+```
+
+- نسخه پین‌شده: `v3.1.0-beta.0`
+- باینری‌های `amd64` و `arm64` از release رسمی دانلود و با `checksums.txt` رسمی بررسی می‌شوند.
+- کانفیگ: `/etc/jojonet/spoof/config.json`
+- سرویس: `jojonet-spoof.service`
+- ایران به‌صورت `local` و خارج به‌صورت `remote` اجرا می‌شود.
+- پیش‌فرض transport ایران `send=tcp/recv=udp` و خارج برعکس است.
+- برای یک IP مقدار عادی وارد کنید؛ برای فایل لیست IP مسیر مطلق را با `@` بدهید (مثل `@/etc/jojonet/spoof/ips.txt`).
+- transportهای `tcp`، `udp`، `icmp` و `icmpv6` پشتیبانی می‌شوند.
+
+> هشدار قطعی: هر دو سرور و هر دو provider باید source-IP spoofing را پشتیبانی کنند. دسترسی root/raw socket لازم است. این قابلیت overlay معمول JojoNet نیست.
+
+---
+
+## ۱۰) QS-Tunnel — DNS upload + spoofed download
+
+```bash
+# ایران = client
+sudo jojonet --role iran --qs-tunnel
+
+# خارج = server
+sudo jojonet --role kharej --qs
+```
+
+- سورس روی commit `4497146ccc1e70ad510b68db5a483e0395782df4` پین شده است.
+- نیازمند Python **3.12+** و پکیج‌های `aiohttp` و `numba` است.
+- runtime مدیریت‌شده: `/opt/jojonet/qs-tunnel` (venv داخل همان مسیر)
+- کانفیگ: `/etc/jojonet/qs-tunnel/config.json`
+- سرویس: `jojonet-qs.service`
+- آرایه‌های DNS/domain به‌صورت comma-separated دریافت می‌شوند.
+
+> QS فقط UDP forwarder است؛ برای انتقال قابل‌اعتماد باید Hysteria2، WireGuard یا xhttp-h3 را روی endpointهای محلی آن قرار دهید. محدودیت طول DNS و سرعت آپلود پایین (تقریباً ۱ مگابیت برای هر client) همچنان وجود دارد. سرور خارج برای ارسال spoofed packet به root/raw socket نیاز دارد.
+
+---
+
+## ۱۱) Advanced GRE — تنظیم دستی
 
 | | |
 |--|--|
-| **منو** | گزینه `8` |
+| **منو** | گزینه `11` |
 
 ---
 
@@ -231,6 +336,8 @@ Control port پیش‌فرض: `2333` — روی فایروال ایران باز
 | فیلتر شدید / نیاز سرعت | **Hysteria2** (+ Hop Port) |
 | مسیر ناپایدار | **Paqet** یا **Hysteria2** |
 | ریورس (خارج dial به ایران) | **Rathole** / **Wstunnel** |
+| هر دو provider قابلیت source spoof دارند | **Spoof Tunnel** |
+| DNS مناسب + لایه UDP قابل‌اعتماد داری | **QS-Tunnel + HY2/WG/xhttp-h3** |
 
 ---
 

@@ -1,3 +1,41 @@
+# Changelog
+
+## 1.5.6
+- **Auto deploy (type + peer IP)**: after choosing tunnel type, only ask for the other server's IP; ports/hop/TLS/forward use smart defaults.
+- Menu asks once: Use automatic defaults? [Y/n] (default **Y**). CLI with peer IP skips the question.
+- Env: JOJONET_AUTO=1 (force auto) / JOJONET_AUTO=0 (full advanced prompts). Other JOJONET_* overrides still apply.
+- **HY2 auto**: Hop Port ON (20000-50000 / 30s); TLS self-signed unless JOJONET_HY2_DOMAIN (ACME) or TLS env set.
+- **WG / Rathole / Wstunnel / TUN-TCP / Paqet / VXLAN**: default ports + auto Iran forward port.
+- Spoof/QS: still ask required fields (spoof IPs / DNS domains / password); optional knobs use defaults in auto mode.
+- **Fixes**: Wstunnel runner accepts `RatholeToml` in instance conf (was wrongly `WstunnelToml` → Bad config); pairing card uses `--wstunnel`; repair rebuilds HY2 server YAML missing `tls`/`acme`.
+
+
+## 1.5.5
+- **Spoof Tunnel v3.1.0-beta.0** به‌صورت standalone single-instance:
+  - ایران = `local`، خارج = `remote`
+  - دانلود `amd64`/`arm64` با mirror و بررسی اجباری `checksums.txt` رسمی upstream
+  - کانفیگ JSON امن، سرویس `jojonet-spoof.service`
+  - پشتیبانی `spoof_ip` یا `spoof_ip_file` و transportهای TCP/UDP/ICMP/ICMPv6
+  - CLI: `--spoof-tunnel` / `--spoof`
+  - هشدار صریح: هر دو provider باید source-IP spoofing را پشتیبانی کنند.
+- **QS-Tunnel** روی commit `4497146ccc1e70ad510b68db5a483e0395782df4`:
+  - ایران = client، خارج = server، mode=`1-1`
+  - Python 3.12+، venv مدیریت‌شده، `aiohttp` + `numba`
+  - آرایه‌های comma-separated با JSON escaping، سرویس `jojonet-qs.service`
+  - CLI: `--qs-tunnel` / `--qs`
+  - فقط UDP forwarder؛ نیازمند HY2/WG/xhttp-h3 و تابع محدودیت DNS/upload upstream.
+- نمایش وضعیت سرویس‌های standalone در `--status`، بازسازی unitها در refresh/repair و cleanup محدود به فایل‌های مدیریت‌شده در uninstall.
+
+## 1.5.4
+- **Hysteria2 TLS روی دامنه شخصی** — انتخاب حالت گواهی موقع ساخت تانل:
+  - `self-signed` (پیش‌فرض، بدون دامنه، `insecure: true`)
+  - `ACME` خودکار Let's Encrypt روی دامنه شخصی (رکورد A → سرور خارج) + باز کردن TCP 80/443
+  - `custom` گواهی دستی: `cert.pem` + `key.pem`
+- سازگار کامل با **Hop Port** (رنج UDP روی داده، چلنج گواهی روی TCP جدا)
+- کلاینت ایران با گواهی واقعی → `insecure: false` و SNI = دامنه
+- Env: `JOJONET_HY2_TLS_MODE` / `JOJONET_HY2_DOMAIN` / `JOJONET_HY2_ACME_EMAIL` / `JOJONET_HY2_CERT` / `JOJONET_HY2_KEY`
+- فیکس باگ `unbound variable` (`ws_cmd`) هنگام ساخت تانل‌های غیر-Wstunnel
+
 ## 1.5.3
 - **Wstunnel Reverse WebSocket tunnel** (alternative to Rathole over WebSocket)
   - Iran = wstunnel **SERVER** (`--restrict-http-upgrade-path-prefix`)
@@ -7,8 +45,6 @@
   - Token: `$keydir/wstunnel.token` | runtime: `$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh`
   - Binary pin: wstunnel **v10.1.9** (GitHub + ghproxy mirrors)
   - Repair, firewall, rollback, uninstall wired like Rathole
-
-# Changelog
 
 ## 1.5.2
 - **دیباگ Rathole**: repair برای toml گم‌شده/کهنه، فایروال UFW/firewalld روی ایران، دانلود با mirrorهای ghproxy

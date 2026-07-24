@@ -29,6 +29,10 @@ shopt -u nullglob
 
 systemctl stop jojonet-boot.service 2>/dev/null || true
 systemctl disable jojonet-boot.service 2>/dev/null || true
+for unit in jojonet-spoof.service jojonet-qs.service; do
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl disable "$unit" 2>/dev/null || true
+done
 
 rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-tcptun@.service \
@@ -38,6 +42,8 @@ rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-hy2@.service \
       /etc/systemd/system/jojonet-rathole@.service \
       /etc/systemd/system/jojonet-wstunnel@.service \
+      /etc/systemd/system/jojonet-spoof.service \
+      /etc/systemd/system/jojonet-qs.service \
       /etc/systemd/system/jojonet-boot.service
 rm -f /usr/local/bin/jojonet-run-instance.sh \
       /usr/local/bin/jojonet-run-tuntcp.sh \
@@ -63,11 +69,13 @@ else
     warn "Kept /etc/jojonet"
 fi
 
-read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel binaries? [y/N]: " c3
+read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel/spoof binaries and managed QS runtime? [y/N]: " c3
 c3=$(echo "$c3" | tr '[:upper:]' '[:lower:]')
 if [[ "$c3" == "y" ]]; then
     rm -f /usr/local/bin/tun-server /usr/local/bin/tun-client \
-          /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole /usr/local/bin/wstunnel
+          /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole \
+          /usr/local/bin/wstunnel /usr/local/bin/spoof
+    rm -rf /opt/jojonet/qs-tunnel
 fi
 
 log "JojoNet uninstalled."
