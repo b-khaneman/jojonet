@@ -40,6 +40,18 @@ sudo jojonet --help
 
 ---
 
+## AI-WARP — آنلاک Gemini / Flow / ChatGPT / …
+
+روی سرور **خارج**، تمام ترافیک هوش مصنوعی (Google Flow، Gemini، OpenAI، Claude، Copilot، Android Studio و …) را از Cloudflare WARP رد می‌کند تا خطای 403/region رفع شود — بدون تغییر کانفیگ پنل.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/warp/install.sh | sudo bash
+```
+
+راهنما: [warp/README.md](./warp/README.md)
+
+---
+
 ## آپدیت JojoNet (مهم)
 
 روی سرور:

@@ -1,0 +1,9 @@
+[Unit]
+Description=AI-WARP watchdog (heal tunnel + routes)
+After=network-online.target wg-quick@aiwarp.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ai-warp watchdog
+Nice=10
