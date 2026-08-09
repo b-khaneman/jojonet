@@ -1,53 +1,80 @@
 #!/usr/bin/env bash
 #
-# AI-WARP installer — one-liner friendly
+# AI-WARP — one-command automatic installer (zero prompts)
 #
-# Local:
-#   sudo bash install.sh
-#   sudo bash install.sh --install
-#
-# Remote (Kharej / Ubuntu):
 #   curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/warp/install.sh | sudo bash
+#
 # Mirror:
 #   curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/warp/install.sh | sudo bash
 #
+# Local:
+#   sudo bash install.sh
+#
 set -Eeo pipefail
 
-readonly INSTALLER_VERSION="1.0.0"
+readonly INSTALLER_VERSION="1.1.0"
 readonly GITHUB_USER="${AI_WARP_GITHUB_USER:-b-khaneman}"
 readonly GITHUB_REPO="${AI_WARP_GITHUB_REPO:-jojonet}"
 readonly GITHUB_BRANCH="${AI_WARP_GITHUB_BRANCH:-main}"
 readonly GITHUB_PATH="warp"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
+export APT_LISTCHANGES_FRONTEND=none
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
+info() { echo -e "${CYAN}[*]${NC} $*"; }
 fail() { echo -e "${RED}[!]${NC} $*" >&2; exit 1; }
 
-(( EUID == 0 )) || fail "Run as root: sudo bash install.sh"
+(( EUID == 0 )) || fail "با root اجرا کن: curl … | sudo bash"
+
+ensure_curl() {
+  command -v curl >/dev/null 2>&1 && return 0
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq || true
+    apt-get install -y -qq curl ca-certificates || apt-get install -y curl ca-certificates
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf -y install curl ca-certificates
+  elif command -v yum >/dev/null 2>&1; then
+    yum -y install curl ca-certificates
+  else
+    fail "curl لازم است."
+  fi
+  command -v curl >/dev/null 2>&1 || fail "نصب curl ناموفق بود."
+}
 
 resolve_local_root() {
   local src="${BASH_SOURCE[0]:-}"
-  if [[ -n "$src" && -f "$src" ]]; then
-    cd "$(dirname "$src")" && pwd
-  else
+  # Piped from curl → /dev/fd/N — treat as remote
+  [[ -n "$src" && -f "$src" && "$src" != /dev/fd/* && "$src" != /proc/self/fd/* ]] || {
     echo ""
-  fi
+    return 0
+  }
+  cd "$(dirname "$src")" && pwd
 }
 
 mirror_urls() {
   local file="$1" u="$GITHUB_USER" r="$GITHUB_REPO" b="$GITHUB_BRANCH" p="$GITHUB_PATH"
   printf '%s\n' \
-    "https://raw.githubusercontent.com/${u}/${r}/${b}/${p}/${file}" \
     "https://cdn.jsdelivr.net/gh/${u}/${r}@${b}/${p}/${file}" \
+    "https://raw.githubusercontent.com/${u}/${r}/${b}/${p}/${file}" \
     "https://raw.gitmirror.com/${u}/${r}/${b}/${p}/${file}" \
-    "https://ghproxy.net/https://raw.githubusercontent.com/${u}/${r}/${b}/${p}/${file}"
+    "https://ghproxy.net/https://raw.githubusercontent.com/${u}/${r}/${b}/${p}/${file}" \
+    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/${u}/${r}/${b}/${p}/${file}"
 }
 
 download_file() {
-  local url="$1" dest="$2"
-  curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$dest"
-  [[ -s "$dest" ]]
+  local url="$1" dest="$2" i
+  for i in 1 2 3; do
+    if curl -fsSL --connect-timeout 12 --max-time 90 --retry 2 --retry-delay 1 \
+        "$url" -o "$dest" && [[ -s "$dest" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 fetch_file() {
@@ -55,9 +82,7 @@ fetch_file() {
   mkdir -p "$(dirname "$dest")"
   while IFS= read -r url; do
     [[ -z "$url" ]] && continue
-    warn "Fetching: $url"
     if download_file "$url" "$dest"; then
-      log "OK: $rel"
       return 0
     fi
   done < <(mirror_urls "$rel")
@@ -86,17 +111,24 @@ PACKAGE_FILES=(
 stage_from_local() {
   local root="$1" staging="$2" f
   for f in "${PACKAGE_FILES[@]}"; do
-    [[ -f "${root}/${f}" ]] || fail "Missing local file: ${root}/${f}"
+    [[ -f "${root}/${f}" ]] || fail "Missing: ${root}/${f}"
     mkdir -p "$(dirname "${staging}/${f}")"
     cp -f "${root}/${f}" "${staging}/${f}"
   done
 }
 
 stage_from_remote() {
-  local staging="$1" f
+  local staging="$1" f failed=0
+  info "دانلود پکیج AI-WARP…"
   for f in "${PACKAGE_FILES[@]}"; do
-    fetch_file "$f" "${staging}/${f}" || fail "Could not download: $f"
+    if fetch_file "$f" "${staging}/${f}"; then
+      log "OK  $f"
+    else
+      warn "FAIL $f"
+      failed=1
+    fi
   done
+  (( failed == 0 )) || fail "دانلود پکیج ناقص بود. شبکه/فیلتر را چک کن یا از کلون محلی نصب کن."
 }
 
 install_tree() {
@@ -113,64 +145,86 @@ install_tree() {
   install -m644 "${staging}/VERSION" "${share}/VERSION"
   install -m644 "${staging}/LICENSE" "${share}/LICENSE"
   install -m644 "${staging}/conf/ai-domains.txt" "${share}/conf/ai-domains.txt"
-
   install -m644 "${staging}/lib/"*.sh "${share}/lib/"
   install -m755 "${staging}/scripts/routes.sh" "${share}/scripts/routes.sh"
   install -m644 "${staging}/systemd/"* "${share}/systemd/"
-
-  # Pin version into common.sh consumer via wrapper env
   install -m755 "${staging}/bin/ai-warp" /usr/local/bin/ai-warp
-  # Ensure shebang scripts executable
   chmod 755 /usr/local/bin/ai-warp "${share}/scripts/routes.sh"
 
-  # Admin-editable domains live in /etc (CLI prefers this path)
-  if [[ ! -f /etc/ai-warp/ai-domains.txt ]]; then
+  # Always refresh domain list on reinstall (user edits stay if AI_WARP_KEEP_DOMAINS=1)
+  if [[ "${AI_WARP_KEEP_DOMAINS:-0}" == "1" && -f /etc/ai-warp/ai-domains.txt ]]; then
+    log "Keeping existing /etc/ai-warp/ai-domains.txt"
+  else
     install -m644 "${staging}/conf/ai-domains.txt" /etc/ai-warp/ai-domains.txt
   fi
 
-  log "Installed ai-warp ${ver} → /usr/local/bin/ai-warp"
-  log "Share tree → ${share}"
+  log "ai-warp ${ver} نصب شد → /usr/local/bin/ai-warp"
 }
 
 usage() {
   cat <<EOF
-AI-WARP installer v${INSTALLER_VERSION}
+AI-WARP installer v${INSTALLER_VERSION} — fully automatic by default
 
-  sudo bash install.sh              # install package + interactive menu
-  sudo bash install.sh --install    # install package + auto setup (mode=ai)
-  sudo bash install.sh --install google
-  sudo bash install.sh --install full
-  sudo bash install.sh --files-only # only copy files (no tunnel yet)
-  sudo bash install.sh --help
+  curl -fsSL …/warp/install.sh | sudo bash          # auto unlock (recommended)
+  sudo bash install.sh                              # same (auto)
+  sudo bash install.sh --menu                       # interactive menu only
+  sudo bash install.sh --files-only                 # copy files, no tunnel
+  sudo bash install.sh --mode google|ai|full        # choose mode (default: ai)
+
+Safe with JojoNet tunnels + Cloudflare CDN (only AI egress uses WARP).
 EOF
 }
 
 main() {
-  local action="menu" mode="ai" local_root staging
+  local action="auto" mode="ai" local_root staging
 
-  case "${1:-}" in
-    -h|--help) usage; exit 0 ;;
-    --files-only) action="files" ;;
-    --install)
-      action="install"
-      mode="${2:-ai}"
-      ;;
-    --version|-v) echo "ai-warp-installer ${INSTALLER_VERSION}"; exit 0 ;;
-    "") action="menu" ;;
-    *) usage; exit 1 ;;
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      -v|--version) echo "ai-warp-installer ${INSTALLER_VERSION}"; exit 0 ;;
+      --files-only) action="files"; shift ;;
+      --menu) action="menu"; shift ;;
+      --install) action="auto"; shift ;;
+      --mode)
+        mode="${2:-ai}"
+        shift 2
+        ;;
+      --mode=*)
+        mode="${1#--mode=}"
+        shift
+        ;;
+      ai|google|full)
+        mode="$1"
+        shift
+        ;;
+      *) fail "Unknown arg: $1 (see --help)" ;;
+    esac
+  done
+
+  case "$mode" in
+    ai|google|full) ;;
+    *) fail "Invalid mode: $mode" ;;
   esac
 
-  command -v curl >/dev/null 2>&1 || fail "curl is required"
+  echo
+  echo "╔══════════════════════════════════════════════════════╗"
+  echo "║   AI-WARP v${INSTALLER_VERSION} — نصب خودکار (بدون پرسش)          ║"
+  echo "║   Gemini / Flow / ChatGPT / Claude / …               ║"
+  echo "╚══════════════════════════════════════════════════════╝"
+  echo
+  info "حالت: ${mode}  |  CDN کلودفلر و تانل پنل دست نمی‌خورند"
+  echo
+
+  ensure_curl
 
   staging="$(mktemp -d /tmp/ai-warp-stage.XXXXXX)"
   trap 'rm -rf "$staging"' EXIT
 
   local_root="$(resolve_local_root)"
   if [[ -n "$local_root" && -f "${local_root}/bin/ai-warp" && -f "${local_root}/lib/common.sh" ]]; then
-    log "Using local package: ${local_root}"
+    log "پکیج محلی: ${local_root}"
     stage_from_local "$local_root" "$staging"
   else
-    log "Remote bootstrap — downloading AI-WARP package…"
     stage_from_remote "$staging"
   fi
 
@@ -178,13 +232,15 @@ main() {
 
   case "$action" in
     files)
-      log "Files installed. Run: sudo ai-warp install"
-      ;;
-    install)
-      ai-warp install "$mode"
+      log "فایل‌ها نصب شد. برای فعال‌سازی: sudo ai-warp install"
       ;;
     menu)
       ai-warp
+      ;;
+    auto)
+      # Fully non-interactive unlock
+      export AI_WARP_AUTO=1
+      ai-warp install "$mode"
       ;;
   esac
 }

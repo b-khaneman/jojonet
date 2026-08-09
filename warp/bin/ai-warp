@@ -63,11 +63,11 @@ ai_enable_watchdogs() {
   do
     src="${AI_WARP_SHARE}/systemd/${unit}"
     [[ -f "$src" ]] || src="${AI_WARP_SHARE_LIB}/systemd/${unit}"
-    install -m644 "$src" "/etc/systemd/system/${unit}"
+    install -m644 "$src" "/etc/systemd/system/${unit}" 2>/dev/null || true
   done
-  systemctl daemon-reload
-  systemctl enable --now ai-warp-watchdog.timer >/dev/null
-  systemctl enable --now ai-warp-refresh.timer >/dev/null
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable --now ai-warp-watchdog.timer >/dev/null 2>&1 || true
+  systemctl enable --now ai-warp-refresh.timer >/dev/null 2>&1 || true
   ai_qlog "Watchdog + refresh timers enabled (stable tunnel)."
 }
 
@@ -79,9 +79,12 @@ ai_cmd_install() {
     *) ai_fail "Unknown mode: $mode (ai|google|full)" ;;
   esac
 
-  (( QUIET )) || ai_banner
+  if [[ "${AI_WARP_AUTO:-0}" != "1" ]]; then
+    (( QUIET )) || ai_banner
+  fi
   echo
-  ai_info "Mode: ${mode}  |  Interface: ${AI_WARP_IFACE}  |  Endpoint: ${AI_WARP_ENDPOINT_IP}:${AI_WARP_ENDPOINT_PORT}"
+  ai_info "Mode: ${mode}  |  Interface: ${AI_WARP_IFACE}  |  Auto: ${AI_WARP_AUTO:-0}"
+  ai_info "Panel tunnels + Cloudflare CDN stay direct — only AI egress uses WARP."
   echo
 
   ai_install_deps
@@ -89,26 +92,27 @@ ai_cmd_install() {
   ai_register_warp
   ai_build_cidr_list "$mode"
   ai_write_wg_conf
+  modprobe wireguard 2>/dev/null || true
   ai_start_tunnel
   ai_enable_watchdogs
   sleep 2
-  ai_sticky_save || true
+  # Fresh install → lock sticky to whatever WARP gave us now
+  ai_sticky_relock >/dev/null 2>&1 || ai_sticky_save >/dev/null 2>&1 || true
   echo
   ai_healthcheck || true
   echo
-  ai_log "Install complete."
-  cat <<EOF
+  ai_log "تمام — Gemini / Flow / ChatGPT / Claude از این سرور آنلاک شدند."
+  ai_log "کانفیگ پنل و CDN کلودفلر را عوض نکن؛ لازم نیست."
+  if [[ "${AI_WARP_AUTO:-0}" != "1" ]]; then
+    cat <<EOF
 
-Next:
-  ai-warp status          # health + sticky IP
-  ai-warp ip              # show / re-lock egress IP
-  ai-warp refresh         # rebuild AI domain routes
+دستورات:
+  ai-warp status
+  ai-warp ip
+  ai-warp refresh
   ai-warp uninstall
-
-Panel configs need NO changes. All AI traffic on this server
-(Gemini, Flow, ChatGPT, Claude, Copilot, Android Studio, …)
-now egresses via Cloudflare WARP.
 EOF
+  fi
 }
 
 ai_cmd_refresh() {
@@ -257,8 +261,17 @@ main() {
   done
   set -- "${args[@]}"
 
+  # No TTY / AUTO → never block on interactive menu
+  if [[ $# -eq 0 ]]; then
+    if [[ "${AI_WARP_AUTO:-0}" == "1" ]] || [[ ! -t 0 ]]; then
+      ai_cmd_install ai
+      return 0
+    fi
+    ai_menu
+    return 0
+  fi
+
   case "${1:-}" in
-    "" ) ai_menu ;;
     -h|--help|help) usage ;;
     -v|--version|version) echo "ai-warp ${AI_WARP_VERSION}" ;;
     install)
