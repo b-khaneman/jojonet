@@ -1,4 +1,4 @@
-# JojoNet v1.5.6
+# JojoNet v1.5.9
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -17,6 +17,9 @@ sudo jojonet --help
 
 | نسخه | چه چیزی اضافه / عوض شد |
 |------|-------------------------|
+| **1.5.9** | **WireGuard داخل ICMP / FakeTCP** (`--wg-icmp` / `--wg-faketcp`)، **چک آمادگی Spoof** در پنل قبل از ساخت |
+| **1.5.8** | **Spoof Tunnel در پنل وب** (ساخت خودکار دو طرف + تست UDP سرتاسری)، `--spoof-remove` |
+| **1.5.7** | فیکس سینک کلید TUN/TCP و Paqet، `--delete`، export/import امن، **پنل وب فارسی** |
 | **1.5.6** | **Auto deploy**: نوع تانل + IP طرف مقابل؛ پیش‌فرض هوشمند (JOJONET_AUTO) |
 | **1.5.5** | **Spoof Tunnel + QS-Tunnel** به‌صورت standalone systemd integration |
 | **1.5.4** | **Hysteria2 TLS روی دامنه شخصی** (ACME / گواهی دستی) + Hop Port |
@@ -82,9 +85,41 @@ sudo jojonet
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.5.6`
+خروجی باید باشد: `jojonet 1.5.9`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole/Wstunnel که اول ایران بهتر است).
+
+### نصب یک‌کلیکی از فایل zip
+
+فایل `JojoNet-v1.5.9-full.zip` را روی سرور کپی کن (مثلاً با `scp`) و:
+
+```bash
+sudo apt-get install -y unzip   # اگر unzip نداری
+unzip JojoNet-v1.5.9-full.zip -d jojonet && cd jojonet
+sudo bash setup.sh              # منو: ۱) اسکریپت  ۲) پنل وب  ۳) هر دو
+```
+
+بدون منو:
+
+```bash
+sudo bash setup.sh script   # فقط اسکریپت jojonet
+sudo bash setup.sh panel    # فقط پنل وب
+sudo bash setup.sh all      # هر دو
+```
+
+---
+
+## پنل وب فارسی (اختیاری)
+
+پنل روی **یک** سرور (یا هر لینوکس دیگری) نصب می‌شود، با SSH به سرورهای ایران و خارج وصل می‌شود، پیش‌نیازها و jojonet را نصب می‌کند، تانل را می‌سازد و با ping/health تأیید می‌کند.
+
+```bash
+sudo bash panel/install-panel.sh
+sudo jojonet-panel url          # آدرس پنل
+sudo jojonet-panel set-admin    # تغییر رمز مدیر
+```
+
+راهنمای کامل: [panel/README.md](./panel/README.md)
 
 ---
 
@@ -180,6 +215,21 @@ sudo jojonet --peer IP_خارج
 | **دستور** | `sudo jojonet --wg PEER_IP` |
 
 اگر `51820` پر بود (مثلاً `wg0`)، پورت دیگر بده.
+
+### WireGuard داخل ICMP / FakeTCP (از 1.5.9)
+
+وقتی UDP فیلتر یا محدود است، بسته‌های WireGuard با **udp2raw** داخل ICMP echo (پینگ) یا TCP جعلی (FakeTCP) قرار می‌گیرند. روی سیم فقط پینگ یا سگمنت TCP دیده می‌شود و بسته‌ها با AES-128 + HMAC رمز می‌شوند.
+
+| | ICMP | FakeTCP |
+|--|--|--|
+| **دستور** | `sudo jojonet --wg-icmp PEER_IP` | `sudo jojonet --wg-faketcp PEER_IP` |
+| **منو** | گزینه `21` ← `1` | گزینه `21` ← `2` |
+| **رنج overlay** | `10.67.X.0/30` | `10.68.X.0/30` |
+
+- هر دو طرف همان دستور را می‌زنند (اول خارج، بعد ایران). MTU پیش‌فرض `1200` است.
+- پورت udp2raw از جفت سرور ساخته می‌شود (ICMP: `4096+X`، FakeTCP: `4352+X`)؛ با `JOJONET_WG_OBFS_PORT` قابل تغییر است. پورت UDP خود WireGuard روی خارج `پورت+10000` است و فقط روی localhost استفاده می‌شود.
+- سرویس کمکی: `jojonet-u2r@NAME.service` (همراه تانل start/stop می‌شود). قوانین iptables فقط برای IP همتا اضافه و موقع stop پاک می‌شوند.
+- برای FakeTCP پورت TCP روی خارج و برای ICMP پینگ ورودی باید از ایران باز باشد.
 
 ---
 
@@ -367,9 +417,13 @@ sudo jojonet --fix-tunnels
 sudo jojonet --export-config /root/jn-bak.tar.gz
 sudo jojonet --import-config /root/jn-bak.tar.gz
 
-# کلید بدون SSH
+# حذف یک تانل (بدون پرسش)
+sudo jojonet --delete NAME
+
+# کلید بدون SSH (WG/HY2/Rathole/Wstunnel: IP طرف مقابل — TUN/TCP و Paqet: شماره subnet)
 sudo jojonet --export-keys PEER_IP /root/k.tar.gz
 sudo jojonet --import-keys PEER_IP /root/k.tar.gz
+sudo jojonet --export-keys 12 /root/k.tar.gz      # pair_12 (TUN/TCP / Paqet)
 
 # نقش دستی
 export JOJONET_ROLE=iran    # یا kharej

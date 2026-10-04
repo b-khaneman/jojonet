@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>پنل جوجونت</title>
+<link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=__V__">
+<link rel="stylesheet" href="/static/style.css?v=__V__">
+<script src="/static/app.js?v=__V__" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">پرش به محتوای اصلی</a>
+
+<div id="boot" class="boot" role="status">
+  <span class="spinner" aria-hidden="true"></span>
+  <span>در حال بارگذاری پنل…</span>
+</div>
+
+<noscript>
+  <p class="noscript">برای استفاده از پنل جوجونت باید جاوااسکریپت مرورگر فعال باشد.</p>
+</noscript>
+
+<section id="login-view" class="login-view" hidden>
+  <form id="login-form" class="login-card" novalidate>
+    <img class="login-logo" src="/static/logo.svg?v=__V__" alt="" width="64" height="64">
+    <h1 class="login-title">پنل جوجونت</h1>
+    <p class="muted">برای ادامه وارد حساب خود شوید.</p>
+    <div id="login-error" class="form-error" role="alert" hidden></div>
+    <div class="field">
+      <label for="login-user">نام کاربری</label>
+      <input id="login-user" name="username" type="text" dir="ltr" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    </div>
+    <div class="field">
+      <label for="login-pass">رمز عبور</label>
+      <input id="login-pass" name="password" type="password" dir="ltr" autocomplete="current-password" required>
+    </div>
+    <button id="login-btn" class="btn btn-primary btn-block" type="submit">ورود</button>
+  </form>
+</section>
+
+<div id="app-view" class="app-view" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/static/logo.svg?v=__V__" alt="" width="40" height="40">
+      <div class="brand-text">
+        <h1 class="brand-title">پنل جوجونت</h1>
+        <p id="hdr-versions" class="versions"></p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span id="hdr-user" class="user-chip" title="کاربر فعلی"></span>
+      <button id="btn-password" class="btn btn-ghost btn-sm" type="button">تغییر رمز عبور</button>
+      <button id="btn-logout" class="btn btn-ghost btn-sm" type="button">خروج</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="بخش‌های پنل">
+    <button type="button" class="tab" role="tab" id="tabbtn-servers" data-tab="servers" aria-controls="tab-servers" aria-selected="true">سرورها</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-tunnels" data-tab="tunnels" aria-controls="tab-tunnels" aria-selected="false" tabindex="-1">تانل‌ها</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-jobs" data-tab="jobs" aria-controls="tab-jobs" aria-selected="false" tabindex="-1">کارها (لاگ)</button>
+  </nav>
+
+  <main id="main" class="main" tabindex="-1">
+    <section id="tab-servers" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-servers">
+      <div class="section-head">
+        <div>
+          <h2>سرورها</h2>
+          <p class="muted">سرورهای ایران و خارج را اضافه کنید، اتصال را تست کنید و پیش‌نیازها را نصب کنید.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-servers" class="btn btn-sm" type="button">بروزرسانی</button>
+          <button id="btn-add-server" class="btn btn-primary btn-sm" type="button">افزودن سرور</button>
+        </div>
+      </div>
+      <div id="servers-list" class="list-area"></div>
+    </section>
+
+    <section id="tab-tunnels" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-tunnels" hidden>
+      <div class="section-head">
+        <div>
+          <h2>تانل‌ها</h2>
+          <p class="muted">بین یک سرور ایران و یک سرور خارج تانل بسازید و وضعیت آن را مدیریت کنید.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-tunnels" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+
+      <div class="card create-card">
+        <h3 class="card-title">ساخت تانل</h3>
+        <form id="tunnel-form" class="form" novalidate>
+          <div id="tf-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field field-wide">
+              <label for="tf-mode">نوع تانل</label>
+              <select id="tf-mode" required aria-describedby="tf-mode-desc"></select>
+              <p id="tf-mode-desc" class="hint"></p>
+            </div>
+            <div class="field">
+              <label for="tf-iran">سرور ایران</label>
+              <select id="tf-iran" required></select>
+            </div>
+            <div class="field">
+              <label for="tf-kharej">سرور خارج</label>
+              <select id="tf-kharej" required></select>
+            </div>
+          </div>
+          <div id="tf-spoof" class="auth-section spoof-section" hidden>
+            <p class="hint spoof-warn">Spoof فقط وقتی کار می‌کند که دیتاسنتر <strong>هر دو</strong> سرور اجازه ارسال بسته با IP مبدأ جعلی بدهد (اکثر دیتاسنترها مثل Hetzner آن را می‌بندند). پنل قبل از ساخت با <code>spoof tester</code> در هر دو جهت بررسی می‌کند که سرورها آماده Spoof هستند و فقط در صورت موفقیت تانل را می‌سازد؛ بعد از ساخت هم یک تست UDP سرتاسری انجام می‌شود.</p>
+            <div class="form-grid">
+              <div class="field">
+                <label for="tf-sp-iran">IP جعلی سمت ایران</label>
+                <input id="tf-sp-iran" type="text" dir="ltr" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="5.160.0.1" aria-describedby="tf-sp-iran-hint">
+                <p id="tf-sp-iran-hint" class="hint">IP مبدأ بسته‌هایی که ایران به خارج می‌فرستد.</p>
+              </div>
+              <div class="field">
+                <label for="tf-sp-kharej">IP جعلی سمت خارج</label>
+                <input id="tf-sp-kharej" type="text" dir="ltr" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="8.8.8.8" aria-describedby="tf-sp-kharej-hint">
+                <p id="tf-sp-kharej-hint" class="hint">IP مبدأ بسته‌هایی که خارج به ایران برمی‌گرداند.</p>
+              </div>
+              <div class="field">
+                <label for="tf-sp-listen">پورت UDP ورودی ایران</label>
+                <input id="tf-sp-listen" type="number" dir="ltr" min="1" max="65535" value="8443">
+                <label class="check" for="tf-sp-public"><input id="tf-sp-public" type="checkbox" checked><span>روی همه IPها (0.0.0.0)؛ در غیر این صورت فقط 127.0.0.1</span></label>
+              </div>
+              <div class="field">
+                <label for="tf-sp-forward">مقصد فوروارد در خارج</label>
+                <input id="tf-sp-forward" type="text" dir="ltr" autocomplete="off" spellcheck="false" value="127.0.0.1:443" aria-describedby="tf-sp-forward-hint">
+                <p id="tf-sp-forward-hint" class="hint">سرویس UDP مقصد (مثلاً WireGuard روی 127.0.0.1:51820).</p>
+              </div>
+              <div class="field">
+                <label for="tf-sp-up">پروتکل رفت (ایران → خارج)</label>
+                <select id="tf-sp-up"><option value="tcp" selected>TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="icmpv6">ICMPv6</option></select>
+              </div>
+              <div class="field">
+                <label for="tf-sp-down">پروتکل برگشت (خارج → ایران)</label>
+                <select id="tf-sp-down"><option value="tcp">TCP</option><option value="udp" selected>UDP</option><option value="icmp">ICMP</option><option value="icmpv6">ICMPv6</option></select>
+              </div>
+              <div class="field">
+                <label for="tf-sp-upport">پورت رفت (دریافت در خارج)</label>
+                <input id="tf-sp-upport" type="number" dir="ltr" min="1" max="65535" value="9000">
+              </div>
+              <div class="field">
+                <label for="tf-sp-downport">پورت برگشت (دریافت در ایران)</label>
+                <input id="tf-sp-downport" type="number" dir="ltr" min="1" max="65535" value="9001">
+              </div>
+              <div class="field">
+                <label for="tf-sp-sport">پورت مبدأ جعلی</label>
+                <input id="tf-sp-sport" type="number" dir="ltr" min="1" max="65535" value="53">
+              </div>
+            </div>
+            <div class="spoof-check-row">
+              <button id="tf-sp-check" class="btn btn-ghost" type="button">بررسی آمادگی Spoof (بدون ساخت تانل)</button>
+              <label class="check" for="tf-sp-skip"><input id="tf-sp-skip" type="checkbox"><span>ساخت بدون بررسی آمادگی (توصیه نمی‌شود)</span></label>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="tf-submit" class="btn btn-primary" type="submit">ساخت تانل</button>
+          </div>
+        </form>
+      </div>
+
+      <h3 class="sub-head">تانل‌های موجود</h3>
+      <div id="tunnels-list" class="list-area"></div>
+    </section>
+
+    <section id="tab-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-jobs" hidden>
+      <div class="section-head">
+        <div>
+          <h2>کارها (لاگ)</h2>
+          <p class="muted">آخرین عملیات‌ها؛ این فهرست هر ۵ ثانیه خودکار بروزرسانی می‌شود. برای دیدن جزئیات روی هر کار بزنید.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-jobs" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div id="jobs-list" class="list-area"></div>
+    </section>
+  </main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
+</body>
+</html>

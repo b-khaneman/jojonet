@@ -15,13 +15,15 @@ shopt -s nullglob
 for conf in /etc/jojonet/instances/*.conf; do
     name=$(grep -E '^Name=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2 || true)
     [[ -n "$name" ]] || continue
-    for unit in "jojonet@${name}.service" "jojonet-tcptun@${name}.service" \
+    for unit in "jojonet-u2r@${name}.service" \
+                "jojonet@${name}.service" "jojonet-tcptun@${name}.service" \
                 "jojonet-paqet@${name}.service" "jojonet-vxlan@${name}.service" \
                 "jojonet-wg@${name}.service" "jojonet-hy2@${name}.service" \
                 "jojonet-rathole@${name}.service" "jojonet-wstunnel@${name}.service"; do
         systemctl stop "$unit" 2>/dev/null || true
         systemctl disable "$unit" 2>/dev/null || true
     done
+    [[ -x /usr/local/bin/jojonet-run-u2r.sh ]] && /usr/local/bin/jojonet-run-u2r.sh stop "$name" >/dev/null 2>&1 || true
     ip link delete "$name" 2>/dev/null || true
     nft delete table ip "jojonet_$name" 2>/dev/null || true
 done
@@ -33,6 +35,12 @@ for unit in jojonet-spoof.service jojonet-qs.service; do
     systemctl stop "$unit" 2>/dev/null || true
     systemctl disable "$unit" 2>/dev/null || true
 done
+if [[ -r /etc/jojonet/spoof/ufw.rules ]] && command -v ufw >/dev/null 2>&1; then
+    while read -r proto port from; do
+        [[ "$proto" =~ ^(tcp|udp)$ && "$port" =~ ^[0-9]{1,5}$ && "$from" =~ ^(any|[0-9.]{7,15})$ ]] || continue
+        ufw delete allow proto "$proto" from "$from" to any port "$port" >/dev/null 2>&1 || true
+    done < /etc/jojonet/spoof/ufw.rules
+fi
 
 rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-tcptun@.service \
@@ -42,6 +50,7 @@ rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-hy2@.service \
       /etc/systemd/system/jojonet-rathole@.service \
       /etc/systemd/system/jojonet-wstunnel@.service \
+      /etc/systemd/system/jojonet-u2r@.service \
       /etc/systemd/system/jojonet-spoof.service \
       /etc/systemd/system/jojonet-qs.service \
       /etc/systemd/system/jojonet-boot.service
@@ -53,6 +62,7 @@ rm -f /usr/local/bin/jojonet-run-instance.sh \
       /usr/local/bin/jojonet-run-hy2.sh \
       /usr/local/bin/jojonet-run-rathole.sh \
       /usr/local/bin/jojonet-run-wstunnel.sh \
+      /usr/local/bin/jojonet-run-u2r.sh \
       /usr/local/bin/jojonet-boot-restore.sh \
       /usr/local/bin/jojonet \
       /usr/local/bin/jojonet-uninstall
@@ -69,12 +79,12 @@ else
     warn "Kept /etc/jojonet"
 fi
 
-read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel/spoof binaries and managed QS runtime? [y/N]: " c3
+read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel/spoof/udp2raw binaries and managed QS runtime? [y/N]: " c3
 c3=$(echo "$c3" | tr '[:upper:]' '[:lower:]')
 if [[ "$c3" == "y" ]]; then
     rm -f /usr/local/bin/tun-server /usr/local/bin/tun-client \
           /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole \
-          /usr/local/bin/wstunnel /usr/local/bin/spoof
+          /usr/local/bin/wstunnel /usr/local/bin/spoof /usr/local/bin/udp2raw
     rm -rf /opt/jojonet/qs-tunnel
 fi
 

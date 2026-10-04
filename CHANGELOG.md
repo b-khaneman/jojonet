@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.5.9
+- **New WireGuard over ICMP** (`--wg-icmp`) and **WireGuard over FakeTCP** (`--wg-faketcp`): WireGuard is carried by udp2raw 20230206.0 (sha256-pinned) inside ICMP echo or fake TCP segments, AES-128-CBC + HMAC-SHA1 with a shared `udp2raw.key`. Overlays `10.67.X.0/30` / `10.68.X.0/30`, MTU 1200, menu item 21.
+- udp2raw runs as the sidecar `jojonet-u2r@NAME.service` (bound to `jojonet-wg@NAME`); peer-scoped iptables DROP rules tagged `jojonet-u2r-NAME` are added on start and removed on stop. The carrier port comes from the server pair (`JOJONET_WG_OBFS_PORT` overrides it); WireGuard listens on carrier port ± 10000.
+- Healthcheck, repair, change-peer, boot restore, delete and uninstall all handle the udp2raw sidecar.
+- Deploy refuses a udp2raw port that another program already holds, and treats a crash-looping udp2raw (systemd restarts during start-up) as a failed start.
+- **Fix**: running without a terminal/`TERM` (cron, SSH automation) no longer aborts every mode at `clear`; a failing CLI command exits with its code without the misleading "Unexpected error" line.
+- **New `--spoof-install`**: installs only the spoof binary (used by the panel's readiness test).
+- **Web panel**: `wg_icmp` / `wg_faketcp` modes; **Spoof readiness check** (spoof tester in both directions over the chosen transports) before building a Spoof tunnel, plus a standalone "check servers" button (the test opens a temporary, tagged iptables rule for the peer's spoof IP and removes exactly that rule); valid existing WireGuard keys are reused so sibling WireGuard tunnels keep working.
+
+### Web panel 1.1.0
+- **Domain + trusted certificate**: `--domain NAME [--email ADDR]` gets a Let's Encrypt ECDSA certificate (certbot, HTTP-01 standalone) with a renewal hook that installs the new certificate and restarts the panel; `--no-domain` goes back to self-signed. `jojonet-panel url` shows the domain.
+- **Speed**: gzip for pages, assets and API (not for SSE or responses carrying the CSRF token); versioned assets cached for a year (`immutable`), revalidated with ETag otherwise; asset hashing and `index.html` cached in memory; 65 s keep-alive so the browser reuses its TLS connection; uvloop + httptools when wheels are available.
+- **Speed**: job log lines are written in batches (every 0.5 s or 200 lines) instead of one SQLite rewrite per line, so chatty installs no longer stall the panel; SQLite `synchronous=NORMAL` under WAL; tunnel list without a per-row server query.
+
+## 1.5.8
+- **Spoof Tunnel, fully non-interactive**: `JOJONET_SPOOF_IP`, `JOJONET_SPOOF_PEER_IP`, `JOJONET_SPOOF_LISTEN`, `JOJONET_SPOOF_FORWARD`, `JOJONET_SPOOF_REMOTE_PORT` / `_RECV_PORT`, `JOJONET_SPOOF_UP_TRANSPORT` / `_DOWN_TRANSPORT`. The same values on both sides give a matching pair.
+- **Spoof**: IPv4 validation for spoof/peer/server IPs, a real `restart` on reconfigure, non-zero exit (with journal) if the service does not come up.
+- **Spoof**: when UFW is active, opens the receive port (only from the peer's spoof IP) and the public Iran UDP listen port; the recorded rules are removed on reconfigure/remove.
+- **New `--spoof-remove`**: stops/disables the service and removes its unit, config and UFW rule (binary kept).
+- **Web panel**: Spoof Tunnel mode (deploy, verify with an end-to-end UDP probe, delete).
+
+## 1.5.7
+- **Key sync fix**: TUN/TCP and Paqet keys are synced into the shared `pair_<subnet>` dir on both servers (was the wrong remote path).
+- **WireGuard**: pushes our public key as the peer's `wg_peer_public.key`, pulls the peer's key, drops a self-copy placeholder.
+- **HY2 / Rathole / Wstunnel**: one `ensure_shared_secret` helper; hints go to stderr (no more polluted secrets).
+- **`--export-keys` / `--import-keys`**: whitelisted files only, safe temp extraction (no owners/perms/symlinks), accept `SUBNET_ID` for TUN/TCP/Paqet.
+- **New `--delete <NAME>`**: full non-interactive teardown; the menu delete and rollback use the same `teardown_tunnel_runtime`.
+- **Fixes**: anchored `pkill` (deleting one wstunnel no longer kills the others); default interface detection without a gateway (`dev`/`src` tokens); `restart_tunnel` exit code propagated; three same-line `local` bugs; GRE name suggestion; invalid `JOJONET_HY2_HOP_RANGE` falls back with a warning; tunnel name / line-count validation for `--health` / `--logs`; `install.sh` no longer appends duplicate checksum lines.
+- **Web panel** (Persian): `sudo bash panel/install-panel.sh`.
+
 ## 1.5.6
 - **Auto deploy (type + peer IP)**: after choosing tunnel type, only ask for the other server's IP; ports/hop/TLS/forward use smart defaults.
 - Menu asks once: Use automatic defaults? [Y/n] (default **Y**). CLI with peer IP skips the question.

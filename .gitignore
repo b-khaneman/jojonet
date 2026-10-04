@@ -1,4 +1,4 @@
-﻿*.zip
+*.zip
 *.pyc
 __pycache__/
 *.log
@@ -6,3 +6,10 @@ __pycache__/
 Thumbs.db
 *.pem
 *.key
+.pytest_cache/
+.venv/
+venv/
+panel/data/
+*.db
+*.db-wal
+*.db-shm

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# JojoNet Installer v1.2.1 — self-update + mirrors + WireGuard + Hysteria2
+# JojoNet Installer v1.2.2 — self-update + mirrors + WireGuard + Hysteria2
 # https://github.com/b-khaneman/jojonet
 #
 # One-liner:
@@ -14,7 +14,7 @@
 
 set -Eeo pipefail
 
-readonly INSTALLER_VERSION="1.2.1"
+readonly INSTALLER_VERSION="1.2.2"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_BIN="/usr/local/bin/jojonet"
 readonly SHARE_DIR="/usr/local/share/jojonet"
@@ -97,16 +97,40 @@ EOF
 [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]] && echo "jojonet-installer ${INSTALLER_VERSION}" && exit 0
 (( EUID == 0 )) || fail "Run as root: sudo bash install.sh"
 
+missing_deps() {
+    local need_download="${1:-0}"
+    local deps=(ip nft awk grep systemctl sysctl ping flock mktemp sha256sum)
+    local cmd
+    for cmd in "${deps[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || printf '%s\n' "$cmd"
+    done
+    if (( need_download )); then
+        command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || echo "curl"
+    fi
+    return 0
+}
+
+auto_install_deps() {
+    local pkgs="iproute2 nftables procps iputils-ping util-linux curl coreutils ca-certificates"
+    if command -v apt-get >/dev/null 2>&1; then
+        warn "Installing missing dependencies (apt)..."
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        # shellcheck disable=SC2086
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $pkgs >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        local pm; pm=$(command -v dnf || command -v yum)
+        warn "Installing missing dependencies ($(basename "$pm"))..."
+        "$pm" install -y -q iproute nftables procps-ng iputils util-linux curl coreutils ca-certificates >/dev/null 2>&1 || true
+    fi
+}
+
 check_deps() {
     local need_download="${1:-0}"
-    local deps=(ip nft awk grep systemctl sysctl ping flock mktemp)
-    local missing=() cmd hint=""
-    for cmd in "${deps[@]}"; do
-        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
-    done
-    command -v sha256sum >/dev/null 2>&1 || missing+=("sha256sum")
-    if (( need_download )); then
-        command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || missing+=("curl|wget")
+    local missing=() hint=""
+    mapfile -t missing < <(missing_deps "$need_download")
+    if (( ${#missing[@]} > 0 )); then
+        auto_install_deps
+        mapfile -t missing < <(missing_deps "$need_download")
     fi
     if (( ${#missing[@]} > 0 )); then
         warn "Missing: ${missing[*]}"
@@ -225,6 +249,13 @@ fi
 
 if [[ "$mode" == "local" ]]; then
     check_deps 0
+    if grep -q $'\r' "$PKG_DIR/jojonet"; then
+        fail "jojonet has Windows (CRLF) line endings - re-extract the package or run: sed -i 's/\\r\$//' jojonet"
+    fi
+    if [[ -f "$PKG_DIR/checksums.sha256" ]]; then
+        (cd "$PKG_DIR" && sha256sum -c checksums.sha256 --ignore-missing --quiet) || fail "Checksum failed - package is corrupted or modified"
+        log "Package checksums OK"
+    fi
     install_jojonet_file "$PKG_DIR/jojonet"
     install_extras_from_dir "$PKG_DIR"
 else
@@ -236,5 +267,9 @@ else
     install_extras_from_github
 fi
 
-sha256sum "$JOJONET_BIN" 2>/dev/null | awk '{print $1"  jojonet"}' >> /etc/jojonet/checksums.sha256 2>/dev/null || true
+if bin_hash=$(sha256sum "$JOJONET_BIN" 2>/dev/null | awk '{print $1}') && [[ -n "$bin_hash" ]]; then
+    sums=/etc/jojonet/checksums.sha256
+    { [[ -f "$sums" ]] && awk '$2 != "jojonet"' "$sums"; printf '%s  jojonet\n' "$bin_hash"; } > "${sums}.tmp" 2>/dev/null \
+        && chmod 644 "${sums}.tmp" && mv -f "${sums}.tmp" "$sums" || rm -f "${sums}.tmp"
+fi
 print_done
