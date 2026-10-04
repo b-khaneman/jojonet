@@ -130,7 +130,7 @@ STEALTH_MODE=0
 
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -138,7 +138,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -2446,7 +2446,7 @@ list_all_tunnels() {
     local Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
 
     for file in "${files[@]}"; do
         idx=$((idx + 1))
@@ -3858,7 +3858,7 @@ create_template_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -3866,7 +3866,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4086,7 +4086,7 @@ create_tuntcp_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4094,7 +4094,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4304,7 +4304,7 @@ create_paqet_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4312,7 +4312,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4434,7 +4434,7 @@ create_vxlan_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4442,7 +4442,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4734,7 +4734,7 @@ create_wg_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4742,7 +4742,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -5588,7 +5588,7 @@ create_hy2_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -5596,7 +5596,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -6133,7 +6133,7 @@ create_rathole_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -6141,7 +6141,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -6506,7 +6506,7 @@ create_wstunnel_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
 
 load_safe_config() {
     local file="$1" line key val
@@ -6514,7 +6514,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -7553,7 +7553,7 @@ manage_tunnels() {
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
         local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports="" TcpPort=""
         local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort=""
+        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
         local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
         local file iran_ip kharej_ip
 
