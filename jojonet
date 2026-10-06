@@ -9,7 +9,7 @@ IFS=$'\n\t'
 # Modes: GRE | TUN/TCP | Paqet | VXLAN
 # Author: @B_KHANEMAN
 # Support: @B_KHANEMAN
-# License: MIT
+# License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
 readonly JOJONET_VERSION="1.6.0"
@@ -186,6 +186,153 @@ load_safe_config() {
     done < "$file"
     [[ -n "${Name:-}" ]] || return 1
     TunnelMode=${TunnelMode:-gre}
+    return 0
+}
+
+# ==========================================
+# Monthly commercial license (signed JN1 key)
+# ==========================================
+LICENSE_FILE="${JOJONET_LICENSE_FILE:-/etc/jojonet/license}"
+# Set this to your shop before shipping, or export JOJONET_SHOP_URL on the server.
+LICENSE_SHOP_URL="${JOJONET_SHOP_URL:-https://YOUR-SHOP-DOMAIN}"
+LICENSE_PUB_PEM='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAWFzR0Xot259Ibehl2RuugqsjKEbaaOIoqp+D//j+Tg8=
+-----END PUBLIC KEY-----'
+
+license_shop_link() {
+    local u="${LICENSE_SHOP_URL:-}"
+    if [[ -z "$u" || "$u" == *"YOUR-SHOP-DOMAIN"* ]]; then
+        printf '%s' "آدرس فروشگاه را از فروشنده بگیرید"
+    else
+        printf '%s' "$u"
+    fi
+}
+
+license_b64url_decode() {
+    local s="$1" pad
+    s="${s//-/+}"
+    s="${s//_/\/}"
+    case $(( ${#s} % 4 )) in
+        2) s+="==" ;;
+        3) s+="=" ;;
+    esac
+    printf '%s' "$s" | base64 -d 2>/dev/null
+}
+
+license_read_key() {
+    local raw="$1" rest payload_b64 sig_b64
+    raw="${raw#"${raw%%[![:space:]]*}"}"
+    raw="${raw%"${raw##*[![:space:]]}"}"
+    raw="${raw//$'\r'/}"
+    [[ "$raw" == JN1.* ]] || return 1
+    rest="${raw#JN1.}"
+    payload_b64="${rest%%.*}"
+    sig_b64="${rest#*.}"
+    [[ -n "$payload_b64" && -n "$sig_b64" && "$sig_b64" != *.* ]] || return 1
+    LICENSE_PAYLOAD="$(license_b64url_decode "$payload_b64" | tr -d '\n')" || return 1
+    LICENSE_SIG_B64="$sig_b64"
+    [[ -n "$LICENSE_PAYLOAD" && -n "$LICENSE_SIG_B64" ]] || return 1
+    LICENSE_ID="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$LICENSE_PAYLOAD" | head -1)"
+    LICENSE_EMAIL="$(sed -n 's/.*"email"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$LICENSE_PAYLOAD" | head -1)"
+    LICENSE_PLAN="$(sed -n 's/.*"plan"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$LICENSE_PAYLOAD" | head -1)"
+    LICENSE_EXP="$(sed -n 's/.*"exp"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' <<< "$LICENSE_PAYLOAD" | head -1)"
+    [[ "$LICENSE_PLAN" == "monthly" && "$LICENSE_EXP" =~ ^[0-9]+$ && -n "$LICENSE_ID" ]]
+}
+
+license_verify_sig() {
+    local tmp rc
+    command -v openssl >/dev/null 2>&1 || return 1
+    tmp="$(mktemp -d /tmp/jnlic.XXXXXX)" || return 1
+    printf '%s\n' "$LICENSE_PUB_PEM" > "$tmp/pub.pem"
+    printf '%s' "$LICENSE_PAYLOAD" > "$tmp/pay"
+    license_b64url_decode "$LICENSE_SIG_B64" > "$tmp/sig" || { rm -rf "$tmp"; return 1; }
+    openssl pkeyutl -verify -pubin -inkey "$tmp/pub.pem" -rawin -in "$tmp/pay" -sigfile "$tmp/sig" >/dev/null 2>&1
+    rc=$?
+    rm -rf "$tmp"
+    return "$rc"
+}
+
+license_load() {
+    local key=""
+    LICENSE_PAYLOAD=""; LICENSE_SIG_B64=""; LICENSE_ID=""; LICENSE_EMAIL=""; LICENSE_PLAN=""; LICENSE_EXP=""
+    [[ -r "$LICENSE_FILE" ]] || return 1
+    key="$(tr -d '\r\n' < "$LICENSE_FILE")"
+    license_read_key "$key" && license_verify_sig
+}
+
+license_days_left() {
+    local now exp left
+    now="$(date +%s)"
+    exp="${LICENSE_EXP:-0}"
+    left=$(( (exp - now) / 86400 ))
+    printf '%s' "$left"
+}
+
+license_status() {
+    if ! license_load; then
+        echo -e "${YELLOW}[!] اشتراک فعال نیست.${NC}"
+        echo -e "    خرید ماهانه (وب / رمزارز): ${CYAN}$(license_shop_link)${NC}"
+        echo -e "    فعال‌سازی: ${CYAN}sudo jojonet --activate KEY${NC}"
+        return 1
+    fi
+    local left
+    left="$(license_days_left)"
+    echo -e "${GREEN}[+] اشتراک ماهانه فعال است${NC}"
+    echo -e "    شناسه: ${LICENSE_ID}"
+    echo -e "    ایمیل: ${LICENSE_EMAIL:-—}"
+    echo -e "    انقضا: $(date -d "@${LICENSE_EXP}" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo "$LICENSE_EXP")  (${left} روز)"
+    if (( left <= 5 )); then
+        echo -e "${YELLOW}    تمدید: $(license_shop_link)${NC}"
+    fi
+    return 0
+}
+
+license_activate() {
+    local key="${1:-}"
+    if [[ -z "$key" ]]; then
+        echo -e "${RED}[!] کلید لایسنس را بدهید.${NC}" >&2
+        echo -e "    sudo jojonet --activate JN1....." >&2
+        echo -e "    خرید: $(license_shop_link)" >&2
+        return 1
+    fi
+    if ! license_read_key "$key"; then
+        echo -e "${RED}[!] قالب کلید نامعتبر است (باید با JN1. شروع شود).${NC}" >&2
+        return 1
+    fi
+    if ! license_verify_sig; then
+        echo -e "${RED}[!] امضای کلید رد شد.${NC}" >&2
+        return 1
+    fi
+    local now left
+    now="$(date +%s)"
+    if (( LICENSE_EXP <= now )); then
+        echo -e "${RED}[!] این اشتراک منقضی شده است. تمدید: $(license_shop_link)${NC}" >&2
+        return 1
+    fi
+    install -d -m700 /etc/jojonet
+    printf '%s\n' "$key" > "$LICENSE_FILE"
+    chmod 600 "$LICENSE_FILE"
+    left="$(license_days_left)"
+    echo -e "${GREEN}[+] اشتراک فعال شد تا $(date -d "@${LICENSE_EXP}" '+%Y-%m-%d' 2>/dev/null || echo "$LICENSE_EXP") (${left} روز).${NC}"
+}
+
+require_active_license() {
+    local now left
+    if ! license_load; then
+        echo -e "${RED}[!] JojoNet فقط با اشتراک ماهانه کار می‌کند.${NC}" >&2
+        echo -e "    خرید وب / رمزارز: ${CYAN}$(license_shop_link)${NC}" >&2
+        echo -e "    بعد از پرداخت: ${CYAN}sudo jojonet --activate KEY${NC}" >&2
+        return 1
+    fi
+    now="$(date +%s)"
+    if (( LICENSE_EXP <= now )); then
+        echo -e "${RED}[!] اشتراک ماهانه تمام شده است. تمدید: $(license_shop_link)${NC}" >&2
+        return 1
+    fi
+    left="$(license_days_left)"
+    if (( left <= 5 )); then
+        echo -e "${YELLOW}[!] ${left} روز تا پایان اشتراک — تمدید: $(license_shop_link)${NC}" >&2
+    fi
     return 0
 }
 
@@ -1440,9 +1587,12 @@ Usage:
   sudo jojonet --update [--force]      Update from GitHub
   sudo jojonet --refresh-templates     Regenerate runner scripts
   sudo jojonet --role iran|kharej      Force role
+  sudo jojonet --activate KEY          Activate monthly license (after web/crypto payment)
+  sudo jojonet --license               Show license / subscription status
   sudo jojonet --version | --help
 
 What's new in v${JOJONET_VERSION}:
+  • Monthly subscription: sudo jojonet --activate KEY  (web + crypto shop)
   • New: --dokodemo / --xray-reverse — Xray VLESS tunnels (tcp/ws/grpc), reverse for Iran-access servers
   • New: --6to4 / --gre6 / --ipip6 — IPv6 (SIT) tunnels with IPv4 overlay + port forward
   • New: --relay — single-server relays (iptables / GOST / HAProxy / Socat / Xray with stats)
@@ -1463,6 +1613,7 @@ Environment:
   JOJONET_HY2_KEY=/path/key.pem        Custom key (mode=custom)
   JOJONET_WG_OBFS_PORT=4200            udp2raw port for --wg-icmp/--wg-faketcp (same on both)
   JOJONET_XRAY_NET=tcp|ws|grpc         Xray transport (same on both; default tcp)
+  JOJONET_SHOP_URL=https://pay.example.com   Monthly subscription shop (web + crypto)
   JOJONET_XRAY_CTRL_PORT=4443          Xray control port (dokodemo 4443 / reverse 4444; same on both)
   JOJONET_FWD_PORTS=443,8443:2053      Forward ports (Xray: PORT or IRAN_LISTEN:KHAREJ_TARGET)
   JOJONET_ALLOW_UNSIGNED=1
@@ -1522,6 +1673,15 @@ case "${1:-}" in
         echo "jojonet ${JOJONET_VERSION}"
         exit 0
         ;;
+    --license|--license-status)
+        if license_status; then exit 0; fi
+        exit 1
+        ;;
+    --activate)
+        (( EUID == 0 )) || { echo -e "${RED}[!] Run as root.${NC}" >&2; exit 1; }
+        license_activate "${2:-}"
+        exit $?
+        ;;
     --check-update)
         check_jojonet_update
         exit $?
@@ -1562,6 +1722,10 @@ install -d -m700 "$PAQET_CONFIG_DIR"
 install -d -m700 "$HY2_CONFIG_DIR"
 install -d -m755 "$(dirname "$LOCK_FILE")" 2>/dev/null || true
 check_dependencies
+
+if [[ "${1:-}" != "--activate" && "${1:-}" != "--license" && "${1:-}" != "--license-status" ]]; then
+    require_active_license || exit 2
+fi
 
 # ==========================================
 # OpSec: quiet output + shell history cleanup
@@ -10440,6 +10604,7 @@ main_menu() {
         menu_line "24) IPv6 tunnels: 6to4 / GRE6 / IPIP6"
         menu_line "25) Relays — single server (iptables/GOST/HAProxy/Socat/Xray)"
         menu_line "26) Server tools (DNS / ping test / OS update)"
+        menu_line "27) License / اشتراک ماهانه (وضعیت و فعال‌سازی)"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -10528,6 +10693,13 @@ main_menu() {
                 ;;
             25) relay_menu || true ;;
             26) server_tools_menu || true ;;
+            27)
+                license_status || true
+                echo ""
+                read -r -p "Activate a new key? paste JN1... (empty=back): " _lk || true
+                [[ -n "${_lk:-}" ]] && license_activate "$_lk"
+                press_enter
+                ;;
             0) clear_screen; opsec_scrub_history; exit 0 ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
         esac

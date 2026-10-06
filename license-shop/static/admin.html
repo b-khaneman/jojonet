@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مدیر فروشگاه لایسنس</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <h1>مدیر فروشگاه</h1>
+    <form id="login" class="card">
+      <label>رمز مدیر
+        <input name="password" type="password" required>
+      </label>
+      <button type="submit">ورود</button>
+    </form>
+    <div id="desk" class="hidden">
+      <p><button id="refresh" type="button">بروزرسانی سفارش‌ها</button></p>
+      <table>
+        <thead><tr><th>سفارش</th><th>ایمیل</th><th>سکه</th><th>مبلغ</th><th>وضعیت</th><th>TXID</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <form id="issue" class="card">
+        <h2>صدور دستی</h2>
+        <label>ایمیل <input name="email" type="email" required dir="ltr"></label>
+        <label>ماه <input name="months" type="number" min="1" value="1"></label>
+        <button type="submit">صدور کلید</button>
+        <textarea id="issued" readonly dir="ltr" rows="3"></textarea>
+      </form>
+    </div>
+  </main>
+  <script src="/static/admin.js"></script>
+</body>
+</html>

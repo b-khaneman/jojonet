@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.6.0
+- **Monthly license**: JojoNet runs only with a signed `JN1` subscription key (`--activate` / `--license`). Buy on the web shop with crypto (USDT / BTC / TON / TRX); the seller confirms the TXID and the shop issues a 30-day key. Shop: `license-shop/install-shop.sh`. Set `JOJONET_SHOP_URL` before shipping.
 - **Xray Dokodemo-door** (`--dokodemo` / `--doko`) and **Xray Reverse** (`--xray-reverse`): VLESS over tcp/ws/grpc, shared `xray.uuid`, unit `jojonet-xray@NAME`. Dokodemo: Iran dials Kharej. Reverse: Kharej dials the Iran portal — for Iran-access servers. Env: `JOJONET_XRAY_NET`, `JOJONET_XRAY_CTRL_PORT`, `JOJONET_FWD_PORTS`. Menu 22 / 23.
 - **IPv6 tunnels**: 6to4 SIT (`--6to4` / `--sit`, ULA `fd6a:…::1/::2`), GRE6 (`--gre6`, overlay `172.22`), IPIP6 (`--ipip6`, overlay `172.23`). One v6 overlay per peer. Unit `jojonet-v6@NAME`. Menu 24.
 - **Single-server relays** (hiddify-relay style): iptables DNAT, GOST, HAProxy (TCP only), Socat, Xray dokodemo with traffic stats. CLI `--relay ENGINE DEST PORTS [tcp|udp|both] [NAME]`, `--relay-list`, `--relay-remove`, `--relay-stats`. Units `jojonet-relay@` / `jojonet-relay-nat@`. Menu 25.

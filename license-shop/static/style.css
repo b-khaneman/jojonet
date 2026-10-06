@@ -1,0 +1,15 @@
+:root { font-family: Tahoma, sans-serif; background: #0f1419; color: #e8eef4; }
+body { margin: 0; }
+.wrap { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+h1 { font-size: 1.4rem; }
+.lead, .hint, .foot { color: #9aa8b4; line-height: 1.7; }
+.price { font-size: 1.2rem; color: #7dcea0; }
+.card { background: #1a222c; border: 1px solid #2b3642; border-radius: 12px; padding: 1rem 1.2rem; margin: 1rem 0; }
+label { display: block; margin: .7rem 0; }
+input, select, textarea, button { width: 100%; box-sizing: border-box; margin-top: .35rem; padding: .55rem .6rem; border-radius: 8px; border: 1px solid #3a4754; background: #0f1419; color: inherit; }
+button { cursor: pointer; background: #1f6feb; border-color: #1f6feb; font-weight: 700; }
+.hidden { display: none; }
+.addr { word-break: break-all; }
+table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+th, td { border-bottom: 1px solid #2b3642; padding: .4rem; text-align: right; }
+pre { background: #0f1419; padding: .6rem; border-radius: 8px; overflow: auto; }

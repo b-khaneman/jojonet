@@ -1,9 +1,21 @@
-JojoNet v1.1.0 — Tunnel Guide (Iran / Foreign)
+JojoNet v1.6.0 — Tunnel Guide (Iran / Foreign)
 ==============================================
 Repo: https://github.com/b-khaneman/jojonet
 
-INSTALL (both servers)
-----------------------
+ONE-COMMAND INSTALL (script + web panel) from this zip
+------------------------------------------------------
+apt-get update -qq && apt-get install -y unzip
+unzip -o JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/install-one.sh
+sudo jojonet --version
+sudo jojonet-panel url
+
+Script only (no panel):
+  unzip -o JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/setup.sh script
+
+Persian walkthrough: آموزش-نصب-و-راه-اندازی.txt (next to the zip)
+
+INSTALL from GitHub (script only)
+---------------------------------
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
 sudo jojonet --version
 

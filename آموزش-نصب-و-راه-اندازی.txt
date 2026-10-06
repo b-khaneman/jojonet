@@ -1,0 +1,120 @@
+آموزش نصب و راه‌اندازی JojoNet v1.6.0
+=====================================
+
+دو فایل کنار هم:
+  1) JojoNet-v1.6.0-full.zip
+  2) همین راهنما
+
+نصب کامل (اسکریپت تانل + پنل وب) با یک دستور است.
+
+
+۱) کپی زیپ روی سرور
+--------------------
+از ویندوز (PowerShell):
+
+  scp JojoNet-v1.6.0-full.zip root@IP_سرور:/root/
+
+
+۲) نصب با یک دستور
+------------------
+روی سرور لینوکس (Ubuntu / Debian):
+
+  apt-get update -qq && apt-get install -y unzip && unzip -o /root/JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/install-one.sh
+
+اگر unzip از قبل نصب است:
+
+  unzip -o /root/JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/install-one.sh
+
+این دستور هم اسکریپت `jojonet` را نصب می‌کند و هم پنل وب را بالا می‌آورد.
+
+پورت پیش‌فرض پنل: 2053 (HTTPS)
+پورت دیگر:
+
+  bash /root/jojonet/install-one.sh --port 8443
+
+گواهی معتبر روی دامنه (به‌جای گواهی خودامضا):
+
+  bash /root/jojonet/install-one.sh --domain panel.example.com --email you@example.com
+
+فقط اسکریپت تانل، بدون پنل:
+
+  unzip -o /root/JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/setup.sh script
+
+
+۳) اشتراک ماهانه (اجباری)
+--------------------------
+بدون لایسنس اسکریپت کار نمی‌کند. خرید از فروشگاه وب با رمزارز است (USDT / BTC / TON / TRX).
+
+  1) برو به آدرس فروشگاه (JOJONET_SHOP_URL)
+  2) ایمیل و سکه را بزن؛ مبلغ و آدرس کیف را واریز کن (دقیقاً همان مبلغ)
+  3) TXID را ثبت کن؛ بعد از تأیید مدیر، کلید JN1... را می‌گیری
+  4) روی سرور:
+
+     sudo jojonet --activate JN1.xxxxx
+
+وضعیت:
+
+  sudo jojonet --license
+
+اشتراک ۳۰ روزه است؛ قبل از انقضا تمدید کن.
+
+
+۴) بعد از نصب پنل
+-----------------
+آخر خروجی نصب را بخوان. آدرس پنل و (در نصب اول) نام کاربری و رمز مدیر همان‌جا چاپ می‌شود. همان لحظه ذخیره کن؛ رمز دوباره نشان داده نمی‌شود.
+
+دستورهای کمکی:
+
+  jojonet --version
+  jojonet-panel url
+  jojonet-panel status
+  jojonet-panel set-admin
+
+مرورگر را باز کن و به آدرسی که `jojonet-panel url` می‌دهد برو.
+گواهی پیش‌فرض خودامضا است؛ مرورگر هشدار امنیتی نشان می‌دهد — تأیید کن و ادامه بده.
+
+
+۵) راه‌اندازی پنل
+-----------------
+1. با کاربر و رمزی که نصب چاپ کرد وارد شو.
+2. سرور ایران و سرور خارج را اضافه کن (IP، پورت SSH، رمز یا کلید).
+3. روی هر سرور «تست اتصال» و بعد «نصب» را بزن تا jojonet روی آن نصب شود.
+4. از تب تانل‌ها نوع تانل را بساز، یا از تب رله‌ها رله تک‌سرور روی ایران بگذار.
+
+ترتیب دستی از خط فرمان (بدون پنل): اول سرور خارج، بعد ایران.
+
+  خارج:   jojonet --wg IP_ایران
+  ایران:  jojonet --wg IP_خارج
+
+برای سرور ایران‌اکسس از پنل حالت «Xray Reverse» را بزن، یا:
+
+  خارج:   jojonet --xray-reverse IP_ایران
+  ایران:  jojonet --xray-reverse IP_خارج
+
+
+۶) حالت‌های تانل (خلاصه)
+------------------------
+  GRE / WireGuard / Hysteria2 / TUN-TCP / Paqet / VXLAN
+  WireGuard داخل ICMP یا FakeTCP
+  Rathole و Wstunnel (ریورس)
+  Xray Dokodemo-door و Xray Reverse
+  6to4 / GRE6 / IPIP6
+  Spoof Tunnel
+  رله تک‌سرور: iptables / GOST / HAProxy / Socat / Xray
+
+
+۷) اگر چیزی بالا نیامد
+----------------------
+  jojonet-panel status
+  jojonet-panel logs 80
+  jojonet --status
+  ss -ltnp | grep 2053
+
+فایروال سرور و پنل ابری باید پورت پنل (پیش‌فرض 2053/tcp) را باز بگذارند.
+
+
+حذف
+---
+  jojonet-uninstall
+  jojonet-panel uninstall
+  jojonet-panel uninstall --purge    # همراه با داده و رمز پنل

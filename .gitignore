@@ -10,6 +10,8 @@ Thumbs.db
 .venv/
 venv/
 panel/data/
+license-shop/data/
+license-shop/secrets/
 *.db
 *.db-wal
 *.db-shm

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>اشتراک ماهانه JojoNet</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <h1>اشتراک ماهانه JojoNet</h1>
+    <p class="lead">برای استفاده از اسکریپت باید اشتراک ماهانه بخرید. پرداخت تحت وب با رمزارز است.</p>
+    <p id="price" class="price">در حال بارگذاری…</p>
+    <form id="buy" class="card">
+      <label>ایمیل (کلید لایسنس به همین ایمیل وصل می‌شود)
+        <input name="email" type="email" required dir="ltr" placeholder="you@email.com">
+      </label>
+      <label>رمزارز
+        <select name="coin" id="coin" required></select>
+      </label>
+      <button type="submit">ساخت فاکتور پرداخت</button>
+    </form>
+    <section id="pay" class="card hidden">
+      <h2>پرداخت</h2>
+      <p>دقیقاً این مبلغ را به این آدرس بفرستید:</p>
+      <dl>
+        <div><dt>شبکه / سکه</dt><dd id="p-coin" dir="ltr"></dd></div>
+        <div><dt>مبلغ</dt><dd id="p-amount" dir="ltr"></dd></div>
+        <div><dt>آدرس کیف</dt><dd id="p-addr" class="addr" dir="ltr"></dd></div>
+        <div><dt>شماره سفارش</dt><dd id="p-id" dir="ltr"></dd></div>
+      </dl>
+      <p class="hint">مبلغ یکتا است تا واریز شما از بقیه جدا شود. بعد از واریز، TXID را ثبت کنید تا مدیر تأیید کند و کلید صادر شود.</p>
+      <form id="txid-form">
+        <label>TXID / هش تراکنش
+          <input name="txid" required dir="ltr" minlength="8" placeholder="txid">
+        </label>
+        <button type="submit">ثبت پرداخت</button>
+      </form>
+      <p id="wait" class="hidden">ثبت شد. منتظر تأیید مدیر بمانید. این صفحه خودش چک می‌کند.</p>
+    </section>
+    <section id="done" class="card hidden">
+      <h2>کلید لایسنس شما</h2>
+      <textarea id="key" readonly dir="ltr" rows="4"></textarea>
+      <p>روی سرور:</p>
+      <pre dir="ltr">sudo jojonet --activate KEY</pre>
+      <p id="exp"></p>
+    </section>
+    <p class="foot">پشتیبانی: <span id="support"></span></p>
+  </main>
+  <script src="/static/shop.js"></script>
+</body>
+</html>
