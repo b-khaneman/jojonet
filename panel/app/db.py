@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS relays (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    engine TEXT NOT NULL,
+    server_id INTEGER NOT NULL REFERENCES servers(id),
+    target TEXT NOT NULL,
+    ports TEXT NOT NULL,
+    proto TEXT NOT NULL DEFAULT 'both',
+    status TEXT NOT NULL,
+    last_job_id INTEGER,
+    last_check TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 JSON_FIELDS = {"last_check", "steps", "options"}
@@ -102,6 +115,7 @@ class Database:
                 (utcnow(), "\n[panel restarted - job aborted]\n"),
             )
             self._conn.execute("UPDATE tunnels SET status='failed' WHERE status IN ('deploying','deleting')")
+            self._conn.execute("UPDATE relays SET status='failed' WHERE status IN ('deploying','deleting')")
 
     def close(self) -> None:
         with self._lock:

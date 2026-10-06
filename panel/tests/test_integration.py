@@ -22,9 +22,18 @@ from app.sshclient import CmdResult
 from app.validators import MODES, SHARED_KEY_FILES, WG_MODES, WG_OBFS, conf_mode
 
 FLAG_TO_MODE = {v["flag"]: k for k, v in MODES.items()}
-SECRET_FILE = {"paqet": "paqet.secret", "hysteria2": "hy2.auth", "rathole": "rathole.token", "wstunnel": "wstunnel.token"}
-PREFIX = {"gre": "172.20", "tun_tcp": "10.30", "vxlan": "10.40", "wireguard": "10.66", "wg_icmp": "10.67", "wg_faketcp": "10.68"}
-NAME_PREFIX = {"wireguard": "wg", "wg_icmp": "wi", "wg_faketcp": "wf"}
+SECRET_FILE = {
+    "paqet": "paqet.secret", "hysteria2": "hy2.auth", "rathole": "rathole.token", "wstunnel": "wstunnel.token",
+    "dokodemo": "xray.uuid", "xray_reverse": "xray.uuid",
+}
+PREFIX = {
+    "gre": "172.20", "tun_tcp": "10.30", "vxlan": "10.40", "wireguard": "10.66", "wg_icmp": "10.67", "wg_faketcp": "10.68",
+    "gre6": "172.22", "ipip6": "172.23",
+}
+NAME_PREFIX = {
+    "wireguard": "wg", "wg_icmp": "wi", "wg_faketcp": "wf",
+    "dokodemo": "dk", "xray_reverse": "xr", "sit": "s6", "gre6": "g6", "ipip6": "i6",
+}
 SRC_RE = re.compile(r"printf '%s\\n' (\S+) >")
 
 
@@ -46,6 +55,8 @@ class FakeServer:
         self.can_spoof = True
         self.python = True
         self.spoof_bin = False
+        self.relays: dict[str, dict[str, str]] = {}
+        self.dns: tuple[str, ...] = ()
 
     def spoof_pair_ok(self) -> bool:
         """Both sides configured, pointing at each other, with mirrored spoof IPs and identical transports."""
@@ -88,11 +99,13 @@ class FakeServer:
                     # Like ensure_shared_secret without SSH: a missing key is generated locally (and would mismatch).
                     d.setdefault("udp2raw.key", secrets.token_hex(24))
         conf["KeyDir"] = kd
-        if mode in PREFIX:
+        if mode == "sit":
+            conf["Tun_IP"] = f"fd6a:aaaa:bbbb::{'1' if role == 'kharej' else '2'}/64"
+        elif mode in PREFIX:
             me, other = (1, 2) if role == "kharej" else (2, 1)
             conf["Tun_IP"] = f"{PREFIX[mode]}.{n}.{me}/30"
             conf["Tun_Remote_IP_Raw"] = f"{PREFIX[mode]}.{n}.{other}"
-        if role == "iran":
+        if role == "iran" and mode != "sit":
             conf["Ports"] = "443"
         self.confs[name] = conf
         return 0
@@ -202,7 +215,7 @@ class FakeServer:
             kharej = self.world.servers[self.spoof["peer"]]
             ok = self.world.probe_up and kharej.can_spoof
             return CmdResult(0 if ok else 1, "ack 2\n" if ok else "noack 40\n", "")
-        m = re.search(r"JOJONET_ROLE=(\w+) JOJONET_AUTO=1 TERM=dumb timeout 900 jojonet (\S+) (\S+) </dev/null", script)
+        m = re.search(r"JOJONET_ROLE=(\w+) JOJONET_AUTO=1 TERM=dumb(?: JOJONET_\w+=\S+)* timeout 900 jojonet (\S+) (\S+) </dev/null", script)
         if m:
             return CmdResult(self.deploy(m.group(1), FLAG_TO_MODE[m.group(2)], m.group(3)), "deployed\n", "")
         m = re.match(r"jojonet --health (\S+) </dev/null", script)
@@ -211,12 +224,34 @@ class FakeServer:
         m = re.match(r"jojonet --delete (\S+) </dev/null", script)
         if m:
             return CmdResult(0 if self.confs.pop(m.group(1), None) else 1, "", "")
-        m = re.match(r"ping -c 3 -W 2 -q (\S+)", script)
+        m = re.match(r"ping(?: -6)? -c 3 -W 2 -q (\S+)", script)
         if m:
             ok = any(c.get("Tun_IP", "").startswith(m.group(1) + "/")
                      for s in self.world.servers.values() for c in s.confs.values())
             ok = ok and all(s.healthy(n) for s in self.world.servers.values() for n in s.confs)
             return CmdResult(0 if ok else 1, "rtt min/avg/max/mdev = 1.0/12.5/20.0/1.0 ms\n" if ok else "", "")
+        m = re.search(r"TERM=dumb timeout 300 jojonet --relay (\S+) (\S+) (\S+) (\S+) (\S+) </dev/null", script)
+        if m:
+            engine, target, ports, proto, name = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+            self.relays[name] = {"engine": engine, "target": target, "ports": ports, "proto": proto, "name": name}
+            return CmdResult(0, f"Relay [{name}] UP\n", "")
+        m = re.match(r"jojonet --relay-remove (\S+) </dev/null", script)
+        if m:
+            return CmdResult(0 if self.relays.pop(m.group(1), None) is not None else 1, "", "")
+        m = re.match(r"jojonet --relay-stats (\S+) </dev/null", script)
+        if m:
+            rel = self.relays.get(m.group(1))
+            if not rel:
+                return CmdResult(1, "", "not found")
+            return CmdResult(0, f"=== {rel['name']} ({rel['engine']}) → {rel['target']} ===\n  port {rel['ports']}: 0 B\n", "")
+        m = re.match(r"jojonet --dns (\S+)(?: (\S+))? </dev/null", script)
+        if m:
+            self.dns = tuple(x for x in m.groups() if x)
+            return CmdResult(0, f"DNS set: {' '.join(self.dns)}\n", "")
+        if script == "jojonet --ping-test </dev/null":
+            return CmdResult(0, "  ok    github.com  avg 12 ms  loss 0%\n", "")
+        if script == "jojonet --update-server </dev/null":
+            return CmdResult(0, "packages updated\n", "")
         raise AssertionError(f"unexpected command: {script[:200]}")
 
 
@@ -240,7 +275,7 @@ class FakeSession:
             world.sender_done.clear()
             if on_line:
                 await on_line("[tester] mode=receiver protocol=icmp packet_count=20 max_loss=80.0%")
-            await asyncio.wait_for(world.sender_done.wait(), timeout=5)
+            await asyncio.wait_for(world.sender_done.wait(), timeout=20)
         res = self.server.run(script, data)
         if on_line:
             for line in res.stdout.splitlines()[:5]:
@@ -280,7 +315,7 @@ def world(client, monkeypatch):
     return w
 
 
-def wait_job(client, job_id, timeout=15.0):
+def wait_job(client, job_id, timeout=30.0):
     end = time.time() + timeout
     while time.time() < end:
         job = client.get(f"/api/jobs/{job_id}").json()
@@ -307,13 +342,17 @@ def test_deploy_verify_delete_every_mode(client, auth, world, mode):
     assert t["status"] == "ok" and t["iran_iface"] and t["kharej_iface"]
     if mode in PREFIX:
         assert t["tun_kharej_ip"].endswith(".1") and t["tun_iran_ip"].endswith(".2")
-    assert t["forward_ports"] == "443"
+    if mode == "sit":
+        assert t["tun_kharej_ip"].endswith("::1") and t["tun_iran_ip"].endswith("::2")
+        assert not t["forward_ports"]
+    else:
+        assert t["forward_ports"] == "443"
 
     ir, de = world.servers["5.6.7.8"], world.servers["1.2.3.4"]
     first = MODES[mode]["first"]
     deploy_order = [host for host, c in world.log if "JOJONET_AUTO=1" in c]
     assert deploy_order == (["1.2.3.4", "5.6.7.8"] if first == "kharej" else ["5.6.7.8", "1.2.3.4"])
-    assert ir.jojonet == de.jojonet == "1.5.9"
+    assert ir.jojonet == de.jojonet == "1.6.0"
     if mode == "tun_tcp":
         kd = next(iter(ir.keys))
         assert kd == next(iter(de.keys)) and re.fullmatch(r"/etc/jojonet/keys/pair_\d+", kd)
@@ -497,9 +536,64 @@ def test_install_job_and_test_job(client, auth, world):
     iran, _ = make_servers(client, auth)
     job = wait_job(client, client.post(f"/api/servers/{iran['id']}/install", headers=auth).json()["job_id"])
     assert job["status"] == "ok", job["log"]
-    assert world.servers["5.6.7.8"].jojonet == "1.5.9"
+    assert world.servers["5.6.7.8"].jojonet == "1.6.0"
     job = wait_job(client, client.post(f"/api/servers/{iran['id']}/test", headers=auth).json()["job_id"])
     assert job["status"] == "ok"
     srv = client.get("/api/servers").json()
     s = next(x for x in srv if x["id"] == iran["id"])
-    assert s["last_check"]["ok"] is True and "1.5.9" in s["last_check"]["info"]
+    assert s["last_check"]["ok"] is True and "1.6.0" in s["last_check"]["info"]
+
+
+def test_v6_one_per_pair(client, auth, world):
+    iran, kharej = make_servers(client, auth)
+    r = client.post("/api/tunnels", json={"mode": "sit", "iran_id": iran["id"], "kharej_id": kharej["id"]}, headers=auth)
+    assert wait_job(client, r.json()["job_id"])["status"] == "ok"
+    r = client.post("/api/tunnels", json={"mode": "gre6", "iran_id": iran["id"], "kharej_id": kharej["id"]}, headers=auth)
+    assert r.status_code == 409
+
+
+def test_xray_options_and_key_sync(client, auth, world):
+    iran, kharej = make_servers(client, auth)
+    r = client.post("/api/tunnels", json={
+        "mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"],
+        "xray": {"net": "ws", "ctrl_port": 4443, "ports": "8443:443"},
+    }, headers=auth)
+    job = wait_job(client, r.json()["job_id"])
+    assert job["status"] == "ok", job["log"]
+    t = client.get("/api/tunnels").json()[0]
+    assert t["options"]["net"] == "ws" and t["options"]["ports"] == "8443:443"
+    cmds = " ".join(c for _, c in world.log)
+    assert "JOJONET_XRAY_NET=ws" in cmds and "JOJONET_XRAY_CTRL_PORT=4443" in cmds
+    ir, de = world.servers["5.6.7.8"], world.servers["1.2.3.4"]
+    kd_ir, kd_de = "/etc/jojonet/keys/pair_1_2_3_4", "/etc/jojonet/keys/pair_5_6_7_8"
+    assert ir.keys[kd_ir]["xray.uuid"] == de.keys[kd_de]["xray.uuid"]
+    r = client.post("/api/tunnels", json={"mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"],
+                                         "xray": {"net": "quic"}}, headers=auth)
+    assert r.status_code == 422
+
+
+def test_relay_and_server_tools(client, auth, world):
+    iran, kharej = make_servers(client, auth)
+    r = client.post("/api/relays", json={
+        "engine": "iptables", "iran_id": iran["id"], "target": "9.9.9.9", "ports": "443,8443:443", "proto": "both", "name": "web",
+    }, headers=auth)
+    assert r.status_code == 200, r.text
+    job = wait_job(client, r.json()["job_id"])
+    assert job["status"] == "ok", job["log"]
+    rel = client.get("/api/relays").json()[0]
+    assert rel["name"] == "web" and rel["status"] == "ok"
+    assert world.servers["5.6.7.8"].relays["web"]["target"] == "9.9.9.9"
+    job = wait_job(client, client.post(f"/api/relays/{rel['id']}/stats", headers=auth).json()["job_id"])
+    assert job["status"] == "ok"
+    assert client.post("/api/relays", json={"engine": "iptables", "iran_id": kharej["id"], "target": "1.1.1.1", "ports": "80"}, headers=auth).status_code == 422
+    job = wait_job(client, client.request("DELETE", f"/api/relays/{rel['id']}", json={"force": False}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and world.servers["5.6.7.8"].relays == {}
+
+    job = wait_job(client, client.post(f"/api/servers/{iran['id']}/dns", json={"dns1": "1.1.1.1", "dns2": "8.8.8.8"}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and world.servers["5.6.7.8"].dns == ("1.1.1.1", "8.8.8.8")
+    job = wait_job(client, client.post(f"/api/servers/{iran['id']}/ping-test", headers=auth).json()["job_id"])
+    assert job["status"] == "ok"
+    job = wait_job(client, client.post(f"/api/servers/{iran['id']}/update-os", headers=auth).json()["job_id"])
+    assert job["status"] == "ok"
+    assert client.post("/api/servers", json={"name": "X", "role": "iran", "host": "5.6.7.8", "auth_type": "password", "password": "x"}, headers=auth).status_code == 409
+

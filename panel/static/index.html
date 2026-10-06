@@ -60,6 +60,7 @@
   <nav class="tabs" role="tablist" aria-label="بخش‌های پنل">
     <button type="button" class="tab" role="tab" id="tabbtn-servers" data-tab="servers" aria-controls="tab-servers" aria-selected="true">سرورها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-tunnels" data-tab="tunnels" aria-controls="tab-tunnels" aria-selected="false" tabindex="-1">تانل‌ها</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-relays" data-tab="relays" aria-controls="tab-relays" aria-selected="false" tabindex="-1">رله‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-jobs" data-tab="jobs" aria-controls="tab-jobs" aria-selected="false" tabindex="-1">کارها (لاگ)</button>
   </nav>
 
@@ -157,6 +158,27 @@
               <label class="check" for="tf-sp-skip"><input id="tf-sp-skip" type="checkbox"><span>ساخت بدون بررسی آمادگی (توصیه نمی‌شود)</span></label>
             </div>
           </div>
+          <div id="tf-xray" class="auth-section spoof-section" hidden>
+            <p class="hint">VLESS روی هر دو سرور باید یکی باشد. پورت‌ها: <code>443</code> یا <code>8443:443</code> (ایران گوش می‌دهد : هدف خارج).</p>
+            <div class="form-grid">
+              <div class="field">
+                <label for="tf-xr-net">انتقال</label>
+                <select id="tf-xr-net">
+                  <option value="tcp" selected>TCP</option>
+                  <option value="ws">WebSocket</option>
+                  <option value="grpc">gRPC</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="tf-xr-ctrl">پورت کنترل</label>
+                <input id="tf-xr-ctrl" type="number" dir="ltr" min="1" max="65535" placeholder="خودکار">
+              </div>
+              <div class="field field-wide">
+                <label for="tf-xr-ports">پورت‌های فوروارد</label>
+                <input id="tf-xr-ports" type="text" dir="ltr" autocomplete="off" spellcheck="false" placeholder="443 یا 8443:443,2053" value="443">
+              </div>
+            </div>
+          </div>
           <div class="form-actions">
             <button id="tf-submit" class="btn btn-primary" type="submit">ساخت تانل</button>
           </div>
@@ -165,6 +187,65 @@
 
       <h3 class="sub-head">تانل‌های موجود</h3>
       <div id="tunnels-list" class="list-area"></div>
+    </section>
+
+    <section id="tab-relays" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-relays" hidden>
+      <div class="section-head">
+        <div>
+          <h2>رله‌ها</h2>
+          <p class="muted">رله تک‌سرور روی ایران: کاربران به این سرور وصل می‌شوند و ترافیک به سرور اصلی می‌رود (بدون نصب JojoNet روی مقصد).</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-relays" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div class="card create-card">
+        <h3 class="card-title">ساخت رله</h3>
+        <form id="relay-form" class="form" novalidate>
+          <div id="rf-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="rf-engine">موتور</label>
+              <select id="rf-engine" required>
+                <option value="iptables">iptables (سریع‌ترین، TCP+UDP)</option>
+                <option value="gost">GOST</option>
+                <option value="haproxy">HAProxy (فقط TCP)</option>
+                <option value="socat">Socat</option>
+                <option value="xray">Xray dokodemo (با آمار ترافیک)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="rf-iran">سرور ایران</label>
+              <select id="rf-iran" required></select>
+            </div>
+            <div class="field">
+              <label for="rf-target">مقصد (سرور اصلی)</label>
+              <input id="rf-target" type="text" dir="ltr" autocomplete="off" spellcheck="false" required placeholder="203.0.113.10">
+            </div>
+            <div class="field">
+              <label for="rf-ports">پورت‌ها</label>
+              <input id="rf-ports" type="text" dir="ltr" required placeholder="443,8443 یا 2096:443">
+            </div>
+            <div class="field">
+              <label for="rf-proto">پروتکل</label>
+              <select id="rf-proto">
+                <option value="both" selected>TCP و UDP</option>
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="rf-name">نام (اختیاری)</label>
+              <input id="rf-name" type="text" dir="ltr" maxlength="24" autocomplete="off" placeholder="web">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="rf-submit" class="btn btn-primary" type="submit">ساخت رله</button>
+          </div>
+        </form>
+      </div>
+      <h3 class="sub-head">رله‌های موجود</h3>
+      <div id="relays-list" class="list-area"></div>
     </section>
 
     <section id="tab-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-jobs" hidden>

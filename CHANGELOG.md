@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0
+- **Xray Dokodemo-door** (`--dokodemo` / `--doko`) and **Xray Reverse** (`--xray-reverse`): VLESS over tcp/ws/grpc, shared `xray.uuid`, unit `jojonet-xray@NAME`. Dokodemo: Iran dials Kharej. Reverse: Kharej dials the Iran portal — for Iran-access servers. Env: `JOJONET_XRAY_NET`, `JOJONET_XRAY_CTRL_PORT`, `JOJONET_FWD_PORTS`. Menu 22 / 23.
+- **IPv6 tunnels**: 6to4 SIT (`--6to4` / `--sit`, ULA `fd6a:…::1/::2`), GRE6 (`--gre6`, overlay `172.22`), IPIP6 (`--ipip6`, overlay `172.23`). One v6 overlay per peer. Unit `jojonet-v6@NAME`. Menu 24.
+- **Single-server relays** (hiddify-relay style): iptables DNAT, GOST, HAProxy (TCP only), Socat, Xray dokodemo with traffic stats. CLI `--relay ENGINE DEST PORTS [tcp|udp|both] [NAME]`, `--relay-list`, `--relay-remove`, `--relay-stats`. Units `jojonet-relay@` / `jojonet-relay-nat@`. Menu 25.
+- **Server tools**: set DNS, ping test, OS package update. Menu 26 / `--dns` / `--ping-test` / `--update-server`.
+- **Web panel 1.2.0**: Xray and v6 modes (one v6 tunnel per Iran/Kharej pair), Relays tab, DNS / ping / OS-update buttons on each server card.
+- Uninstall stops xray/v6/relay units and can remove the `xray` and `gost` binaries.
+
 ## 1.5.9
 - **New WireGuard over ICMP** (`--wg-icmp`) and **WireGuard over FakeTCP** (`--wg-faketcp`): WireGuard is carried by udp2raw 20230206.0 (sha256-pinned) inside ICMP echo or fake TCP segments, AES-128-CBC + HMAC-SHA1 with a shared `udp2raw.key`. Overlays `10.67.X.0/30` / `10.68.X.0/30`, MTU 1200, menu item 21.
 - udp2raw runs as the sidecar `jojonet-u2r@NAME.service` (bound to `jojonet-wg@NAME`); peer-scoped iptables DROP rules tagged `jojonet-u2r-NAME` are added on start and removed on stop. The carrier port comes from the server pair (`JOJONET_WG_OBFS_PORT` overrides it); WireGuard listens on carrier port ± 10000.

@@ -21,18 +21,24 @@ from .sshclient import RemoteSession, ServerCreds, fingerprint
 from .validators import (
     IP_KEYDIR_MODES,
     MODES,
+    RELAY_ENGINES,
     SHARED_KEY_FILES,
     SPOOF_MARK,
     SPOOF_UNIT,
     SUBNET_KEYDIR_MODES,
+    V6_MODES,
     WG_MODES,
     WG_OBFS,
+    XRAY_MODES,
     conf_mode,
     ip_keydir,
     split_confs,
     valid_iface,
     valid_ipv4,
+    valid_ipv6,
     valid_keydir,
+    valid_relay_name,
+    valid_xray_ports,
 )
 
 RETRY_DELAY = 5.0
@@ -46,16 +52,16 @@ command -v systemctl >/dev/null 2>&1 || { echo "systemd is required"; exit 4; }
 if command -v apt-get >/dev/null 2>&1; then
     apt-get -o DPkg::Lock::Timeout=180 update -qq || echo "apt update had errors (continuing)"
     apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends \
-        curl ca-certificates iproute2 nftables iptables openssl procps iputils-ping util-linux tar gzip coreutils kmod \
+        curl ca-certificates iproute2 nftables iptables openssl procps iputils-ping util-linux tar gzip unzip coreutils kmod \
         || { echo "apt install failed"; exit 5; }
 elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
     pm=$(command -v dnf || command -v yum)
-    "$pm" install -y -q curl ca-certificates iproute nftables iptables openssl procps-ng iputils util-linux tar gzip coreutils kmod \
+    "$pm" install -y -q curl ca-certificates iproute nftables iptables openssl procps-ng iputils util-linux tar gzip unzip coreutils kmod \
         || { echo "$pm install failed"; exit 5; }
 else
     echo "unsupported package manager (need apt, dnf or yum)"; exit 3
 fi
-for c in ip nft ping openssl tar curl; do command -v "$c" >/dev/null 2>&1 || { echo "missing after install: $c"; exit 6; }; done
+for c in ip nft ping openssl tar curl unzip; do command -v "$c" >/dev/null 2>&1 || { echo "missing after install: $c"; exit 6; }; done
 echo "prerequisites OK"
 """
 
@@ -197,6 +203,22 @@ def spoof_env(opts: dict[str, Any], role: str) -> str:
         "JOJONET_SPOOF_PORT": str(int(opts["spoof_port"])),
     }
     return " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
+
+
+def xray_env(opts: dict[str, Any] | None) -> str:
+    if not opts:
+        return ""
+    parts: list[str] = []
+    net = str(opts.get("net") or "tcp").lower()
+    if net in ("tcp", "ws", "grpc"):
+        parts.append(f"JOJONET_XRAY_NET={shlex.quote(net)}")
+    ctrl = opts.get("ctrl_port")
+    if ctrl:
+        parts.append(f"JOJONET_XRAY_CTRL_PORT={int(ctrl)}")
+    ports = str(opts.get("ports") or "").replace(" ", "")
+    if ports and valid_xray_ports(ports):
+        parts.append(f"JOJONET_FWD_PORTS={shlex.quote(ports)}")
+    return (" " + " ".join(parts)) if parts else ""
 
 
 def bundle_version(bundle_dir: Path) -> str | None:
@@ -482,11 +504,14 @@ class Orchestrator:
         res = await sess.run_root(cmd, timeout=180, on_line=lambda l: job.log(f"[{name}] {l}"))
         return res.ok
 
-    async def deploy_side(self, job: Job, sess: RemoteSession, row: dict[str, Any], role: str, mode: str, peer_ip: str) -> dict[str, str]:
+    async def deploy_side(
+        self, job: Job, sess: RemoteSession, row: dict[str, Any], role: str, mode: str, peer_ip: str, extra_env: str = "",
+    ) -> dict[str, str]:
         flag = MODES[mode]["flag"]
         cmd = (
             "cd /root 2>/dev/null || cd /; "
-            f"JOJONET_ROLE={role} JOJONET_AUTO=1 TERM=dumb timeout 900 jojonet {flag} {shlex.quote(peer_ip)} </dev/null"
+            f"JOJONET_ROLE={role} JOJONET_AUTO=1 TERM=dumb{extra_env} "
+            f"timeout 900 jojonet {flag} {shlex.quote(peer_ip)} </dev/null"
         )
         res = await sess.run_root(cmd, timeout=960, on_line=lambda l: job.log(f"[{row['name']}] {l}"))
         conf = self.find_conf(await self.confs(sess), peer_ip, mode)
@@ -534,11 +559,17 @@ class Orchestrator:
                     await self._deploy_spoof(job, sess, tunnel_id, iran, kharej)
                     return
                 # A same-mode tunnel to the same peer would just be restarted with stale keys: remove it first.
+                # IPv6 tunnels share one SIT underlay per peer, so any 6to4/GRE6/IPIP6 to that peer must go first.
+                drop_modes = list(V6_MODES) if mode in V6_MODES else [mode]
                 for r, peer in ((first, second), (second, first)):
-                    old = self.find_conf(await self.confs(sess[r["id"]]), peer["host"], mode)
-                    if old:
-                        await job.log(f"[{r['name']}] تانل قبلی {old['Name']} به همین سرور حذف می‌شود")
-                        await self.delete_remote(job, sess[r["id"]], r["name"], old["Name"])
+                    confs = await self.confs(sess[r["id"]])
+                    seen: set[str] = set()
+                    for drop in drop_modes:
+                        old = self.find_conf(confs, peer["host"], drop)
+                        if old and old["Name"] not in seen:
+                            seen.add(old["Name"])
+                            await job.log(f"[{r['name']}] تانل قبلی {old['Name']} به همین سرور حذف می‌شود")
+                            await self.delete_remote(job, sess[r["id"]], r["name"], old["Name"])
                 await job.ok(2)
 
                 await job.start(3)
@@ -575,7 +606,8 @@ class Orchestrator:
                     await job.ok(3, "کلیدها پس از ساخت سمت اول همگام می‌شوند" if mode in SUBNET_KEYDIR_MODES | IP_KEYDIR_MODES else "نیاز ندارد")
 
                 await job.start(4, f"{first['name']} ({first_role})")
-                c1 = await self.deploy_side(job, sess[first["id"]], first, first_role, mode, second["host"])
+                extra = xray_env(t.get("options")) if mode in XRAY_MODES else ""
+                c1 = await self.deploy_side(job, sess[first["id"]], first, first_role, mode, second["host"], extra)
                 self.db.update("tunnels", tunnel_id, {f"{first_role}_iface": c1["Name"]})
                 await job.ok(4, c1["Name"])
 
@@ -600,7 +632,7 @@ class Orchestrator:
                     await job.step(5, "skipped", "نیاز ندارد")
 
                 await job.start(6, f"{second['name']} ({second_role})")
-                c2 = await self.deploy_side(job, sess[second["id"]], second, second_role, mode, first["host"])
+                c2 = await self.deploy_side(job, sess[second["id"]], second, second_role, mode, first["host"], extra)
                 self.db.update("tunnels", tunnel_id, {f"{second_role}_iface": c2["Name"]})
                 await job.ok(6, c2["Name"])
 
@@ -880,10 +912,12 @@ class Orchestrator:
                 problems.append(f"{r['name']}: سرویس {iface} سالم نیست")
         ping_info = ""
         remote_ip = t["tun_kharej_ip"]
-        if remote_ip and valid_ipv4(remote_ip):
+        if remote_ip and (valid_ipv4(remote_ip) or valid_ipv6(remote_ip)):
             ok_ping = False
+            fam = "-6 " if ":" in remote_ip else ""
+            ping_cmd = f"ping {fam}-c 3 -W 2 -q {shlex.quote(remote_ip)}"
             for attempt in range(6):
-                res = await sessions[iran["id"]].run_root(f"ping -c 3 -W 2 -q {shlex.quote(remote_ip)}", timeout=30)
+                res = await sessions[iran["id"]].run_root(ping_cmd, timeout=30)
                 m = re.search(r"= [0-9.]+/([0-9.]+)/", res.stdout)
                 if res.ok:
                     ok_ping = True
@@ -945,10 +979,142 @@ class Orchestrator:
         # job_deploy removes same-mode tunnels to the same peer on both sides before building.
         await self.job_deploy(job, tunnel_id)
 
+    # ---------- relays / server tools ----------
+    def relay(self, relay_id: int) -> dict[str, Any]:
+        row = self.db.one("SELECT * FROM relays WHERE id=?", (relay_id,))
+        if row is None:
+            raise StepFailed("رله پیدا نشد")
+        return row
+
+    async def job_relay_add(self, job: Job, relay_id: int) -> None:
+        row = self.relay(relay_id)
+        srv = self.server(row["server_id"])
+        if srv["role"] != "iran":
+            raise StepFailed("رله فقط روی سرور ایران ساخته می‌شود")
+        engine, target, ports, proto, name = row["engine"], row["target"], row["ports"], row["proto"], row["name"]
+        if engine not in RELAY_ENGINES or not valid_relay_name(name):
+            raise StepFailed("تنظیمات رله نامعتبر است")
+        self.db.update("relays", relay_id, {"status": "deploying", "last_job_id": job.id})
+        async with self._lock(srv["id"]):
+            await job.start(0)
+            async with await self.open(job, srv) as sess:
+                await job.ok(0)
+                await job.start(1)
+                await self.ensure_ready(job, sess, srv)
+                await job.ok(1)
+                await job.start(2)
+                cmd = (
+                    "cd /root 2>/dev/null || cd /; "
+                    f"TERM=dumb timeout 300 jojonet --relay {shlex.quote(engine)} {shlex.quote(target)} "
+                    f"{shlex.quote(ports)} {shlex.quote(proto)} {shlex.quote(name)} </dev/null"
+                )
+                res = await sess.run_root(cmd, timeout=360, on_line=lambda l: job.log(f"[{srv['name']}] {l}"))
+                if not res.ok:
+                    self.db.update("relays", relay_id, {"status": "failed"})
+                    raise StepFailed(f"ساخت رله روی {srv['name']} ناموفق بود (کد {res.rc})")
+                self.db.update("relays", relay_id, {"status": "ok", "last_check": {"ok": True, "at": utcnow(), "info": f"{engine} {ports} → {target}"}})
+                await job.ok(2, name)
+
+    async def job_relay_delete(self, job: Job, relay_id: int, force: bool) -> None:
+        row = self.relay(relay_id)
+        self.db.update("relays", relay_id, {"status": "deleting", "last_job_id": job.id})
+        await job.start(0)
+        srv = self.db.one("SELECT * FROM servers WHERE id=?", (row["server_id"],))
+        failed = False
+        if srv is None or not valid_relay_name(row["name"]):
+            await job.step(0, "skipped", "چیزی برای حذف نیست")
+        else:
+            try:
+                async with self._lock(srv["id"]):
+                    async with await self.open(job, srv) as sess:
+                        res = await sess.run_root(
+                            f"jojonet --relay-remove {shlex.quote(row['name'])} </dev/null",
+                            timeout=120, on_line=lambda l: job.log(f"[{srv['name']}] {l}"),
+                        )
+                        if res.ok:
+                            await job.ok(0, row["name"])
+                        else:
+                            failed = True
+                            await job.step(0, "failed", "حذف ناقص")
+            except Exception as exc:
+                failed = True
+                await job.log(str(exc))
+                await job.step(0, "failed", str(exc)[:200])
+        await job.start(1)
+        if failed and not force:
+            self.db.update("relays", relay_id, {"status": "failed"})
+            raise StepFailed("حذف رله از سرور کامل نشد؛ برای حذف از پنل گزینه «حذف اجباری» را بزنید")
+        self.db.execute("DELETE FROM relays WHERE id=?", (relay_id,))
+        await job.ok(1, "از پنل حذف شد" + (" (اجباری)" if failed else ""))
+
+    async def job_relay_stats(self, job: Job, relay_id: int) -> None:
+        row = self.relay(relay_id)
+        srv = self.server(row["server_id"])
+        await job.start(0)
+        async with await self.open(job, srv) as sess:
+            await job.ok(0)
+            await job.start(1)
+            res = await sess.run_root(
+                f"jojonet --relay-stats {shlex.quote(row['name'])} </dev/null",
+                timeout=60, on_line=lambda l: job.log(f"[{srv['name']}] {l}"),
+            )
+            if not res.ok:
+                raise StepFailed(f"خواندن آمار رله ناموفق بود (کد {res.rc})")
+            info = (res.stdout or "").strip().splitlines()
+            summary = info[-1][:200] if info else "آمار رله"
+            self.db.update("relays", relay_id, {"last_check": {"ok": True, "at": utcnow(), "info": summary}})
+            await job.ok(1, summary)
+
+    async def job_server_dns(self, job: Job, server_id: int, dns1: str, dns2: str) -> None:
+        row = self.server(server_id)
+        extra = f" {shlex.quote(dns2)}" if dns2 else ""
+        async with self._lock(server_id):
+            await job.start(0)
+            async with await self.open(job, row) as sess:
+                await job.ok(0)
+                await job.start(1)
+                await self.ensure_ready(job, sess, row)
+                await job.ok(1)
+                await job.start(2)
+                res = await sess.run_root(
+                    f"jojonet --dns {shlex.quote(dns1)}{extra} </dev/null",
+                    timeout=60, on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+                )
+                if not res.ok:
+                    raise StepFailed(f"تنظیم DNS روی {row['name']} ناموفق بود (کد {res.rc})")
+                await job.ok(2, f"{dns1}{(' ' + dns2) if dns2 else ''}")
+
+    async def job_server_ping(self, job: Job, server_id: int) -> None:
+        row = self.server(server_id)
+        await job.start(0)
+        async with await self.open(job, row) as sess:
+            await job.ok(0)
+            await job.start(1)
+            res = await sess.run_root(
+                "jojonet --ping-test </dev/null", timeout=60, on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+            )
+            if not res.ok:
+                raise StepFailed(f"تست پینگ روی {row['name']} ناموفق بود (کد {res.rc})")
+            await job.ok(1, "تست پینگ انجام شد")
+
+    async def job_server_update(self, job: Job, server_id: int) -> None:
+        row = self.server(server_id)
+        async with self._lock(server_id):
+            await job.start(0)
+            async with await self.open(job, row) as sess:
+                await job.ok(0)
+                await job.start(1)
+                res = await sess.run_root(
+                    "jojonet --update-server </dev/null", timeout=1800, on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+                )
+                if not res.ok:
+                    raise StepFailed(f"آپدیت سیستم روی {row['name']} ناموفق بود (کد {res.rc})")
+                await job.ok(1, "بسته‌های سیستم به‌روز شد")
+
 
 def _ip_only(value: str) -> str | None:
     ip = (value or "").split("/", 1)[0].strip()
-    return ip if valid_ipv4(ip) else None
+    return ip if valid_ipv4(ip) or valid_ipv6(ip) else None
 
 
 DEPLOY_STEPS = [
@@ -966,3 +1132,9 @@ SPOOF_CHECK_STEPS = ["اتصال SSH به هر دو سرور", "آماده‌س�
 DELETE_STEPS = ["حذف از سرور ایران", "حذف از سرور خارج", "حذف از پنل"]
 TEST_STEPS = ["اتصال SSH", "اطلاعات سیستم"]
 INSTALL_STEPS = ["اتصال SSH", "نصب پیش‌نیازها", "نصب اسکریپت jojonet"]
+RELAY_STEPS = ["اتصال SSH", "آماده‌سازی jojonet", "ساخت رله"]
+RELAY_DELETE_STEPS = ["حذف از سرور", "حذف از پنل"]
+RELAY_STATS_STEPS = ["اتصال SSH", "خواندن آمار"]
+DNS_STEPS = ["اتصال SSH", "آماده‌سازی jojonet", "تنظیم DNS"]
+PING_TEST_STEPS = ["اتصال SSH", "تست پینگ"]
+OS_UPDATE_STEPS = ["اتصال SSH", "آپدیت بسته‌های سیستم"]

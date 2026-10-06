@@ -48,6 +48,18 @@ def test_valid_ipv4(value, ok):
     assert valid_ipv4(value) is ok
 
 
+def test_valid_ipv6_and_xray_ports():
+    from app.validators import valid_ipv6, valid_xray_ports, valid_relay_name, valid_relay_target
+
+    assert valid_ipv6("fd6a:aaaa:bbbb::1")
+    assert not valid_ipv6("::1") and not valid_ipv6("::") and not valid_ipv6("ff02::1")
+    assert valid_xray_ports("443") and valid_xray_ports("8443:443,2053")
+    assert not valid_xray_ports("0") and not valid_xray_ports("8443:443,8443:80") and not valid_xray_ports("1:2:3")
+    assert valid_relay_name("web") and not valid_relay_name("Web") and not valid_relay_name("-bad")
+    assert valid_relay_target("1.2.3.4") and valid_relay_target("example.com")
+    assert not valid_relay_target("example.com", ipv4_only=True) and not valid_relay_target("no_dot")
+
+
 def test_keydir_rules():
     assert valid_keydir("/etc/jojonet/keys/pair_1_2_3_4")
     assert valid_keydir("/etc/jojonet/keys/pair_12")
@@ -80,7 +92,7 @@ def test_parse_and_split_confs():
 
 
 def test_bundle_version_and_tar():
-    assert orch.bundle_version(REPO) == "1.5.9"
+    assert orch.bundle_version(REPO) == "1.6.0"
     data = orch.build_bundle_tar(REPO)
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         names = tar.getnames()

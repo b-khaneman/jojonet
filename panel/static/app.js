@@ -6,7 +6,7 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['servers', 'tunnels', 'jobs'];
+  const TABS = ['servers', 'tunnels', 'relays', 'jobs'];
 
   const ROLE_LABEL = { iran: 'ایران', kharej: 'خارج' };
   const JOB_STATUS = {
@@ -22,6 +22,17 @@
     failed: ['err', 'ناموفق'],
     deleting: ['info', 'در حال حذف'],
   };
+  const RELAY_STATUS = TUNNEL_STATUS;
+  const RELAY_ENGINE = {
+    iptables: 'iptables',
+    gost: 'GOST',
+    haproxy: 'HAProxy',
+    socat: 'Socat',
+    xray: 'Xray dokodemo',
+  };
+  const PORTS_SPEC_RE = /^[0-9]{1,5}(:[0-9]{1,5})?(,[0-9]{1,5}(:[0-9]{1,5})?){0,15}$/;
+  const RELAY_NAME_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+  const DOMAIN_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
   const STEP_STATUS = {
     pending: ['○', 'در انتظار'],
     running: ['◌', 'در حال اجرا'],
@@ -411,14 +422,16 @@
     else toast(`کار ${name} ناموفق بود. جزئیات را در بخش کارها ببینید.`, 'error');
     load('servers', true);
     load('tunnels', true);
+    load('relays', true);
     load('jobs', true);
   }
 
   /* ---------- list loaders ---------- */
 
   const lists = {
-    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: updateTunnelForm },
+    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateRelayForm(); } },
     tunnels: { path: '/api/tunnels', el: '#tunnels-list', render: renderTunnels },
+    relays: { path: '/api/relays', el: '#relays-list', render: renderRelays, after: updateRelayForm },
     jobs: { path: '/api/jobs?limit=50', el: '#jobs-list', render: renderJobs, after: checkSessionJobs },
   };
 
@@ -482,8 +495,12 @@
     state.pollTimer = setInterval(() => {
       if (!state.loggedIn || document.hidden) return;
       load('jobs', true);
-      const transient = lists.tunnels.data.some((t) => t.status === 'deploying' || t.status === 'deleting');
-      if (transient) load('tunnels', true);
+      const transient = lists.tunnels.data.some((t) => t.status === 'deploying' || t.status === 'deleting')
+        || (lists.relays.data || []).some((t) => t.status === 'deploying' || t.status === 'deleting');
+      if (transient) {
+        load('tunnels', true);
+        load('relays', true);
+      }
     }, POLL_MS);
   }
 
@@ -545,7 +562,26 @@
       });
     });
 
-    const editBtn = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => openServerForm(s) }, 'ویرایش');
+    const pingBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'تست پینگ');
+    pingBtn.addEventListener('click', () => act(pingBtn, async () => {
+      startedJob(await api('POST', `/api/servers/${enc(s.id)}/ping-test`), 'تست پینگ آغاز شد.');
+    }));
+
+    const dnsBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'تنظیم DNS');
+    dnsBtn.addEventListener('click', () => openDnsForm(s));
+
+    const updBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'آپدیت سیستم');
+    updBtn.addEventListener('click', async () => {
+      const ok = await confirmDialog({
+        title: 'آپدیت بسته‌های سیستم',
+        message: `بسته‌های سیستم روی سرور «${s.name}» به‌روز شوند؟ این کار ممکن است چند دقیقه طول بکشد.`,
+        okText: 'شروع آپدیت',
+      });
+      if (!ok) return;
+      act(updBtn, async () => {
+        startedJob(await api('POST', `/api/servers/${enc(s.id)}/update-os`), 'آپدیت سیستم آغاز شد.');
+      });
+    });
 
     const delBtn = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'حذف');
     delBtn.addEventListener('click', async () => {
@@ -577,7 +613,36 @@
         kv('اثر انگشت میزبان', s.hostkey_fingerprint ? h('code', { class: 'fp', dir: 'ltr' }, s.hostkey_fingerprint) : 'هنوز ثبت نشده'),
         kv('آخرین بررسی', lc ? fmtTime(lc.at) : '—')),
       lc && lc.info ? h('p', { class: `check-info${lc.ok ? '' : ' is-err'}` }, infoText(lc.info)) : null,
-      h('div', { class: 'card-actions' }, testBtn, installBtn, editBtn, delBtn));
+      h('div', { class: 'card-actions' }, testBtn, installBtn, pingBtn, dnsBtn, updBtn, editBtn, delBtn));
+  }
+
+  function openDnsForm(s) {
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const d1 = h('input', { id: uid('f'), type: 'text', dir: 'ltr', required: true, value: '1.1.1.1' });
+    const d2 = h('input', { id: uid('f'), type: 'text', dir: 'ltr', value: '1.0.0.1' });
+    const form = h('form', { class: 'form', novalidate: true },
+      errBox,
+      field('DNS اول', d1),
+      field('DNS دوم (اختیاری)', d2));
+    form.id = uid('dns');
+    const saveBtn = h('button', { type: 'submit', class: 'btn btn-primary', form: form.id }, 'اعمال');
+    const m = openModal({
+      title: `تنظیم DNS روی «${s.name}»`,
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const dns1 = d1.value.trim();
+      const dns2 = d2.value.trim();
+      if (!IPV4_RE.test(dns1)) return showErr(errBox, 'DNS اول باید IPv4 معتبر باشد.');
+      if (dns2 && !IPV4_RE.test(dns2)) return showErr(errBox, 'DNS دوم باید IPv4 معتبر باشد.');
+      act(saveBtn, async () => {
+        startedJob(await api('POST', `/api/servers/${enc(s.id)}/dns`, { dns1, dns2: dns2 || null }), 'تنظیم DNS آغاز شد.');
+        m.close();
+      });
+    });
   }
 
   function field(label, input, hint, extraClass) {
@@ -751,6 +816,7 @@
     const desc = $('#tf-mode-desc');
     const m = modeInfo($('#tf-mode').value);
     $('#tf-spoof').hidden = $('#tf-mode').value !== 'spoof';
+    $('#tf-xray').hidden = $('#tf-mode').value !== 'dokodemo' && $('#tf-mode').value !== 'xray_reverse';
     if (!m) {
       desc.textContent = 'یک نوع تانل انتخاب کنید تا توضیحات آن نمایش داده شود.';
       return;
@@ -820,6 +886,24 @@
     };
   }
 
+  function readXrayForm() {
+    const net = $('#tf-xr-net').value;
+    if (!['tcp', 'ws', 'grpc'].includes(net)) return 'انتقال Xray باید tcp، ws یا grpc باشد.';
+    const ctrlRaw = $('#tf-xr-ctrl').value.trim();
+    let ctrl_port = null;
+    if (ctrlRaw) {
+      const n = Number(ctrlRaw);
+      if (!/^\d{1,5}$/.test(ctrlRaw) || n < 1 || n > 65535) return 'پورت کنترل باید بین ۱ تا ۶۵۵۳۵ باشد.';
+      ctrl_port = n;
+    }
+    const ports = $('#tf-xr-ports').value.replace(/\s+/g, '');
+    if (!ports) return 'حداقل یک پورت فوروارد لازم است.';
+    if (!PORTS_SPEC_RE.test(ports)) {
+      return 'پورت‌ها باید به شکل 443 یا 8443:443 باشند.';
+    }
+    return { net, ctrl_port, ports };
+  }
+
   async function onSpoofCheck(e) {
     const errBox = $('#tf-error');
     hideErr(errBox);
@@ -853,6 +937,11 @@
       const spoof = readSpoofForm();
       if (typeof spoof === 'string') return showErr(errBox, spoof);
       payload.spoof = spoof;
+    }
+    if (mode === 'dokodemo' || mode === 'xray_reverse') {
+      const xray = readXrayForm();
+      if (typeof xray === 'string') return showErr(errBox, xray);
+      payload.xray = xray;
     }
     if (btn.disabled) return undefined;
     btn.disabled = true;
@@ -888,6 +977,7 @@
     const lc = t.last_check;
     const mi = modeInfo(t.mode);
     const sp = t.mode === 'spoof' && t.options && typeof t.options === 'object' ? t.options : null;
+    const xr = (t.mode === 'dokodemo' || t.mode === 'xray_reverse') && t.options && typeof t.options === 'object' ? t.options : null;
 
     const verifyBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: transient }, 'بررسی');
     verifyBtn.addEventListener('click', () => act(verifyBtn, async () => {
@@ -940,7 +1030,11 @@
         h('span', { class: 'route-link', 'aria-hidden': 'true' }),
         h('span', { class: 'route-end role-kharej' }, h('small', null, 'خارج'), t.kharej_name || '—')),
       h('dl', { class: 'kv' },
-        ...(sp ? [
+        ...(xr ? [
+          kv('انتقال Xray', ltr(xr.net || 'tcp')),
+          kv('پورت کنترل', xr.ctrl_port ? ltr(xr.ctrl_port) : 'خودکار'),
+          kv('پورت‌های Xray', ltr(xr.ports || '')),
+        ] : sp ? [
           kv('IP جعلی ایران / خارج', ltr(`${sp.iran_spoof_ip || '—'} / ${sp.kharej_spoof_ip || '—'}`)),
           kv('پروتکل رفت / برگشت', ltr(`${sp.up_transport || '—'}:${sp.up_port || '—'} / ${sp.down_transport || '—'}:${sp.down_port || '—'}`)),
         ] : [
@@ -953,6 +1047,136 @@
         kv('زمان ساخت', fmtTime(t.created_at))),
       lc && lc.info ? h('p', { class: `check-info${lc.ok ? '' : ' is-err'}` }, infoText(lc.info)) : null,
       h('div', { class: 'card-actions' }, verifyBtn, redeployBtn, logBtn, delBtn));
+  }
+
+  /* ---------- relays ---------- */
+
+  function validRelayTarget(value, ipv4Only) {
+    const v = (value || '').trim();
+    if (IPV4_RE.test(v)) return true;
+    if (ipv4Only) return false;
+    return DOMAIN_RE.test(v) && v.includes('.') && !/^[0-9.]+$/.test(v);
+  }
+
+  function updateRelayEngine() {
+    const engine = $('#rf-engine').value;
+    const proto = $('#rf-proto');
+    const isHa = engine === 'haproxy';
+    for (const opt of proto.options) {
+      if (opt.value === 'udp' || opt.value === 'both') opt.disabled = isHa;
+    }
+    if (isHa) proto.value = 'tcp';
+  }
+
+  function updateRelayForm() {
+    const iranSel = $('#rf-iran');
+    if (!iranSel) return;
+    const servers = lists.servers.data;
+    const iran = servers.filter((s) => s.role === 'iran').map((s) => ({ value: s.id, label: `${s.name} (${s.host})` }));
+    const loaded = lists.servers.loaded;
+    fillSelect(iranSel, iran, !loaded ? 'در حال بارگذاری…' : iran.length ? 'انتخاب سرور ایران…' : 'سرور ایرانی ثبت نشده است');
+    iranSel.disabled = !iran.length;
+    $('#rf-submit').disabled = !iran.length;
+    updateRelayEngine();
+  }
+
+  async function onCreateRelay(e) {
+    e.preventDefault();
+    const errBox = $('#rf-error');
+    const btn = $('#rf-submit');
+    hideErr(errBox);
+    const engine = $('#rf-engine').value;
+    const findSrv = (v) => lists.servers.data.find((s) => String(s.id) === v);
+    const iran = findSrv($('#rf-iran').value);
+    const target = $('#rf-target').value.trim();
+    const ports = $('#rf-ports').value.replace(/\s+/g, '');
+    const proto = $('#rf-proto').value;
+    const nameRaw = $('#rf-name').value.trim().toLowerCase();
+    if (!['iptables', 'gost', 'haproxy', 'socat', 'xray'].includes(engine)) return showErr(errBox, 'موتور رله را انتخاب کنید.');
+    if (!iran) return showErr(errBox, 'سرور ایران را انتخاب کنید.');
+    if (!validRelayTarget(target, engine === 'iptables')) {
+      return showErr(errBox, engine === 'iptables' ? 'مقصد رله باید IPv4 معتبر باشد.' : 'مقصد رله باید IPv4 یا دامنه معتبر باشد.');
+    }
+    if (!ports || !PORTS_SPEC_RE.test(ports)) return showErr(errBox, 'پورت‌ها باید به شکل 443 یا 2096:443 باشند.');
+    if (engine === 'haproxy' && proto !== 'tcp') return showErr(errBox, 'رله HAProxy فقط TCP است.');
+    if (nameRaw && !RELAY_NAME_RE.test(nameRaw)) return showErr(errBox, 'نام رله: حروف کوچک انگلیسی، عدد و خط تیره (حداکثر ۲۴).');
+    const payload = { engine, iran_id: iran.id, target, ports, proto };
+    if (nameRaw) payload.name = nameRaw;
+    if (btn.disabled) return undefined;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'در حال ارسال…';
+    try {
+      const r = await api('POST', '/api/relays', payload);
+      startedJob(r, 'ساخت رله آغاز شد.');
+      load('relays');
+      $('#rf-name').value = '';
+    } catch (err) {
+      if (err.status !== 401) showErr(errBox, err.message);
+    } finally {
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'ساخت رله';
+      updateRelayForm();
+    }
+    return undefined;
+  }
+
+  function renderRelays() {
+    const box = $(lists.relays.el);
+    const data = lists.relays.data;
+    if (!data.length) {
+      box.replaceChildren(emptyState('هنوز رله‌ای ساخته نشده است.', 'از فرم «ساخت رله» در بالا اولین رله را روی سرور ایران بسازید.'));
+      return;
+    }
+    box.replaceChildren(h('div', { class: 'cards' }, data.map(relayCard)));
+  }
+
+  function relayCard(r) {
+    const [kind, label] = RELAY_STATUS[r.status] || ['muted', r.status || 'نامشخص'];
+    const transient = r.status === 'deploying' || r.status === 'deleting';
+    const lc = r.last_check;
+
+    const statsBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: transient }, 'آمار');
+    statsBtn.addEventListener('click', () => act(statsBtn, async () => {
+      startedJob(await api('POST', `/api/relays/${enc(r.id)}/stats`));
+      load('relays', true);
+    }));
+
+    const logBtn = r.last_job_id != null
+      ? h('button', { type: 'button', class: 'btn btn-sm btn-ghost', onclick: () => openJobView(r.last_job_id) }, 'آخرین کار')
+      : null;
+
+    const delBtn = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'حذف');
+    delBtn.addEventListener('click', async () => {
+      const res = await confirmDialog({
+        title: 'حذف رله',
+        message: `رله «${r.name}» از روی سرور «${r.server_name || '—'}» و از پنل حذف شود؟`,
+        okText: 'حذف رله',
+        danger: true,
+        checkboxLabel: 'حذف اجباری از پنل حتی اگر سرور در دسترس نباشد',
+      });
+      if (!res) return;
+      act(delBtn, async () => {
+        startedJob(await api('DELETE', `/api/relays/${enc(r.id)}`, { force: !!res.checked }), 'حذف رله آغاز شد.');
+        load('relays', true);
+      });
+    });
+
+    return h('article', { class: 'card tunnel-card' },
+      h('div', { class: 'card-head' },
+        h('div', null,
+          h('h4', { class: 'card-title' }, r.name || 'رله'),
+          h('span', { class: 'mode-chip', dir: 'ltr' }, RELAY_ENGINE[r.engine] || r.engine)),
+        badge(kind, label, transient)),
+      h('dl', { class: 'kv' },
+        kv('سرور ایران', r.server_name || '—'),
+        kv('مقصد', ltr(r.target)),
+        kv('پورت‌ها', ltr(r.ports)),
+        kv('پروتکل', ltr(r.proto || 'both')),
+        kv('آخرین بررسی', lc ? fmtTime(lc.at) : '—'),
+        kv('زمان ساخت', fmtTime(r.created_at))),
+      lc && lc.info ? h('p', { class: `check-info${lc.ok ? '' : ' is-err'}` }, infoText(lc.info)) : null,
+      h('div', { class: 'card-actions' }, statsBtn, logBtn, delBtn));
   }
 
   /* ---------- jobs ---------- */
@@ -1311,6 +1535,7 @@
     loadInfo();
     load('servers');
     load('tunnels');
+    load('relays');
     load('jobs');
     startPolling();
   }
@@ -1361,6 +1586,7 @@
     if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
     if (focus) $(`#tabbtn-${name}`).focus();
     if (state.loggedIn && name === 'jobs') load('jobs', true);
+    if (state.loggedIn && name === 'relays') load('relays', true);
   }
 
   function bindStatic() {
@@ -1370,8 +1596,11 @@
     $('#btn-add-server').addEventListener('click', () => openServerForm(null));
     $('#btn-refresh-servers').addEventListener('click', (e) => act(e.currentTarget, () => load('servers'), 'در حال بروزرسانی…'));
     $('#btn-refresh-tunnels').addEventListener('click', (e) => act(e.currentTarget, () => Promise.all([load('tunnels'), load('servers')]), 'در حال بروزرسانی…'));
+    $('#btn-refresh-relays').addEventListener('click', (e) => act(e.currentTarget, () => Promise.all([load('relays'), load('servers')]), 'در حال بروزرسانی…'));
     $('#btn-refresh-jobs').addEventListener('click', (e) => act(e.currentTarget, () => load('jobs'), 'در حال بروزرسانی…'));
     $('#tunnel-form').addEventListener('submit', onCreateTunnel);
+    $('#relay-form').addEventListener('submit', onCreateRelay);
+    $('#rf-engine').addEventListener('change', updateRelayEngine);
     $('#tf-sp-check').addEventListener('click', onSpoofCheck);
     $('#tf-mode').addEventListener('change', updateModeDesc);
 

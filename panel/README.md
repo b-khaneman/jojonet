@@ -6,7 +6,11 @@
 
 - افزودن سرورهای ایران و خارج (آدرس، پورت SSH، رمز یا کلید خصوصی)
 - اتصال SSH به سرورها، نصب پیش‌نیازها و نصب/به‌روزرسانی اسکریپت `jojonet`
-- ساخت تانل با همه حالت‌ها: `gre`، `tun_tcp`، `paqet`، `vxlan`، `wireguard`، `wg_icmp`، `wg_faketcp`، `hysteria2`، `rathole`، `wstunnel`، `spoof`
+- ساخت تانل با همه حالت‌ها: `gre`، `tun_tcp`، `paqet`، `vxlan`، `wireguard`، `wg_icmp`، `wg_faketcp`، `hysteria2`، `rathole`، `wstunnel`، `dokodemo`، `xray_reverse`، `sit`، `gre6`، `ipip6`، `spoof`
+- **Xray**: Dokodemo-door (ایران به خارج) و Reverse (خارج به ایران؛ مناسب ایران‌اکسس). انتقال tcp/ws/grpc و پورت‌های فوروارد از فرم پنل.
+- **IPv6**: 6to4 / GRE6 / IPIP6 — بین هر جفت ایران/خارج فقط یک تانل v6.
+- **رله تک‌سرور** روی ایران: iptables / GOST / HAProxy / Socat / Xray؛ مقصد می‌تواند سروری باشد که JojoNet ندارد.
+- ابزار سرور: تنظیم DNS، تست پینگ، به‌روزرسانی سیستم‌عامل از کارت هر سرور.
 - WireGuard داخل ICMP (`wg_icmp`) یا FakeTCP (`wg_faketcp`): برای وقتی که UDP فیلتر است؛ روی سیم فقط پینگ یا TCP دیده می‌شود.
 - تانل Spoof: IP جعلی هر دو طرف را وارد کنید. پنل اول با spoof tester در هر دو جهت چک می‌کند که دیتاسنترها بسته با IP مبدأ جعلی را رد می‌کنند یا نه؛ اگر چک رد شود تانل ساخته نمی‌شود. دکمه «بررسی آمادگی Spoof» همین تست را بدون ساخت تانل اجرا می‌کند و گزینه «ساخت بدون بررسی آمادگی» از آن صرف‌نظر می‌کند. بعد از چک، سمت خارج (remote) و ایران (local) با تنظیمات آینه‌ای ساخته می‌شوند و یک تست UDP سرتاسری در هر دو جهت گرفته می‌شود. هر سرور فقط یک تانل Spoof دارد.
 - بررسی سلامت تانل بعد از ساخت (health check و ping بین دو سر تانل)
@@ -29,7 +33,7 @@
 </div>
 
 ```bash
-unzip JojoNet-v1.5.9-full.zip -d jojonet && cd jojonet && sudo bash setup.sh panel
+unzip JojoNet-v1.6.0-full.zip -d jojonet && cd jojonet && sudo bash setup.sh panel
 ```
 
 <div dir="rtl">

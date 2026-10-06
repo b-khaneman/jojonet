@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: MIT
 # =========================================================
 
-readonly JOJONET_VERSION="1.5.9"
+readonly JOJONET_VERSION="1.6.0"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -107,6 +107,28 @@ DEFAULT_WSTUNNEL_FWD="443"
 WSTUNNEL_CONFIG_DIR="$JOJONET_ROOT/wstunnel"
 WSTUNNEL_BIN="/usr/local/bin/wstunnel"
 WSTUNNEL_VERSION="${JOJONET_WSTUNNEL_VERSION:-v10.1.9}"
+XRAY_VERSION="${JOJONET_XRAY_VERSION:-v25.3.6}"
+XRAY_BIN="/usr/local/bin/xray"
+XRAY_CONFIG_DIR="$JOJONET_ROOT/xray"
+XRAY_RUNNER="/usr/local/bin/jojonet-run-xray.sh"
+XRAY_SERVICE="/etc/systemd/system/jojonet-xray@.service"
+DEFAULT_XRAY_DOKO_CTRL_PORT=4443
+DEFAULT_XRAY_REVERSE_CTRL_PORT=4444
+DEFAULT_XRAY_FWD="443"
+DEFAULT_XRAY_NET="tcp"
+V6_RUNNER="/usr/local/bin/jojonet-run-v6.sh"
+V6_SERVICE="/etc/systemd/system/jojonet-v6@.service"
+GRE6_NET_PREFIX="172.22"
+IPIP6_NET_PREFIX="172.23"
+DEFAULT_SIT_MTU=1480
+DEFAULT_V6_OVERLAY_MTU=1420
+RELAY_DIR="$JOJONET_ROOT/relays"
+RELAY_RUNNER="/usr/local/bin/jojonet-run-relay.sh"
+RELAY_SERVICE="/etc/systemd/system/jojonet-relay@.service"
+RELAY_NAT_SERVICE="/etc/systemd/system/jojonet-relay-nat@.service"
+DEFAULT_RELAY_API_PORT=10085
+GOST_VERSION="${JOJONET_GOST_VERSION:-v3.0.0}"
+GOST_BIN="/usr/local/bin/gost"
 SPOOF_VERSION="${JOJONET_SPOOF_VERSION:-v3.1.0-beta.0}"
 SPOOF_REPO="ParsaKSH/spoof-tunnel"
 SPOOF_BIN="/usr/local/bin/spoof"
@@ -493,7 +515,7 @@ resolve_server_role() {
 }
 
 # Key files that must be identical on both sides of a pair. WireGuard private keys are per-side and never shared.
-JOJONET_SHARED_KEY_FILES=(private_key.pem public_key.pem paqet.secret hy2.auth rathole.token wstunnel.token udp2raw.key)
+JOJONET_SHARED_KEY_FILES=(private_key.pem public_key.pem paqet.secret hy2.auth rathole.token wstunnel.token udp2raw.key xray.uuid)
 readonly JOJONET_SSH_OPTS=(-o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes)
 
 pair_keydir_for() {
@@ -733,6 +755,64 @@ healthcheck_tunnel() {
             [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
             [[ -n "${WstunnelCmd:-}" ]] && echo -e "  cmd:     ${WstunnelCmd}"
             ;;
+        dokodemo|xray_reverse)
+            if xray_process_running "$name"; then
+                echo -e "  process: ${GREEN}running${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  process: ${RED}not running${NC}"
+                fatal=1
+            fi
+            echo -e "  role:    ${Role:-?}  transport: VLESS/${XrayNet:-tcp}"
+            if xray_ctrl_listener "${TunnelMode}" "${Role:-}"; then
+                if tcp_port_listening "${TcpPort:-0}"; then
+                    echo -e "  control: ${GREEN}listening TCP ${TcpPort}${NC}"
+                else
+                    echo -e "  control: ${RED}TCP ${TcpPort:-?} not listening${NC}"
+                    fatal=1
+                fi
+            else
+                echo -e "  control: dials ${Remote_IP:-?}:${TcpPort:-?}"
+            fi
+            [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
+            [[ -n "${XrayJson:-}" ]] && echo -e "  config:  ${XrayJson}"
+            ;;
+        sit|gre6|ipip6)
+            if ip link show "${V6Iface:-$name}" >/dev/null 2>&1; then
+                echo -e "  sit:     ${GREEN}present${NC} (${V6Iface:-$name})"
+                ok=$((ok + 1))
+            else
+                echo -e "  sit:     ${RED}missing${NC}"
+                fatal=1
+            fi
+            if [[ "${TunnelMode}" != "sit" ]]; then
+                if ip link show "$name" >/dev/null 2>&1; then
+                    echo -e "  iface:   ${GREEN}present${NC}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  iface:   ${RED}missing${NC}"
+                    fatal=1
+                fi
+            fi
+            if [[ -n "${V6Remote:-}" ]]; then
+                if ping -6 -c1 -W2 "$V6Remote" >/dev/null 2>&1; then
+                    echo -e "  ping6 ${V6Remote}: ${GREEN}ok${NC}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  ping6 ${V6Remote}: ${YELLOW}fail${NC}"
+                fi
+            fi
+            local _v4peer="${Tun_Remote_IP_Raw:-}"
+            [[ -z "$_v4peer" && "${Role:-}" == "kharej" ]] && _v4peer="${Tun_Client_IP:-}"
+            if [[ "${TunnelMode}" != "sit" && -n "$_v4peer" ]]; then
+                if ping -c1 -W2 "$_v4peer" >/dev/null 2>&1; then
+                    echo -e "  ping ${_v4peer}: ${GREEN}ok${NC}"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  ping ${_v4peer}: ${YELLOW}fail${NC}"
+                fi
+            fi
+            ;;
     esac
     (( fatal == 0 && ok > 0 ))
 }
@@ -742,13 +822,14 @@ healthcheck_tunnel() {
 iran_dnat_port_in_use() {
     local port="$1" f ports p
     shopt -s nullglob
-    local files=("$INSTANCES_DIR"/*.conf)
+    local files=("$INSTANCES_DIR"/*.conf "$RELAY_DIR"/*.conf)
     shopt -u nullglob
     for f in "${files[@]}"; do
         ports=$(conf_get_field "$f" "Ports")
         IFS=',' read -ra _pl <<< "${ports:-}"
         for p in "${_pl[@]}"; do
             p="${p// /}"
+            p="${p%%:*}"
             [[ "$p" == "$port" ]] && return 0
         done
     done
@@ -774,6 +855,8 @@ tunnel_net_prefix_for_mode() {
     case "${1:-gre}" in
         tun_tcp) echo "$TUN_TCP_NET_PREFIX" ;;
         vxlan) echo "$VXLAN_NET_PREFIX" ;;
+        gre6) echo "$GRE6_NET_PREFIX" ;;
+        ipip6) echo "$IPIP6_NET_PREFIX" ;;
         wireguard) wg_obfs_net_prefix "${WG_OBFS:-}" ;;
         *) echo "$TUNNEL_NET_PREFIX" ;;
     esac
@@ -858,7 +941,7 @@ preflight_tunnel_check() {
         local first="${fp%%,*}"
         first="${first// /}"
         case "$mode" in
-            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2|rathole|wstunnel|ws)
+            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2|rathole|wstunnel|ws|gre6|ipip6)
                 if [[ -n "$first" ]] && iran_dnat_port_in_use "$first"; then
                     echo -e "  ${YELLOW}[!] Forward port $first already used — will auto-pick alternate${NC}"
                     warns=$((warns + 1))
@@ -916,6 +999,13 @@ show_pairing_card() {
             if [[ "$mode" == "rathole" ]]; then
                 echo -e "  ${CYAN}Note:${NC}        Iran=SERVER, Kharej=CLIENT (reverse TCP)"
             fi
+            ;;
+        dokodemo|xray_reverse)
+            echo -e "  ${CYAN}UUID:${NC}         synced from IP pair (xray.uuid)"
+            echo -e "  ${CYAN}Peer MUST use:${NC} same control port + transport (VLESS/${XRAY_NET:-$DEFAULT_XRAY_NET})"
+            ;;
+        sit)
+            echo -e "  ${CYAN}IPv6:${NC}         private fd6a:… /64 derived from the IP pair"
             ;;
         *)
             if [[ "$mode" == "tun_tcp" ]]; then
@@ -1175,6 +1265,16 @@ JOJONET — Changelog / تغییرات نسخه‌ها
 Repo: ${JOJONET_REPO}
 
 ────────────────────────────────────────
+## 1.6.0
+- تانل جدید: Xray Dokodemo-door (ایران به خارج وصل می‌شود، VLESS روی tcp/ws/grpc) — sudo jojonet --dokodemo <PEER_IP>
+- تانل جدید: Xray Reverse (portal/bridge — خارج به ایران وصل می‌شود؛ برای سرورهای ایران‌اکسس) — sudo jojonet --xray-reverse <PEER_IP>
+  UUID مشترک (xray.uuid)، دانلود Xray با بررسی SHA-256، تست کانفیگ با xray run -test، پورت LISTEN:TARGET
+- تانل‌های IPv6: 6to4 (SIT با IPv6 خصوصی fd6a:…)، GRE6 و IPIP6 روی 6to4 با DNAT پورت‌ها — --6to4 / --gre6 / --ipip6
+- رله تک‌سرور به سبک hiddify-relay: iptables / GOST / HAProxy / Socat / Xray (آمار ترافیک) — منو 25 / --relay
+- ابزار سرور: تنظیم DNS، تست پینگ، آپدیت سیستم — منو 26 / --dns / --ping-test / --update-server
+- Fix: تغییر IP طرف مقابل برای Wstunnel کلید جفت جدید را می‌سازد (قبلاً مسیر GRE و کلید قدیمی)
+- پنل: همه تانل‌ها و رله‌های جدید از داخل وب‌پنل
+
 ## 1.5.9
 - تانل جدید: WireGuard داخل ICMP (پکت‌های پینگ) — sudo jojonet --wg-icmp <PEER_IP>
 - تانل جدید: WireGuard داخل FakeTCP (شبیه اتصال TCP) — sudo jojonet --wg-faketcp <PEER_IP>
@@ -1309,6 +1409,17 @@ Usage:
   sudo jojonet --hy2 <PEER_IP>         Hysteria2 tunnel (high speed / hop port)
   sudo jojonet --rathole <PEER_IP>     Rathole reverse TCP (Iran=server)
   sudo jojonet --wstunnel <PEER_IP>    Wstunnel reverse WS (Iran=server) [--ws]
+  sudo jojonet --dokodemo <PEER_IP>    Xray dokodemo-door, Iran dials Kharej [--doko]
+  sudo jojonet --xray-reverse <PEER_IP> Xray reverse, Kharej dials Iran [--xr]
+  sudo jojonet --6to4 <PEER_IP>        6to4 SIT: private IPv6 between servers [--sit]
+  sudo jojonet --gre6 <PEER_IP>        GRE6 over 6to4 (IPv4 overlay + DNAT)
+  sudo jojonet --ipip6 <PEER_IP>       IPIP6 over 6to4 (IPv4 overlay + DNAT)
+  sudo jojonet --relay <ENGINE> <DEST> <PORTS> [tcp|udp|both] [NAME]
+                                       Single-server relay: iptables|gost|haproxy|socat|xray
+  sudo jojonet --relay-list | --relay-remove <NAME> | --relay-stats [NAME]
+  sudo jojonet --dns [DNS1 [DNS2]]     Set server DNS (menu when empty)
+  sudo jojonet --ping-test             Ping GitHub / Google / Cloudflare
+  sudo jojonet --update-server         apt/dnf upgrade
   sudo jojonet --spoof-tunnel [PEER]   Spoof Tunnel standalone [--spoof]
   sudo jojonet --spoof-remove          Stop and remove the Spoof Tunnel service/config
   sudo jojonet --spoof-install         Only download + verify the spoof binary (for spoof tester)
@@ -1332,10 +1443,11 @@ Usage:
   sudo jojonet --version | --help
 
 What's new in v${JOJONET_VERSION}:
-  • New: --wg-icmp / --wg-faketcp — WireGuard carried inside ICMP or fake TCP (udp2raw)
-  • Peer-scoped iptables rules only; other pings keep working
-  • Web panel: spoof readiness check (spoof tester, both directions) before building
-  • Web panel: sudo bash panel/install-panel.sh
+  • New: --dokodemo / --xray-reverse — Xray VLESS tunnels (tcp/ws/grpc), reverse for Iran-access servers
+  • New: --6to4 / --gre6 / --ipip6 — IPv6 (SIT) tunnels with IPv4 overlay + port forward
+  • New: --relay — single-server relays (iptables / GOST / HAProxy / Socat / Xray with stats)
+  • New: --dns / --ping-test / --update-server server tools
+  • Web panel: all new tunnels and relays — sudo bash panel/install-panel.sh
   Full list:  sudo jojonet --changelog
 
 Environment:
@@ -1350,6 +1462,9 @@ Environment:
   JOJONET_HY2_CERT=/path/cert.pem      Custom cert (mode=custom)
   JOJONET_HY2_KEY=/path/key.pem        Custom key (mode=custom)
   JOJONET_WG_OBFS_PORT=4200            udp2raw port for --wg-icmp/--wg-faketcp (same on both)
+  JOJONET_XRAY_NET=tcp|ws|grpc         Xray transport (same on both; default tcp)
+  JOJONET_XRAY_CTRL_PORT=4443          Xray control port (dokodemo 4443 / reverse 4444; same on both)
+  JOJONET_FWD_PORTS=443,8443:2053      Forward ports (Xray: PORT or IRAN_LISTEN:KHAREJ_TARGET)
   JOJONET_ALLOW_UNSIGNED=1
   JOJONET_QUICK_PROBE_MTU=1
   JOJONET_SPOOF_IP / JOJONET_SPOOF_PEER_IP   Spoof: this side / peer spoofed source IPv4
@@ -1375,6 +1490,14 @@ Rathole reverse:
 Wstunnel reverse (WebSocket):
   1) Iran:   sudo jojonet --wstunnel <KHAREJ_IP>
   2) Kharej: sudo jojonet --wstunnel <IRAN_IP>
+
+Xray (either order; same transport + control port on both):
+  Dokodemo: Iran → sudo jojonet --dokodemo <KHAREJ_IP> | Kharej → sudo jojonet --dokodemo <IRAN_IP>
+  Reverse:  Iran → sudo jojonet --xray-reverse <KHAREJ_IP> | Kharej → sudo jojonet --xray-reverse <IRAN_IP>
+
+Relay (only on the Iran relay server):
+  sudo jojonet --relay iptables <MAIN_SERVER_IP> 443,8443
+  sudo jojonet --relay xray <MAIN_SERVER_IP> 2096:443 tcp
 
 External transports:
   Spoof: sudo jojonet --spoof [PEER_IP]  (Iran=local, Kharej=remote)
@@ -1981,6 +2104,16 @@ generate_tunnel_name_from_peer() {
         prefix="hy"
     elif [[ "$mode" == "rathole" ]]; then
         prefix="rh"
+    elif [[ "$mode" == "dokodemo" ]]; then
+        prefix="dk"
+    elif [[ "$mode" == "xray_reverse" ]]; then
+        prefix="xr"
+    elif [[ "$mode" == "sit" ]]; then
+        prefix="s6"
+    elif [[ "$mode" == "gre6" ]]; then
+        prefix="g6"
+    elif [[ "$mode" == "ipip6" ]]; then
+        prefix="i6"
     elif [[ "$mode" == "gre" && -n "$subnet_byte" ]]; then
         prefix="gr"
         suffix="b${subnet_byte}"
@@ -2045,6 +2178,8 @@ wait_for_tunnel_up() {
             if systemctl is-active --quiet "jojonet-wstunnel@${name}.service" 2>/dev/null; then
                 return 0
             fi
+        elif xray_mode "$mode"; then
+            xray_process_running "$name" && return 0
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             return 0
         fi
@@ -2054,9 +2189,10 @@ wait_for_tunnel_up() {
 }
 
 verify_tunnel_ping() {
-    local target_ip="$1"
+    local target_ip="$1" fam=()
     [[ -n "$target_ip" ]] || return 0
-    if ping -c 2 -W 3 "$target_ip" >/dev/null 2>&1; then
+    [[ "$target_ip" == *:* ]] && fam=(-6)
+    if ping "${fam[@]}" -c 2 -W 3 "$target_ip" >/dev/null 2>&1; then
         echo -e "${GREEN}[+] Ping OK: $target_ip${NC}"
         return 0
     fi
@@ -2222,6 +2358,29 @@ repair_single_config() {
                 echo -e "${YELLOW}[*] Repaired Wstunnel cmd for [$name]${NC}"
             fi
         fi
+    elif xray_mode "${mode:-gre}"; then
+        local json tcp_port key_dir role rem fwd net
+        json=$(conf_get_field "$conf" "XrayJson")
+        if [[ -z "$json" || ! -s "$json" ]]; then
+            tcp_port=$(conf_get_field "$conf" "TcpPort")
+            key_dir=$(conf_get_field "$conf" "KeyDir")
+            role=$(conf_get_field "$conf" "Role")
+            rem=$(conf_get_field "$conf" "Remote_IP")
+            fwd=$(conf_get_field "$conf" "Ports")
+            net=$(conf_get_field "$conf" "XrayNet")
+            if [[ -n "$key_dir" && -s "$key_dir/xray.uuid" ]] && \
+                json=$(build_xray_runtime_config "$name" "$role" "$mode" "$rem" \
+                    "${tcp_port:-$(xray_default_ctrl_port "$mode")}" "$key_dir" \
+                    "${fwd:-$DEFAULT_XRAY_FWD}" "${net:-$DEFAULT_XRAY_NET}"); then
+                if grep -q '^XrayJson=' "$conf"; then
+                    sed -i "s|^XrayJson=.*|XrayJson=\"$json\"|" "$conf"
+                else
+                    echo "XrayJson=\"$json\"" >> "$conf"
+                fi
+                changed=1
+                echo -e "${YELLOW}[*] Repaired Xray config for [$name]${NC}"
+            fi
+        fi
     fi
 
     if (( changed )); then
@@ -2255,6 +2414,12 @@ refresh_runtime_templates() {
     create_rathole_service || return 1
     create_wstunnel_runner_script || return 1
     create_wstunnel_service || return 1
+    create_xray_runner_script || return 1
+    create_xray_service || return 1
+    create_v6_runner_script || return 1
+    create_v6_service || return 1
+    create_relay_runner_script || return 1
+    create_relay_service || return 1
     if [[ -x "$U2R_BIN" ]]; then
         create_u2r_runner_script || return 1
         create_u2r_service || return 1
@@ -2300,6 +2465,11 @@ tunnel_mode_label() {
         hysteria2|hy2) printf '%s' "Hysteria2" ;;
         rathole|rh)    printf '%s' "Rathole Reverse" ;;
         wstunnel|ws)   printf '%s' "Wstunnel Reverse" ;;
+        dokodemo)      printf '%s' "Xray Dokodemo-door" ;;
+        xray_reverse)  printf '%s' "Xray Reverse" ;;
+        sit)           printf '%s' "6to4 (SIT IPv6)" ;;
+        gre6)          printf '%s' "GRE6 over 6to4" ;;
+        ipip6)         printf '%s' "IPIP6 over 6to4" ;;
         *)             printf '%s' "${1:-?}" ;;
     esac
 }
@@ -2382,9 +2552,15 @@ tunnel_overlay_iran_foreign() {
 tunnel_endpoint_summary() {
     local mode="${TunnelMode:-gre}" extra="" overlay=""
     case "$mode" in
-        gre|vxlan|wireguard|tun_tcp)
+        gre|vxlan|wireguard|tun_tcp|gre6|ipip6)
             overlay=$(tunnel_overlay_iran_foreign)
             [[ -n "$overlay" ]] && extra="$overlay"
+            ;;
+        sit)
+            extra="IPv6 ${V6Local%%/*} ↔ ${V6Remote:-?}"
+            ;;
+        dokodemo|xray_reverse)
+            extra="VLESS/${XrayNet:-tcp} control TCP ${TcpPort:-?}"
             ;;
         paqet)
             extra="KCP port ${TcpPort:-?}"
@@ -2531,9 +2707,20 @@ show_tunnel_detail_card() {
             [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}" || true
             [[ -n "${RatholeToml:-}" ]] && echo -e "  ${GREEN}Config:${NC}      ${RatholeToml}" || true
             ;;
+        dokodemo|xray_reverse)
+            echo -e "  ${GREEN}Control:${NC}     TCP ${TcpPort:-?} ($(xray_ctrl_listener "$mode" "${Role:-}" && echo "listens here" || echo "dials ${Remote_IP:-?}"))"
+            echo -e "  ${GREEN}Transport:${NC}   VLESS/${XrayNet:-tcp}"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}  (Iran LISTEN:TARGET → Kharej 127.0.0.1)" || true
+            [[ -n "${XrayJson:-}" ]] && echo -e "  ${GREEN}Config:${NC}      ${XrayJson}" || true
+            ;;
+        sit|gre6|ipip6)
+            echo -e "  ${GREEN}SIT:${NC}         ${V6Iface:-$Name}  ${V6Local:-?} ↔ ${V6Remote:-?}"
+            [[ "$mode" != "sit" ]] && echo -e "  ${GREEN}Overlay:${NC}     ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)" || true
+            ;;
     esac
 
-    [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" && "$mode" != "rathole" && "$mode" != "wstunnel" ]] && \
+    [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" && "$mode" != "rathole" && "$mode" != "wstunnel" && \
+        "$mode" != "dokodemo" && "$mode" != "xray_reverse" ]] && \
         echo -e "  ${GREEN}Port forward:${NC}   ${Ports} → Kharej tunnel IP" || true
     echo -e "  ${GREEN}MTU:${NC}          ${Suggested_MTU:-default}"
     echo -e "  ${GREEN}Subnet ID:${NC}    ${Subnet_Byte:-?}"
@@ -2582,6 +2769,8 @@ resolve_tunnel_ips() {
     local net_prefix="$TUNNEL_NET_PREFIX"
     [[ "$mode" == "tun_tcp" ]] && net_prefix="$TUN_TCP_NET_PREFIX"
     [[ "$mode" == "vxlan" ]] && net_prefix="$VXLAN_NET_PREFIX"
+    [[ "$mode" == "gre6" ]] && net_prefix="$GRE6_NET_PREFIX"
+    [[ "$mode" == "ipip6" ]] && net_prefix="$IPIP6_NET_PREFIX"
     [[ "$mode" == "wireguard" ]] && net_prefix=$(wg_obfs_net_prefix "${WG_OBFS:-}")
 
     Tun_Server_IP="${net_prefix}.$subnet_byte.1"
@@ -3005,13 +3194,13 @@ deploy_tunnel() {
     local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port="" hy_yaml=""
     local wg_priv="" wg_pub="" wg_peer="" hy_sni="${DEFAULT_HY2_SNI}" hy_hop_range="" hy_hop_interval=""
     local rh_toml="" ws_cmd="" hy_tls_mode="insecure" hy_domain="" hy_acme_email="" hy_cert_path="" hy_key_path=""
-    local wg_obfs="" obfs_port=""
+    local wg_obfs="" obfs_port="" xray_json="" xray_net="" v6_iface="" v6_local="" v6_remote=""
 
     apply_global_sysctl || return 1
 
     if [[ "$role_conf" == "iran" ]]; then
         case "$tunnel_mode" in
-            gre|vxlan|tun_tcp|wireguard)
+            gre|vxlan|tun_tcp|wireguard|gre6|ipip6)
                 fwd_port=$(resolve_iran_forward_port "443" "${fwd_port:-}")
                 ;;
             paqet|hysteria2|rathole|wstunnel|ws)
@@ -3135,6 +3324,56 @@ deploy_tunnel() {
             ensure_wstunnel_firewall "$tcp_port" "$fwd_port" || true
         fi
         svc_unit="jojonet-wstunnel@${ins_name}.service"
+    elif xray_mode "$tunnel_mode"; then
+        install_xray_binary || return 1
+        create_xray_runner_script || return 1
+        create_xray_service || return 1
+        xray_net=$(printf '%s' "${XRAY_NET:-$DEFAULT_XRAY_NET}" | tr '[:upper:]' '[:lower:]')
+        valid_xray_net "$xray_net" || { log_error "Invalid Xray transport: $xray_net (tcp|ws|grpc)"; return 1; }
+        [[ -n "$tcp_port" ]] || tcp_port=$(xray_default_ctrl_port "$tunnel_mode")
+        validate_single_port "$tcp_port" || { log_error "Invalid Xray control port: $tcp_port"; return 1; }
+        tcp_port=$((10#$tcp_port))
+        [[ -n "$fwd_port" ]] || fwd_port="$DEFAULT_XRAY_FWD"
+        fwd_port=$(xray_normalize_ports "$fwd_port") || return 1
+        if xray_ctrl_listener "$tunnel_mode" "$role_conf" && tcp_port_listening "$tcp_port"; then
+            log_error "Control port $tcp_port is already in use here — pick another one on BOTH servers (JOJONET_XRAY_CTRL_PORT)."
+            return 1
+        fi
+        if [[ "$role_conf" == "iran" ]]; then
+            local _xi
+            for _xi in ${fwd_port//,/ }; do
+                [[ "${_xi%%:*}" == "$tcp_port" ]] && { log_error "Forward port ${_xi%%:*} clashes with the control port"; return 1; }
+            done
+        fi
+        xray_json=$(build_xray_runtime_config "$ins_name" "$role_conf" "$tunnel_mode" "$rem_ip" "$tcp_port" \
+            "$key_dir" "$fwd_port" "$xray_net") || return 1
+        ensure_xray_firewall "$role_conf" "$tunnel_mode" "$tcp_port" "$fwd_port" || true
+        svc_unit="jojonet-xray@${ins_name}.service"
+    elif v6_mode "$tunnel_mode"; then
+        create_v6_runner_script || return 1
+        create_v6_service || return 1
+        v6_plan "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$tunnel_mode"
+        v6_iface="$V6_IFACE"
+        v6_local="$V6_LOCAL"
+        v6_remote="$V6_REMOTE"
+        subnet_byte="$V6_SB"
+        tun_ip="$V6_TUN_IP"
+        tun_remote="$V6_TUN_REMOTE"
+        tun_server_ip="$V6_SERVER"
+        tun_client_ip="$V6_CLIENT"
+        ins_mtu="$V6_MTU"
+        tcp_port=""
+        if [[ "$tunnel_mode" == "sit" || "$role_conf" != "iran" ]]; then
+            fwd_port=""
+        elif [[ -n "$fwd_port" ]] && ! valid_port_csv "$fwd_port"; then
+            log_error "Invalid forward ports: $fwd_port"
+            return 1
+        fi
+        if ip link show "$v6_iface" >/dev/null 2>&1 && [[ ! -f "$conf_file" ]]; then
+            log_error "Interface $v6_iface already exists (another IPv6 tunnel to $rem_ip?)"
+            return 1
+        fi
+        svc_unit="jojonet-v6@${ins_name}.service"
     else
         create_template_script || return 1
         create_template_service || return 1
@@ -3189,6 +3428,11 @@ RatholeToml="$rh_toml"
 WstunnelCmd="$ws_cmd"
 WgObfs="$wg_obfs"
 ObfsPort="$obfs_port"
+V6Iface="$v6_iface"
+V6Local="$v6_local"
+V6Remote="$v6_remote"
+XrayJson="$xray_json"
+XrayNet="$xray_net"
 EOF
 
     chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; return 1; }
@@ -3249,6 +3493,8 @@ EOF
         elif [[ "$tunnel_mode" == "rathole" ]]; then
             pgrep -f "rathole.*${ins_name}\\.toml" >/dev/null 2>&1 && iface_ok=1
             [[ -f "${rh_toml:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
+        elif xray_mode "$tunnel_mode"; then
+            xray_process_running "$ins_name" && iface_ok=1
         elif ip link show "$ins_name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             iface_ok=1
         fi
@@ -3268,6 +3514,12 @@ EOF
             elif [[ "$tunnel_mode" == "wstunnel" ]]; then
                 echo -e "  Control TCP: $tcp_port  |  Forward: ${fwd_port:-?}  |  Config: ${ws_cmd:-n/a}"
                 echo -e "  Mode: Iran=server / Kharej=client (WebSocket reverse)"
+            elif xray_mode "$tunnel_mode"; then
+                echo -e "  Control TCP: $tcp_port  |  Transport: VLESS/$xray_net  |  Forward: ${fwd_port:-?}"
+                echo -e "  Config: ${xray_json:-n/a}"
+            elif v6_mode "$tunnel_mode"; then
+                echo -e "  SIT: $v6_iface  IPv6 ${v6_local} ↔ ${v6_remote}"
+                [[ -n "$tun_ip" ]] && echo -e "  Overlay: $ins_name  IP: $tun_ip${fwd_port:+  |  Forward: $fwd_port}"
             elif [[ "$tunnel_mode" == "wireguard" ]]; then
                 echo -e "  UDP port: $tcp_port  |  Interface: $ins_name  |  IP: $tun_ip"
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
@@ -3281,7 +3533,10 @@ EOF
             create_boot_restore_service || true
             systemctl enable jojonet-boot.service >/dev/null 2>&1 || true
             local ping_target=""
-            if [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "vxlan" || "$tunnel_mode" == "wireguard" ]]; then
+            if [[ "$tunnel_mode" == "sit" ]]; then
+                ping_target="$v6_remote"
+            elif [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "vxlan" || "$tunnel_mode" == "wireguard" || \
+                    "$tunnel_mode" == "gre6" || "$tunnel_mode" == "ipip6" ]]; then
                 if [[ "$role_conf" == "iran" ]]; then
                     ping_target="${tun_remote:-$tun_server_ip}"
                 else
@@ -5412,14 +5667,18 @@ install_hysteria2_binary() {
 
 # Pull a shared secret from the peer, or create it and push it. Prints the key dir.
 ensure_shared_secret() {
-    local pair_id="$1" peer_ip="$2" name="$3" label="$4"
+    local pair_id="$1" peer_ip="$2" name="$3" label="$4" gen="${5:-hex}"
     local keydir="$KEYS_ROOT/pair_${pair_id}"
     install -d -m700 "$keydir"
     if [[ ! -s "$keydir/$name" && -n "$peer_ip" ]]; then
         peer_pull_key "$peer_ip" "$name" "$keydir/$name" || true
     fi
     if [[ ! -s "$keydir/$name" ]]; then
-        (umask 077 && openssl rand -hex 24 > "$keydir/$name")
+        if [[ "$gen" == "uuid" ]]; then
+            (umask 077 && gen_uuid > "$keydir/$name") || return 1
+        else
+            (umask 077 && openssl rand -hex 24 > "$keydir/$name")
+        fi
         chmod 600 "$keydir/$name"
         if [[ -n "$peer_ip" ]]; then
             if ! peer_push_key "$peer_ip" "$keydir/$name" "$name"; then
@@ -6732,6 +6991,1588 @@ quick_add_tunnel_wstunnel() {
 }
 
 
+# ==========================================
+# v1.6.0 — Xray tunnels (dokodemo-door / reverse) and IPv6 tunnels (6to4 SIT, GRE6, IPIP6)
+# ==========================================
+
+jojonet_pkg_install() {
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1 || \
+            { apt-get update >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1; }
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y "$@" >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y "$@" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+gen_uuid() {
+    local u=""
+    [[ -r /proc/sys/kernel/random/uuid ]] && u=$(tr -d '\r\n' < /proc/sys/kernel/random/uuid)
+    if ! [[ "$u" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        u=$(openssl rand -hex 16 2>/dev/null) || return 1
+        [[ "$u" =~ ^[0-9a-f]{32}$ ]] || return 1
+        u="${u:0:8}-${u:8:4}-4${u:13:3}-a${u:17:3}-${u:20:12}"
+    fi
+    printf '%s\n' "$u"
+}
+
+str_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$1" | sha256sum | awk '{print $1}'
+    else
+        printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
+    fi
+}
+
+tcp_port_listening() {
+    command -v ss >/dev/null 2>&1 || return 1
+    ss -tlnH 2>/dev/null | awk -v p=":$1" '$4 ~ p"$" { found=1 } END { exit !found }'
+}
+
+xray_mode() { [[ "${1:-}" == "dokodemo" || "${1:-}" == "xray_reverse" ]]; }
+v6_mode() { [[ "${1:-}" == "sit" || "${1:-}" == "gre6" || "${1:-}" == "ipip6" ]]; }
+valid_xray_net() { [[ "${1:-}" == "tcp" || "${1:-}" == "ws" || "${1:-}" == "grpc" ]]; }
+
+xray_default_ctrl_port() {
+    if [[ "${1:-}" == "xray_reverse" ]]; then
+        echo "$DEFAULT_XRAY_REVERSE_CTRL_PORT"
+    else
+        echo "$DEFAULT_XRAY_DOKO_CTRL_PORT"
+    fi
+}
+
+# The side that listens on the control port: Kharej for dokodemo, Iran (portal) for reverse.
+xray_ctrl_listener() {
+    [[ "$1" == "dokodemo" && "$2" == "kharej" ]] || [[ "$1" == "xray_reverse" && "$2" == "iran" ]]
+}
+
+# Ports: "T" or "L:T" (Iran listens on L, Kharej target 127.0.0.1:T); 1-16 entries.
+xray_normalize_ports() {
+    local raw="${1// /}" item l t out="" seen_l="" n=0
+    local -a plist=()
+    [[ -n "$raw" ]] || { log_error "No forward ports given"; return 1; }
+    IFS=',' read -ra plist <<< "$raw"
+    for item in "${plist[@]}"; do
+        [[ -n "$item" ]] || continue
+        if [[ "$item" =~ ^([0-9]{1,5}):([0-9]{1,5})$ ]]; then
+            l="${BASH_REMATCH[1]}"
+            t="${BASH_REMATCH[2]}"
+        elif [[ "$item" =~ ^[0-9]{1,5}$ ]]; then
+            l=""
+            t="$item"
+        else
+            log_error "Invalid port entry: $item (use PORT or LISTEN:TARGET)"
+            return 1
+        fi
+        validate_single_port "$t" || { log_error "Invalid port: $t"; return 1; }
+        t=$((10#$t))
+        if [[ -n "$l" ]]; then
+            validate_single_port "$l" || { log_error "Invalid port: $l"; return 1; }
+            l=$((10#$l))
+            item="${l}:${t}"
+        else
+            item="$t"
+        fi
+        case ",$out," in *",$item,"*) continue ;; esac
+        if [[ -n "$l" ]]; then
+            case ",$seen_l," in *",$l,"*) log_error "Listen port $l used twice"; return 1 ;; esac
+            seen_l="${seen_l:+$seen_l,}$l"
+        fi
+        out="${out:+$out,}$item"
+        n=$((n + 1))
+    done
+    if (( n < 1 || n > 16 )); then
+        log_error "Xray tunnels need 1-16 forward ports (got $n)"
+        return 1
+    fi
+    echo "$out"
+}
+
+valid_port_csv() {
+    local p n=0
+    local -a plist=()
+    IFS=',' read -ra plist <<< "${1:-}"
+    for p in "${plist[@]}"; do
+        validate_single_port "$p" || return 1
+        n=$((n + 1))
+    done
+    (( n >= 1 && n <= 32 ))
+}
+
+xray_port_busy() {
+    iran_dnat_port_in_use "$1" && return 0
+    tcp_port_listening "$1"
+}
+
+# Iran: pick a free listen port for every plain target port (target kept as-is).
+xray_plan_iran_ports() {
+    local list="$1" ctrl="${2:-}" item l t c used="" out=""
+    local -a plist=()
+    IFS=',' read -ra plist <<< "$list"
+    for item in "${plist[@]}"; do
+        if [[ "$item" == *:* ]]; then
+            l="${item%%:*}"
+            t="${item##*:}"
+            xray_port_busy "$l" && log_warn "Iran listen port $l looks busy — Xray may fail to bind it"
+        else
+            t="$item"
+            l=""
+            for c in "$t" 8443 2053 2083 2096 8080 8444 4433 2087 8880; do
+                [[ "$c" == "$ctrl" ]] && continue
+                case ",$used," in *",$c,"*) continue ;; esac
+                xray_port_busy "$c" && continue
+                l="$c"
+                break
+            done
+            [[ -n "$l" ]] || { log_error "No free Iran listen port for target $t — pass LISTEN:TARGET"; return 1; }
+            [[ "$l" != "$t" ]] && log_warn "Iran port $t is busy — listening on $l (→ Kharej $t)"
+        fi
+        [[ "$l" == "$ctrl" ]] && { log_error "Listen port $l clashes with the control port"; return 1; }
+        case ",$used," in *",$l,"*) log_error "Listen port $l used twice"; return 1 ;; esac
+        used="${used:+$used,}$l"
+        if [[ "$l" == "$t" ]]; then
+            out="${out:+$out,}$t"
+        else
+            out="${out:+$out,}${l}:${t}"
+        fi
+    done
+    echo "$out"
+}
+
+detect_xray_asset() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "Xray-linux-64.zip" ;;
+        aarch64|arm64) echo "Xray-linux-arm64-v8a.zip" ;;
+        armv7l|armv7*) echo "Xray-linux-arm32-v7a.zip" ;;
+        *) return 1 ;;
+    esac
+}
+
+xray_fetch() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 15 --max-time 300 "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=60 -O "$2" "$1"
+    else
+        log_error "curl or wget required."
+        return 1
+    fi
+}
+
+ensure_unzip() {
+    command -v unzip >/dev/null 2>&1 && return 0
+    log_note "Installing unzip..."
+    jojonet_pkg_install unzip || true
+    command -v unzip >/dev/null 2>&1 || { log_error "unzip is required for Xray"; return 1; }
+}
+
+install_xray_binary() {
+    [[ -x "$XRAY_BIN" ]] && return 0
+    local asset tmpdir base want got ok=0
+    asset=$(detect_xray_asset) || { log_error "Unsupported CPU for Xray: $(uname -m)"; return 1; }
+    ensure_unzip || return 1
+    tmpdir=$(mktemp -d /tmp/jojonet-xray.XXXXXX) || return 1
+    log_note "Downloading Xray ${XRAY_VERSION} ($asset)..."
+    for base in \
+        "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}" \
+        "https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}" \
+        "https://mirror.ghproxy.com/https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}"
+    do
+        echo -e "  ${CYAN}try${NC} $base/$asset" >&2
+        rm -f "$tmpdir/$asset" "$tmpdir/$asset.dgst"
+        xray_fetch "$base/$asset" "$tmpdir/$asset" || continue
+        xray_fetch "$base/$asset.dgst" "$tmpdir/$asset.dgst" || continue
+        want=$(awk '/^SHA2-256=/ { print tolower($NF); exit }' "$tmpdir/$asset.dgst")
+        got=$(sha256_of "$tmpdir/$asset")
+        if [[ "$want" =~ ^[0-9a-f]{64}$ && "$want" == "$got" ]]; then
+            ok=1
+            break
+        fi
+        log_warn "Xray checksum mismatch from $base"
+    done
+    if (( ok != 1 )); then
+        rm -rf "$tmpdir"
+        log_error "Failed to download a verified Xray ${XRAY_VERSION}"
+        return 1
+    fi
+    if ! unzip -o -q "$tmpdir/$asset" xray -d "$tmpdir" || [[ ! -f "$tmpdir/xray" ]]; then
+        rm -rf "$tmpdir"
+        log_error "xray binary missing in $asset"
+        return 1
+    fi
+    install -m755 "$tmpdir/xray" "$XRAY_BIN"
+    rm -rf "$tmpdir"
+    log_info "xray installed: $XRAY_BIN ($("$XRAY_BIN" version 2>/dev/null | head -1 || echo "$XRAY_VERSION"))"
+}
+
+xray_stream_json() {
+    local net="$1" uuid="$2" h
+    h=$(str_sha256 "jojonet-xray-${uuid}")
+    case "$net" in
+        ws) printf '{"network":"ws","wsSettings":{"path":"/%s"}}' "${h:0:16}" ;;
+        grpc) printf '{"network":"grpc","grpcSettings":{"serviceName":"%s"}}' "${h:16:12}" ;;
+        *) printf '{"network":"tcp"}' ;;
+    esac
+}
+
+build_xray_runtime_config() {
+    local name="$1" role="$2" mode="$3" rem="$4" ctrl="$5" keydir="$6" ports="$7" net="${8:-tcp}"
+    local uuid stream domain h json tmp cfg inb="" tags="" item l t vless_in vless_out local_out
+    local -a plist=()
+    install -d -m700 "$XRAY_CONFIG_DIR"
+    [[ -s "$keydir/xray.uuid" ]] || { log_error "Xray UUID missing: $keydir/xray.uuid"; return 1; }
+    uuid=$(tr -d '\r\n ' < "$keydir/xray.uuid")
+    [[ "$uuid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+        log_error "Invalid Xray UUID in $keydir/xray.uuid"
+        return 1
+    }
+    validate_single_port "$ctrl" || { log_error "Invalid Xray control port: $ctrl"; return 1; }
+    valid_xray_net "$net" || { log_error "Invalid Xray transport: $net"; return 1; }
+    stream=$(xray_stream_json "$net" "$uuid")
+    h=$(str_sha256 "jojonet-reverse-${uuid}")
+    domain="r${h:0:12}.jojonet.internal"
+    json="$XRAY_CONFIG_DIR/${name}.json"
+    if [[ "$role" == "iran" ]]; then
+        IFS=',' read -ra plist <<< "$ports"
+        for item in "${plist[@]}"; do
+            l="${item%%:*}"
+            t="${item##*:}"
+            validate_single_port "$l" && validate_single_port "$t" || { log_error "Invalid port entry: $item"; return 1; }
+            inb="${inb:+$inb,}{\"tag\":\"in-${l}\",\"listen\":\"0.0.0.0\",\"port\":${l},\"protocol\":\"dokodemo-door\",\"settings\":{\"address\":\"127.0.0.1\",\"port\":${t},\"network\":\"tcp,udp\"}}"
+            tags="${tags:+$tags,}\"in-${l}\""
+        done
+        [[ -n "$inb" ]] || { log_error "Xray needs at least one forward port"; return 1; }
+    fi
+    vless_in="{\"tag\":\"tunnel\",\"listen\":\"0.0.0.0\",\"port\":${ctrl},\"protocol\":\"vless\",\"settings\":{\"clients\":[{\"id\":\"${uuid}\"}],\"decryption\":\"none\"},\"streamSettings\":${stream}}"
+    vless_out="{\"tag\":\"tunnel\",\"protocol\":\"vless\",\"settings\":{\"vnext\":[{\"address\":\"${rem}\",\"port\":${ctrl},\"users\":[{\"id\":\"${uuid}\",\"encryption\":\"none\"}]}]},\"streamSettings\":${stream}}"
+    local_out="{\"tag\":\"local\",\"protocol\":\"freedom\",\"settings\":{\"redirect\":\"127.0.0.1:0\"}}"
+    case "${mode}:${role}" in
+        dokodemo:iran)
+            cfg="{\"log\":{\"loglevel\":\"warning\"},\"inbounds\":[${inb}],\"outbounds\":[${vless_out}],\"routing\":{\"rules\":[{\"type\":\"field\",\"inboundTag\":[${tags}],\"outboundTag\":\"tunnel\"}]}}"
+            ;;
+        dokodemo:kharej)
+            cfg="{\"log\":{\"loglevel\":\"warning\"},\"inbounds\":[${vless_in}],\"outbounds\":[${local_out}]}"
+            ;;
+        xray_reverse:iran)
+            cfg="{\"log\":{\"loglevel\":\"warning\"},\"reverse\":{\"portals\":[{\"tag\":\"portal\",\"domain\":\"${domain}\"}]},\"inbounds\":[${inb},${vless_in}],\"outbounds\":[{\"tag\":\"block\",\"protocol\":\"blackhole\"}],\"routing\":{\"rules\":[{\"type\":\"field\",\"inboundTag\":[${tags}],\"outboundTag\":\"portal\"},{\"type\":\"field\",\"inboundTag\":[\"tunnel\"],\"domain\":[\"full:${domain}\"],\"outboundTag\":\"portal\"},{\"type\":\"field\",\"inboundTag\":[\"tunnel\"],\"outboundTag\":\"block\"}]}}"
+            ;;
+        xray_reverse:kharej)
+            cfg="{\"log\":{\"loglevel\":\"warning\"},\"reverse\":{\"bridges\":[{\"tag\":\"bridge\",\"domain\":\"${domain}\"}]},\"outbounds\":[${vless_out},${local_out}],\"routing\":{\"rules\":[{\"type\":\"field\",\"inboundTag\":[\"bridge\"],\"domain\":[\"full:${domain}\"],\"outboundTag\":\"tunnel\"},{\"type\":\"field\",\"inboundTag\":[\"bridge\"],\"outboundTag\":\"local\"}]}}"
+            ;;
+        *)
+            log_error "Unknown Xray mode/role: ${mode}/${role}"
+            return 1
+            ;;
+    esac
+    tmp=$(mktemp --suffix=.json "$XRAY_CONFIG_DIR/.${name}.XXXXXX") || return 1
+    printf '%s\n' "$cfg" > "$tmp"
+    chmod 600 "$tmp"
+    if [[ -x "$XRAY_BIN" ]] && ! "$XRAY_BIN" run -test -c "$tmp" >/dev/null 2>&1; then
+        log_error "Xray rejected the generated config:"
+        "$XRAY_BIN" run -test -c "$tmp" 2>&1 | tail -n 5 >&2 || true
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$json" || { rm -f "$tmp"; return 1; }
+    echo "$json"
+}
+
+ensure_xray_firewall() {
+    local role="$1" mode="$2" ctrl="$3" ports="${4:-}" item p
+    local -a open_tcp=() plist=()
+    xray_ctrl_listener "$mode" "$role" && open_tcp+=("$ctrl")
+    if [[ "$role" == "iran" ]]; then
+        IFS=',' read -ra plist <<< "$ports"
+        for item in "${plist[@]}"; do
+            open_tcp+=("${item%%:*}")
+        done
+    fi
+    (( ${#open_tcp[@]} > 0 )) || return 0
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+        for p in "${open_tcp[@]}"; do
+            ufw allow "${p}/tcp" comment "jojonet-xray-${p}" >/dev/null 2>&1 || true
+            [[ "$p" == "$ctrl" ]] || ufw allow "${p}/udp" comment "jojonet-xray-${p}" >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then
+        for p in "${open_tcp[@]}"; do
+            firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true
+            [[ "$p" == "$ctrl" ]] || firewall-cmd --permanent --add-port="${p}/udp" >/dev/null 2>&1 || true
+        done
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+create_xray_runner_script() {
+    if ! cat << 'EOF' > "$XRAY_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+XRAY_BIN="/usr/local/bin/xray"
+
+[[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || { echo "Config missing" >&2; exit 1; }
+load_safe_config "$CONFIG_FILE" || { echo "Bad config" >&2; exit 1; }
+json="${XrayJson:-}"
+
+case "$ACTION" in
+    start)
+        [[ -x "$XRAY_BIN" ]] || { echo "xray binary missing" >&2; exit 1; }
+        [[ -n "$json" && -f "$json" ]] || { echo "xray config missing: $json" >&2; exit 1; }
+        echo "[jojonet-xray:${Name}] Starting ${TunnelMode} (${Role}, ${XrayNet:-tcp}) $json"
+        exec "$XRAY_BIN" run -c "$json"
+        ;;
+    stop)
+        if [[ -n "$json" ]]; then
+            pkill -f "xray run -c ${json}\$" >/dev/null 2>&1 || true
+        fi
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$XRAY_RUNNER"
+}
+
+create_xray_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_xray_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet Xray Tunnel: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-xray-%i
+ExecStart=/usr/local/bin/jojonet-run-xray.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-xray.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$XRAY_SERVICE" ]] && cmp -s "$tmp_file" "$XRAY_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$XRAY_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+xray_process_running() {
+    pgrep -f "xray run -c ${XRAY_CONFIG_DIR}/${1}\\.json" >/dev/null 2>&1
+}
+
+quick_add_tunnel_xray() {
+    local mode="$1" peer_ip="${2:-}"
+    local peer_from_cli=0 use_auto=0 ins_name="" role_conf="" loc_ip="" rem_ip=""
+    local fwd_port="" key_dir="" ctrl_port="" net="" existing="" pair_id="" _cp="" _fp="" _nt=""
+    xray_mode "$mode" || { log_error "Unknown Xray mode: $mode"; return 1; }
+    [[ -n "$peer_ip" ]] && peer_from_cli=1
+    ctrl_port=$(xray_default_ctrl_port "$mode")
+    net="${JOJONET_XRAY_NET:-$DEFAULT_XRAY_NET}"
+
+    set +e
+    clear_screen
+    logo
+    print_banner "$(tunnel_mode_label "$mode")"
+    echo -e "${CYAN}How it works:${NC}"
+    if [[ "$mode" == "dokodemo" ]]; then
+        echo -e "  Iran   = dokodemo-door on public ports → VLESS → Kharej (${GREEN}Iran dials out${NC})"
+        echo -e "  Kharej = VLESS server on the control port → 127.0.0.1:<port>"
+    else
+        echo -e "  Iran   = reverse ${GREEN}PORTAL${NC} (listens on control + public ports)"
+        echo -e "  Kharej = reverse ${GREEN}BRIDGE${NC} (dials Iran — works when Iran cannot dial out)"
+    fi
+    echo ""
+
+    install_xray_binary || { sleep 2; set -e; return 1; }
+    install -d -m700 "$XRAY_CONFIG_DIR"
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+
+    if [[ -z "$peer_ip" ]]; then
+        read -r -p "Peer server IP: " peer_ip
+    fi
+    peer_ip="${peer_ip// /}"
+    if ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip" "$mode"); then
+        echo -e "${YELLOW}[!] $(tunnel_mode_label "$mode") to $rem_ip exists [$existing]. Restarting...${NC}"
+        local _rrc=0
+        restart_tunnel "$existing" || _rrc=$?
+        sleep 2; set -e; return "$_rrc"
+    fi
+
+    if ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Role required. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2; set -e; return 1
+    fi
+    echo -e "${GREEN}[*] Role:${NC} $role_conf"
+
+    if jojonet_use_auto_defaults "$peer_from_cli"; then
+        use_auto=1
+    fi
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "$mode") || { set -e; return 1; }
+
+    if (( use_auto )); then
+        ctrl_port="${JOJONET_XRAY_CTRL_PORT:-$ctrl_port}"
+        fwd_port="${JOJONET_FWD_PORTS:-$DEFAULT_XRAY_FWD}"
+    else
+        read -r -p "Transport tcp/ws/grpc (same on both servers) [$net]: " _nt
+        net=${_nt:-$net}
+        read -r -p "Control port (same on both servers) [$ctrl_port]: " _cp
+        ctrl_port=${_cp:-$ctrl_port}
+        read -r -p "Kharej service ports, e.g. 443,2053 or 8443:443 [$DEFAULT_XRAY_FWD]: " _fp
+        fwd_port=${_fp:-$DEFAULT_XRAY_FWD}
+    fi
+    net=$(printf '%s' "$net" | tr '[:upper:]' '[:lower:]')
+    if ! valid_xray_net "$net"; then
+        echo -e "${RED}[!] Invalid transport: $net (tcp|ws|grpc)${NC}"
+        sleep 2; set -e; return 1
+    fi
+    if ! validate_single_port "$ctrl_port"; then
+        echo -e "${RED}[!] Invalid control port.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    ctrl_port=$((10#$ctrl_port))
+    fwd_port=$(xray_normalize_ports "$fwd_port") || { sleep 2; set -e; return 1; }
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port=$(xray_plan_iran_ports "$fwd_port" "$ctrl_port") || { sleep 2; set -e; return 1; }
+    fi
+
+    pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+    key_dir=$(ensure_shared_secret "$pair_id" "$rem_ip" xray.uuid "Xray" uuid) || { set -e; return 1; }
+
+    echo -e "\n${CYAN}--- Xray plan ---${NC}"
+    echo -e "  Name:      $ins_name"
+    echo -e "  Mode:      $(tunnel_mode_label "$mode")"
+    echo -e "  Role:      $role_conf"
+    echo -e "  Peer:      $rem_ip"
+    echo -e "  Transport: VLESS over $net"
+    echo -e "  Control:   TCP $ctrl_port ($(xray_ctrl_listener "$mode" "$role_conf" && echo "listens here" || echo "dials peer"))"
+    echo -e "  Forward:   $fwd_port"
+    echo -e "  UUID:      $key_dir/xray.uuid"
+    if [[ "$role_conf" == "iran" ]]; then
+        hint "Now run on Kharej: sudo jojonet $(tunnel_cli_flag "$mode") $loc_ip"
+    else
+        hint "Kharej services must listen on 127.0.0.1 (or all) for the target ports"
+        hint "Now run on Iran: sudo jojonet $(tunnel_cli_flag "$mode") $loc_ip"
+    fi
+    echo ""
+
+    if XRAY_NET="$net" deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "0" \
+        "" "" "0" "$fwd_port" "$mode" "$ctrl_port" "$key_dir" "" "" "tcp"; then
+        echo -e "${GREEN}[+] $(tunnel_mode_label "$mode") [$ins_name] is up.${NC}"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+tunnel_cli_flag() {
+    case "${1:-}" in
+        dokodemo) echo "--dokodemo" ;;
+        xray_reverse) echo "--xray-reverse" ;;
+        sit) echo "--6to4" ;;
+        gre6) echo "--gre6" ;;
+        ipip6) echo "--ipip6" ;;
+        *) echo "--${1:-gre}" ;;
+    esac
+}
+
+# Sets V6_IFACE V6_LOCAL V6_REMOTE V6_TUN_IP V6_TUN_REMOTE V6_SB V6_SERVER V6_CLIENT V6_MTU
+v6_plan() {
+    local name="$1" role="$2" loc="$3" rem="$4" mode="$5" h hx prefix
+    h=$(compute_gre_key "$loc" "$rem")
+    hx=$(printf '%04x:%04x' $(( (h >> 16) & 0xffff )) $(( h & 0xffff )))
+    if [[ "$role" == "kharej" ]]; then
+        V6_LOCAL="fd6a:${hx}::1/64"
+        V6_REMOTE="fd6a:${hx}::2"
+    else
+        V6_LOCAL="fd6a:${hx}::2/64"
+        V6_REMOTE="fd6a:${hx}::1"
+    fi
+    V6_TUN_IP="" V6_TUN_REMOTE="" V6_SB="" V6_SERVER="" V6_CLIENT=""
+    if [[ "$mode" == "sit" ]]; then
+        V6_IFACE="$name"
+        V6_MTU="$DEFAULT_SIT_MTU"
+        return 0
+    fi
+    if (( ${#name} > 13 )); then
+        V6_IFACE="6s${name: -13}"
+    else
+        V6_IFACE="6s${name}"
+    fi
+    V6_SB=$(compute_pair_subnet_byte "$loc" "$rem")
+    prefix=$(tunnel_net_prefix_for_mode "$mode")
+    V6_SERVER="${prefix}.${V6_SB}.1"
+    V6_CLIENT="${prefix}.${V6_SB}.2"
+    if [[ "$role" == "kharej" ]]; then
+        V6_TUN_IP="${V6_SERVER}/30"
+    else
+        V6_TUN_IP="${V6_CLIENT}/30"
+        V6_TUN_REMOTE="$V6_SERVER"
+    fi
+    V6_MTU="$DEFAULT_V6_OVERLAY_MTU"
+}
+
+# One SIT underlay per IPv4 pair: only one 6to4/GRE6/IPIP6 tunnel per peer.
+v6_tunnel_for_peer() {
+    local peer="$1" m n
+    for m in sit gre6 ipip6; do
+        if n=$(find_tunnel_for_peer "$peer" "$m"); then
+            printf '%s %s' "$n" "$m"
+            return 0
+        fi
+    done
+    return 1
+}
+
+create_v6_runner_script() {
+    if ! cat << 'EOF' > "$V6_RUNNER"
+#!/usr/bin/env bash
+set -Euo pipefail
+
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+[[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || { echo "Config missing" >&2; exit 1; }
+load_safe_config "$CONFIG_FILE" || { echo "Bad config" >&2; exit 1; }
+U="${V6Iface:-$Name}"
+
+log() { echo "[jojonet-v6:${Name}] $*"; }
+
+nat_rules() {
+    local op="$1" p proto
+    local -a plist=()
+    [[ "$Role" == "iran" && "$TunnelMode" != "sit" && -n "$Tun_Remote_IP_Raw" ]] || return 0
+    command -v iptables >/dev/null 2>&1 || { [[ "$op" == "add" ]] && return 1; return 0; }
+    IFS=',' read -ra plist <<< "${Ports:-}"
+    for p in "${plist[@]}"; do
+        p="${p// /}"
+        [[ "$p" =~ ^[0-9]+$ ]] || continue
+        for proto in tcp udp; do
+            if [[ "$op" == "add" ]]; then
+                iptables -t nat -C PREROUTING -p "$proto" --dport "$p" -j DNAT --to-destination "${Tun_Remote_IP_Raw}:$p" 2>/dev/null || \
+                    iptables -t nat -A PREROUTING -p "$proto" --dport "$p" -j DNAT --to-destination "${Tun_Remote_IP_Raw}:$p" || return 1
+            else
+                while iptables -t nat -D PREROUTING -p "$proto" --dport "$p" -j DNAT --to-destination "${Tun_Remote_IP_Raw}:$p" 2>/dev/null; do :; done
+            fi
+        done
+    done
+    if [[ "$op" == "add" ]]; then
+        iptables -t nat -C POSTROUTING -o "$Name" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -o "$Name" -j MASQUERADE || return 1
+    else
+        while iptables -t nat -D POSTROUTING -o "$Name" -j MASQUERADE 2>/dev/null; do :; done
+    fi
+    return 0
+}
+
+proto41_rule() {
+    command -v iptables >/dev/null 2>&1 || return 0
+    if [[ "$1" == "add" ]]; then
+        iptables -C INPUT -s "$Remote_IP" -p 41 -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT -s "$Remote_IP" -p 41 -j ACCEPT 2>/dev/null || true
+    else
+        while iptables -D INPUT -s "$Remote_IP" -p 41 -j ACCEPT 2>/dev/null; do :; done
+    fi
+    return 0
+}
+
+cleanup() {
+    nat_rules del || true
+    proto41_rule del
+    if [[ "$U" != "$Name" ]]; then
+        ip link delete "$Name" >/dev/null 2>&1 || true
+    fi
+    ip link delete "$U" >/dev/null 2>&1 || true
+}
+
+fail() {
+    log "ERROR: $*"
+    cleanup
+    exit 1
+}
+
+case "$ACTION" in
+    start)
+        case "$TunnelMode" in
+            sit|gre6|ipip6) ;;
+            *) fail "unsupported mode: $TunnelMode" ;;
+        esac
+        [[ -d /proc/sys/net/ipv6 ]] || fail "IPv6 is disabled in the kernel (ipv6.disable=1) — enable it and reboot"
+        [[ -n "$V6Local" && -n "$V6Remote" ]] || fail "IPv6 addresses missing in config"
+        mtu="${Suggested_MTU:-}"
+        if [[ "$TunnelMode" == "sit" ]]; then
+            [[ "$mtu" =~ ^[0-9]+$ ]] && (( mtu >= 1280 && mtu <= 1480 )) || mtu=1480
+            umtu="$mtu"
+        else
+            [[ "$mtu" =~ ^[0-9]+$ ]] && (( mtu >= 576 && mtu <= 1440 )) || mtu=1420
+            umtu=1480
+        fi
+        modprobe sit >/dev/null 2>&1 || true
+        [[ "$TunnelMode" == "gre6" ]] && { modprobe ip6_gre >/dev/null 2>&1 || true; }
+        [[ "$TunnelMode" == "ipip6" ]] && { modprobe ip6_tunnel >/dev/null 2>&1 || true; }
+        cleanup
+
+        log "ip tunnel add $U mode sit remote $Remote_IP local $Local_IP ttl 255"
+        ip tunnel add "$U" mode sit remote "$Remote_IP" local "$Local_IP" ttl 255 \
+            || fail "SIT creation failed (another SIT tunnel to $Remote_IP already exists?)"
+        sysctl -w "net.ipv6.conf.${U}.disable_ipv6=0" >/dev/null 2>&1 || true
+        ip link set "$U" mtu "$umtu" || fail "cannot set MTU on $U"
+        ip link set "$U" up || fail "cannot bring $U up"
+        ip -6 addr add "$V6Local" dev "$U" nodad || fail "cannot add $V6Local to $U (IPv6 disabled on this server?)"
+        proto41_rule add
+
+        if [[ "$TunnelMode" != "sit" ]]; then
+            [[ -n "$Tun_IP" ]] || fail "overlay IPv4 missing in config"
+            if [[ "$TunnelMode" == "gre6" ]]; then mode6="ip6gre"; else mode6="ipip6"; fi
+            log "ip -6 tunnel add $Name mode $mode6 remote $V6Remote local ${V6Local%%/*}"
+            ip -6 tunnel add "$Name" mode "$mode6" remote "$V6Remote" local "${V6Local%%/*}" \
+                hoplimit 255 encaplimit none || fail "$mode6 creation failed"
+            ip addr add "$Tun_IP" dev "$Name" || fail "cannot add $Tun_IP to $Name"
+            ip link set "$Name" mtu "$mtu" || fail "cannot set MTU on $Name"
+            ip link set "$Name" up || fail "cannot bring $Name up"
+            sysctl -w "net.ipv4.conf.${Name}.rp_filter=0" >/dev/null 2>&1 || true
+            sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+            if [[ "$Role" == "iran" ]]; then
+                sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+                nat_rules add || fail "iptables DNAT/MASQUERADE failed (is iptables installed?)"
+            fi
+        fi
+        log "SUCCESS: $TunnelMode $Name up (IPv6 ${V6Local} ↔ ${V6Remote}${Tun_IP:+, IPv4 $Tun_IP})"
+        ;;
+    stop)
+        log "Stopping..."
+        cleanup
+        exit 0
+        ;;
+    *)
+        echo "Invalid action: $ACTION" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$V6_RUNNER"
+}
+
+create_v6_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_v6_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet IPv6 Tunnel (6to4/GRE6/IPIP6): %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-v6-%i
+ExecStart=/usr/local/bin/jojonet-run-v6.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-v6.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$V6_SERVICE" ]] && cmp -s "$tmp_file" "$V6_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$V6_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+quick_add_tunnel_v6() {
+    local mode="$1" peer_ip="${2:-}"
+    local peer_from_cli=0 use_auto=0 ins_name="" role_conf="" loc_ip="" rem_ip=""
+    local fwd_port="" existing="" other="" _fp=""
+    v6_mode "$mode" || { log_error "Unknown IPv6 mode: $mode"; return 1; }
+    [[ -n "$peer_ip" ]] && peer_from_cli=1
+
+    set +e
+    clear_screen
+    logo
+    print_banner "$(tunnel_mode_label "$mode")"
+    echo -e "${CYAN}How it works:${NC}"
+    echo -e "  6to4 SIT: IPv6 inside IPv4 (protocol 41) with private IPv6 fd6a:… on both servers"
+    if [[ "$mode" == "sit" ]]; then
+        echo -e "  Use the private IPv6 of the peer directly (e.g. as an Xray/V2Ray outbound address)"
+    else
+        echo -e "  $( [[ "$mode" == "gre6" ]] && echo "GRE6" || echo "IPIP6" ) over the SIT link carries IPv4; Iran forwards ports with DNAT"
+    fi
+    echo ""
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+
+    if [[ -z "$peer_ip" ]]; then
+        read -r -p "Peer server IP: " peer_ip
+    fi
+    peer_ip="${peer_ip// /}"
+    if ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    rem_ip="$peer_ip"
+
+    if other=$(v6_tunnel_for_peer "$rem_ip"); then
+        existing="${other%% *}"
+        if [[ "${other##* }" == "$mode" ]]; then
+            echo -e "${YELLOW}[!] $(tunnel_mode_label "$mode") to $rem_ip exists [$existing]. Restarting...${NC}"
+            local _rrc=0
+            restart_tunnel "$existing" || _rrc=$?
+            sleep 2; set -e; return "$_rrc"
+        fi
+        echo -e "${RED}[!] $rem_ip already has an IPv6 tunnel [$existing] (${other##* }). Only one 6to4/GRE6/IPIP6 per peer — delete it first.${NC}"
+        sleep 2; set -e; return 1
+    fi
+
+    if ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Role required. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2; set -e; return 1
+    fi
+    echo -e "${GREEN}[*] Role:${NC} $role_conf"
+
+    if jojonet_use_auto_defaults "$peer_from_cli"; then
+        use_auto=1
+    fi
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "$mode") || { set -e; return 1; }
+
+    if [[ "$role_conf" == "iran" && "$mode" != "sit" ]]; then
+        if (( use_auto )); then
+            fwd_port="${JOJONET_FWD_PORTS:-}"
+        else
+            fwd_port=$(allocate_iran_forward_port "443")
+            read -r -p "Ports to forward to Kharej [$fwd_port]: " _fp
+            fwd_port=${_fp:-$fwd_port}
+        fi
+        if [[ -n "$fwd_port" ]]; then
+            fwd_port=$(normalize_port_list "$fwd_port")
+            if ! valid_port_csv "$fwd_port"; then
+                echo -e "${RED}[!] Invalid port list: $fwd_port${NC}"
+                sleep 2; set -e; return 1
+            fi
+        fi
+    fi
+
+    v6_plan "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$mode"
+    echo -e "\n${CYAN}--- IPv6 tunnel plan ---${NC}"
+    echo -e "  Name:     $ins_name ($(tunnel_mode_label "$mode"))"
+    echo -e "  Role:     $role_conf"
+    echo -e "  Peer:     $rem_ip"
+    echo -e "  SIT:      $V6_IFACE  ${V6_LOCAL} ↔ ${V6_REMOTE}"
+    [[ "$mode" != "sit" ]] && echo -e "  Overlay:  $ins_name  ${V6_TUN_IP}"
+    [[ -n "$fwd_port" ]] && echo -e "  Forward:  $fwd_port"
+    hint "Now run on the peer: sudo jojonet $(tunnel_cli_flag "$mode") $loc_ip"
+    echo ""
+
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "" \
+        "" "" "0" "$fwd_port" "$mode" "" "" "" "" "tcp"; then
+        echo -e "${GREEN}[+] $(tunnel_mode_label "$mode") [$ins_name] is up.${NC}"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+# ==========================================
+# v1.6.0 — Single-server relays (hiddify-relay style): iptables / GOST / HAProxy / Socat / Xray
+# Iran relay server → main server; no JojoNet needed on the destination.
+# ==========================================
+
+_JOJONET_RELAY_KEYS="Name Engine Target Ports Proto ApiPort"
+
+load_relay_config() {
+    local file="$1" line key val
+    Name="" Engine="" Target="" Ports="" Proto="" ApiPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_RELAY_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*' '*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "$Name" && -n "$Engine" && -n "$Target" && -n "$Ports" ]]
+}
+
+valid_relay_name() { [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]]; }
+valid_relay_engine() { [[ "${1:-}" =~ ^(iptables|gost|haproxy|socat|xray)$ ]]; }
+valid_relay_target() {
+    validate_ipv4 "${1:-}" && return 0
+    [[ "${1:-}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ && "${1:-}" == *.* && ! "${1:-}" =~ ^[0-9.]+$ ]]
+}
+
+relay_unit() {
+    if [[ "$2" == "iptables" ]]; then
+        echo "jojonet-relay-nat@${1}.service"
+    else
+        echo "jojonet-relay@${1}.service"
+    fi
+}
+
+detect_gost_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        armv7l|armv7*) echo "armv7" ;;
+        *) return 1 ;;
+    esac
+}
+
+install_gost_binary() {
+    [[ -x "$GOST_BIN" ]] && return 0
+    local arch ver fname tmpdir base want got ok=0
+    arch=$(detect_gost_arch) || { log_error "Unsupported CPU for GOST: $(uname -m)"; return 1; }
+    command -v tar >/dev/null 2>&1 || { log_error "tar required for GOST"; return 1; }
+    ver="${GOST_VERSION#v}"
+    fname="gost_${ver}_linux_${arch}.tar.gz"
+    tmpdir=$(mktemp -d /tmp/jojonet-gost.XXXXXX) || return 1
+    log_note "Downloading GOST ${GOST_VERSION} ($fname)..."
+    for base in \
+        "https://github.com/go-gost/gost/releases/download/${GOST_VERSION}" \
+        "https://ghproxy.net/https://github.com/go-gost/gost/releases/download/${GOST_VERSION}" \
+        "https://mirror.ghproxy.com/https://github.com/go-gost/gost/releases/download/${GOST_VERSION}"
+    do
+        echo -e "  ${CYAN}try${NC} $base/$fname" >&2
+        rm -f "$tmpdir/$fname" "$tmpdir/checksums.txt"
+        xray_fetch "$base/$fname" "$tmpdir/$fname" || continue
+        xray_fetch "$base/checksums.txt" "$tmpdir/checksums.txt" || continue
+        want=$(awk -v f="$fname" '$2 == f || $2 == "*"f { print tolower($1); exit }' "$tmpdir/checksums.txt")
+        got=$(sha256_of "$tmpdir/$fname")
+        if [[ "$want" =~ ^[0-9a-f]{64}$ && "$want" == "$got" ]]; then
+            ok=1
+            break
+        fi
+        log_warn "GOST checksum mismatch from $base"
+    done
+    if (( ok != 1 )); then
+        rm -rf "$tmpdir"
+        log_error "Failed to download a verified GOST ${GOST_VERSION}"
+        return 1
+    fi
+    if ! tar -xzf "$tmpdir/$fname" -C "$tmpdir" gost 2>/dev/null || [[ ! -f "$tmpdir/gost" ]]; then
+        rm -rf "$tmpdir"
+        log_error "gost binary missing in $fname"
+        return 1
+    fi
+    install -m755 "$tmpdir/gost" "$GOST_BIN"
+    rm -rf "$tmpdir"
+    log_info "gost installed: $GOST_BIN"
+}
+
+relay_alloc_api_port() {
+    local p f used=""
+    shopt -s nullglob
+    for f in "$RELAY_DIR"/*.conf; do
+        used="$used,$(conf_get_field "$f" "ApiPort"),"
+    done
+    shopt -u nullglob
+    for ((p = DEFAULT_RELAY_API_PORT; p < DEFAULT_RELAY_API_PORT + 200; p++)); do
+        [[ "$used" == *",$p,"* ]] && continue
+        tcp_port_listening "$p" && continue
+        echo "$p"
+        return 0
+    done
+    return 1
+}
+
+create_relay_runner_script() {
+    if ! cat << 'EOF' > "$RELAY_RUNNER"
+#!/usr/bin/env bash
+set -Euo pipefail
+
+_JOJONET_RELAY_KEYS="Name Engine Target Ports Proto ApiPort"
+
+load_relay_config() {
+    local file="$1" line key val
+    Name="" Engine="" Target="" Ports="" Proto="" ApiPort=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_RELAY_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*' '*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "$Name" && -n "$Engine" && -n "$Target" && -n "$Ports" ]]
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+[[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || { echo "Config missing" >&2; exit 1; }
+load_relay_config "$CONFIG_FILE" || { echo "Bad relay config: $CONFIG_FILE" >&2; exit 1; }
+[[ "$Name" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] || { echo "Bad relay name" >&2; exit 1; }
+TAG="jojonet-relay-${Name}"
+RUN_DIR="/run/jojonet"
+
+log() { echo "[jojonet-relay:${Name}] $*"; }
+
+PROTOS=()
+case "${Proto:-both}" in
+    tcp) PROTOS=(tcp) ;;
+    udp) PROTOS=(udp) ;;
+    *) PROTOS=(tcp udp) ;;
+esac
+ITEMS=()
+IFS=',' read -ra ITEMS <<< "$Ports"
+for _it in "${ITEMS[@]}"; do
+    [[ "$_it" =~ ^[0-9]{1,5}(:[0-9]{1,5})?$ ]] || { echo "Bad port entry: $_it" >&2; exit 1; }
+done
+
+nat_clean() {
+    local t rule
+    local -a args=()
+    command -v iptables >/dev/null 2>&1 || return 0
+    for t in nat filter; do
+        while IFS= read -r rule; do
+            [[ "$rule" == "-A "* ]] || continue
+            read -ra args <<< "${rule/#-A /-D }"
+            iptables -t "$t" "${args[@]}" 2>/dev/null || true
+        done < <(iptables -t "$t" -S 2>/dev/null | grep -E -- "--comment \"?${TAG}\"?( |\$)" || true)
+    done
+}
+
+nat_start() {
+    local item l t p
+    command -v iptables >/dev/null 2>&1 || { log "ERROR: iptables is not installed"; return 1; }
+    nat_clean
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    for item in "${ITEMS[@]}"; do
+        l="${item%%:*}"
+        t="${item##*:}"
+        for p in "${PROTOS[@]}"; do
+            iptables -t nat -A PREROUTING -p "$p" --dport "$l" -m comment --comment "$TAG" \
+                -j DNAT --to-destination "${Target}:${t}" || return 1
+            iptables -t nat -A POSTROUTING -d "$Target" -p "$p" --dport "$t" -m comment --comment "$TAG" \
+                -j MASQUERADE || return 1
+            iptables -I FORWARD -d "$Target" -p "$p" --dport "$t" -m comment --comment "$TAG" -j ACCEPT || return 1
+            iptables -I FORWARD -s "$Target" -p "$p" --sport "$t" -m comment --comment "$TAG" -j ACCEPT || return 1
+        done
+        log "iptables ${PROTOS[*]} :$l → ${Target}:$t"
+    done
+}
+
+xray_relay_json() {
+    local item l t inb net
+    case "${Proto:-both}" in tcp) net="tcp" ;; udp) net="udp" ;; *) net="tcp,udp" ;; esac
+    inb="{\"tag\":\"api\",\"listen\":\"127.0.0.1\",\"port\":${ApiPort},\"protocol\":\"dokodemo-door\",\"settings\":{\"address\":\"127.0.0.1\"}}"
+    for item in "${ITEMS[@]}"; do
+        l="${item%%:*}"
+        t="${item##*:}"
+        inb="${inb},{\"tag\":\"in-${l}\",\"listen\":\"0.0.0.0\",\"port\":${l},\"protocol\":\"dokodemo-door\",\"settings\":{\"address\":\"${Target}\",\"port\":${t},\"network\":\"${net}\"}}"
+    done
+    printf '{"log":{"loglevel":"warning"},"stats":{},"api":{"tag":"api","services":["StatsService"]},"policy":{"system":{"statsInboundUplink":true,"statsInboundDownlink":true}},"inbounds":[%s],"outbounds":[{"tag":"direct","protocol":"freedom"}],"routing":{"rules":[{"type":"field","inboundTag":["api"],"outboundTag":"api"}]}}\n' "$inb"
+}
+
+case "$ACTION" in
+    start)
+        install -d -m700 "$RUN_DIR"
+        case "$Engine" in
+            iptables)
+                if ! nat_start; then
+                    log "ERROR: iptables rules failed"
+                    nat_clean
+                    exit 1
+                fi
+                log "SUCCESS"
+                exit 0
+                ;;
+            gost)
+                args=()
+                for item in "${ITEMS[@]}"; do
+                    for p in "${PROTOS[@]}"; do
+                        args+=(-L "${p}://:${item%%:*}/${Target}:${item##*:}")
+                    done
+                done
+                log "gost ${args[*]}"
+                exec /usr/local/bin/gost "${args[@]}"
+                ;;
+            haproxy)
+                cfg="$RUN_DIR/relay-${Name}.haproxy.cfg"
+                {
+                    printf 'global\n    maxconn 20000\n\ndefaults\n    mode tcp\n    timeout connect 10s\n    timeout client 1h\n    timeout server 1h\n'
+                    for item in "${ITEMS[@]}"; do
+                        printf '\nfrontend f_%s\n    bind 0.0.0.0:%s\n    default_backend b_%s\n' "${item%%:*}" "${item%%:*}" "${item%%:*}"
+                        printf '\nbackend b_%s\n    server s1 %s:%s\n' "${item%%:*}" "$Target" "${item##*:}"
+                    done
+                } > "$cfg"
+                haproxy -c -q -f "$cfg" || { log "ERROR: haproxy rejected $cfg"; exit 1; }
+                log "haproxy $cfg"
+                exec haproxy -db -f "$cfg"
+                ;;
+            socat)
+                pids=()
+                trap 'kill "${pids[@]}" 2>/dev/null; exit 0' TERM INT
+                for item in "${ITEMS[@]}"; do
+                    for p in "${PROTOS[@]}"; do
+                        if [[ "$p" == "tcp" ]]; then
+                            socat "TCP4-LISTEN:${item%%:*},fork,reuseaddr" "TCP4:${Target}:${item##*:}" &
+                        else
+                            socat -T 60 "UDP4-RECVFROM:${item%%:*},fork,reuseaddr" "UDP4-SENDTO:${Target}:${item##*:}" &
+                        fi
+                        pids+=("$!")
+                    done
+                    log "socat ${PROTOS[*]} :${item%%:*} → ${Target}:${item##*:}"
+                done
+                wait -n
+                log "ERROR: a socat process exited"
+                kill "${pids[@]}" 2>/dev/null
+                exit 1
+                ;;
+            xray)
+                [[ "$ApiPort" =~ ^[0-9]{1,5}$ ]] || { log "ERROR: ApiPort missing"; exit 1; }
+                json="$RUN_DIR/relay-${Name}.json"
+                xray_relay_json > "$json"
+                chmod 600 "$json"
+                /usr/local/bin/xray run -test -c "$json" >/dev/null 2>&1 || {
+                    log "ERROR: xray rejected $json"
+                    /usr/local/bin/xray run -test -c "$json" 2>&1 | tail -n 5
+                    exit 1
+                }
+                log "xray dokodemo relay (stats API 127.0.0.1:${ApiPort})"
+                exec /usr/local/bin/xray run -c "$json"
+                ;;
+            *)
+                log "ERROR: unknown engine $Engine"
+                exit 1
+                ;;
+        esac
+        ;;
+    stop)
+        nat_clean
+        rm -f "$RUN_DIR/relay-${Name}.json" "$RUN_DIR/relay-${Name}.haproxy.cfg"
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$RELAY_RUNNER"
+}
+
+create_relay_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_relay_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet Relay: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-relay-%i
+ExecStart=/usr/local/bin/jojonet-run-relay.sh start /etc/jojonet/relays/%i.conf
+ExecStopPost=/usr/local/bin/jojonet-run-relay.sh stop /etc/jojonet/relays/%i.conf
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$RELAY_SERVICE" ]] && cmp -s "$tmp_file" "$RELAY_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$RELAY_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+    tmp_file=$(mktemp /tmp/jojonet_relay_nat_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet iptables Relay: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-relay-%i
+ExecStart=/usr/local/bin/jojonet-run-relay.sh start /etc/jojonet/relays/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-relay.sh stop /etc/jojonet/relays/%i.conf
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$RELAY_NAT_SERVICE" ]] && cmp -s "$tmp_file" "$RELAY_NAT_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$RELAY_NAT_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+relay_firewall() {
+    local op="$1" ports="$2" proto="$3" item l p
+    local -a protos=() plist=()
+    case "$proto" in tcp) protos=(tcp) ;; udp) protos=(udp) ;; *) protos=(tcp udp) ;; esac
+    command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active' || return 0
+    IFS=',' read -ra plist <<< "$ports"
+    for item in "${plist[@]}"; do
+        l="${item%%:*}"
+        for p in "${protos[@]}"; do
+            if [[ "$op" == "add" ]]; then
+                ufw allow "${l}/${p}" comment "jojonet-relay" >/dev/null 2>&1 || true
+            else
+                ufw --force delete allow "${l}/${p}" >/dev/null 2>&1 || true
+            fi
+        done
+    done
+    return 0
+}
+
+# relay_add ENGINE TARGET PORTS [PROTO] [NAME]
+relay_add() {
+    local engine="${1:-}" target="${2:-}" ports="${3:-}" proto="${4:-}" name="${5:-}"
+    local conf tmp unit item l api="" r0 r1
+    local Name="" Engine="" Target="" Ports="" Proto="" ApiPort=""
+    engine=$(printf '%s' "$engine" | tr '[:upper:]' '[:lower:]')
+    valid_relay_engine "$engine" || { log_error "Engine must be iptables|gost|haproxy|socat|xray"; return 1; }
+    target="${target// /}"
+    if [[ "$engine" == "iptables" ]]; then
+        validate_ipv4 "$target" || { log_error "iptables relay needs an IPv4 destination"; return 1; }
+    else
+        valid_relay_target "$target" || { log_error "Invalid destination (IPv4 or domain): $target"; return 1; }
+    fi
+    proto=$(printf '%s' "${proto:-}" | tr '[:upper:]' '[:lower:]')
+    [[ -n "$proto" ]] || { [[ "$engine" == "haproxy" ]] && proto="tcp" || proto="both"; }
+    [[ "$proto" =~ ^(tcp|udp|both)$ ]] || { log_error "Protocol must be tcp|udp|both"; return 1; }
+    [[ "$engine" == "haproxy" && "$proto" != "tcp" ]] && { log_error "HAProxy relays TCP only"; return 1; }
+    ports=$(xray_normalize_ports "$ports") || return 1
+    [[ -n "$name" ]] || name="${engine}-${ports%%[:,]*}"
+    name=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+    valid_relay_name "$name" || { log_error "Relay name: a-z 0-9 - (max 24): $name"; return 1; }
+    conf="$RELAY_DIR/$name.conf"
+    [[ -e "$conf" ]] && { log_error "Relay [$name] already exists"; return 1; }
+    for item in ${ports//,/ }; do
+        l="${item%%:*}"
+        if xray_port_busy "$l"; then
+            log_error "Port $l is already used on this server"
+            return 1
+        fi
+    done
+
+    case "$engine" in
+        iptables)
+            command -v iptables >/dev/null 2>&1 || jojonet_pkg_install iptables || true
+            command -v iptables >/dev/null 2>&1 || { log_error "iptables is required"; return 1; }
+            ;;
+        gost) install_gost_binary || return 1 ;;
+        haproxy|socat)
+            if ! command -v "$engine" >/dev/null 2>&1; then
+                log_note "Installing $engine..."
+                jojonet_pkg_install "$engine" || true
+            fi
+            command -v "$engine" >/dev/null 2>&1 || { log_error "$engine is required"; return 1; }
+            if [[ "$engine" == "haproxy" ]] && systemctl is-enabled --quiet haproxy 2>/dev/null && \
+                ! systemctl is-active --quiet haproxy 2>/dev/null; then
+                systemctl disable haproxy >/dev/null 2>&1 || true
+            fi
+            ;;
+        xray)
+            install_xray_binary || return 1
+            api=$(relay_alloc_api_port) || { log_error "No free local port for the Xray stats API"; return 1; }
+            ;;
+    esac
+
+    install -d -m700 "$RELAY_DIR"
+    create_relay_runner_script || return 1
+    create_relay_service || return 1
+    tmp="${conf}.tmp"
+    {
+        printf 'Name="%s"\nEngine="%s"\nTarget="%s"\nPorts="%s"\nProto="%s"\nApiPort="%s"\n' \
+            "$name" "$engine" "$target" "$ports" "$proto" "$api"
+    } > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+
+    unit=$(relay_unit "$name" "$engine")
+    r0=$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)
+    if ! systemctl enable --now "$unit" >/dev/null 2>&1; then
+        log_error "Relay [$name] failed to start:"
+        journalctl -u "$unit" -b --no-pager -n 15 2>/dev/null || true
+        relay_remove "$name" >/dev/null 2>&1 || true
+        return 1
+    fi
+    if [[ "$engine" != "iptables" ]]; then
+        sleep 3
+        r1=$(systemctl show -p NRestarts --value "$unit" 2>/dev/null || echo 0)
+        if ! systemctl is-active --quiet "$unit" || [[ "${r1:-0}" != "${r0:-0}" ]]; then
+            log_error "Relay [$name] is not running:"
+            journalctl -u "$unit" -b --no-pager -n 15 2>/dev/null || true
+            relay_remove "$name" >/dev/null 2>&1 || true
+            return 1
+        fi
+    fi
+    relay_firewall add "$ports" "$proto"
+    log_info "Relay [$name] UP: $engine ${proto} ${ports} → ${target}"
+    return 0
+}
+
+relay_remove() {
+    local name="${1:-}" conf unit
+    local Name="" Engine="" Target="" Ports="" Proto="" ApiPort=""
+    valid_relay_name "$name" || { log_error "Invalid relay name: $name"; return 1; }
+    conf="$RELAY_DIR/$name.conf"
+    [[ -f "$conf" ]] || { log_error "Relay not found: $name"; return 1; }
+    load_relay_config "$conf" || Engine=$(conf_get_field "$conf" "Engine")
+    unit=$(relay_unit "$name" "${Engine:-}")
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+    [[ -x "$RELAY_RUNNER" ]] && "$RELAY_RUNNER" stop "$conf" >/dev/null 2>&1 || true
+    [[ -n "$Ports" ]] && relay_firewall del "$Ports" "${Proto:-both}"
+    rm -f "$conf"
+    log_info "Relay [$name] removed"
+}
+
+relay_list() {
+    local f st n=0
+    local Name="" Engine="" Target="" Ports="" Proto="" ApiPort=""
+    shopt -s nullglob
+    local files=("$RELAY_DIR"/*.conf)
+    shopt -u nullglob
+    echo -e "${CYAN}=== Relays (${#files[@]}) ===${NC}"
+    for f in "${files[@]}"; do
+        if ! load_relay_config "$f"; then
+            echo -e "  ${RED}[!] Invalid relay config: $(basename "$f")${NC}"
+            continue
+        fi
+        n=$((n + 1))
+        if systemctl is-active --quiet "$(relay_unit "$Name" "$Engine")" 2>/dev/null; then
+            st="${GREEN}UP${NC}"
+        else
+            st="${RED}DOWN${NC}"
+        fi
+        echo -e "  ${st}  ${BLUE}${Name}${NC}  ${YELLOW}${Engine}${NC}  ${Proto:-both}  ${Ports} → ${CYAN}${Target}${NC}"
+    done
+    (( n > 0 )) || echo -e "  ${YELLOW}No relays configured.${NC}"
+    return 0
+}
+
+human_bytes() {
+    awk -v b="${1:-0}" 'BEGIN { split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } printf "%.2f %s", b, u[i] }'
+}
+
+relay_stats() {
+    local only="${1:-}" f item l up down out cnt
+    local Name="" Engine="" Target="" Ports="" Proto="" ApiPort=""
+    shopt -s nullglob
+    local files=("$RELAY_DIR"/*.conf)
+    shopt -u nullglob
+    if [[ -n "$only" ]]; then
+        valid_relay_name "$only" || { log_error "Invalid relay name: $only"; return 1; }
+        [[ -f "$RELAY_DIR/$only.conf" ]] || { log_error "Relay not found: $only"; return 1; }
+        files=("$RELAY_DIR/$only.conf")
+    fi
+    (( ${#files[@]} > 0 )) || { echo -e "${YELLOW}No relays configured.${NC}"; return 0; }
+    for f in "${files[@]}"; do
+        load_relay_config "$f" || continue
+        echo -e "${CYAN}=== ${Name} (${Engine}) → ${Target} ===${NC}"
+        case "$Engine" in
+            xray)
+                if ! out=$("$XRAY_BIN" api statsquery --server="127.0.0.1:${ApiPort}" 2>/dev/null); then
+                    echo -e "  ${YELLOW}stats API not reachable (relay down?)${NC}"
+                    continue
+                fi
+                for item in ${Ports//,/ }; do
+                    l="${item%%:*}"
+                    up=$(tr -d ' \n' <<< "$out" | grep -oE "\"name\":\"inbound>>>in-${l}>>>traffic>>>uplink\"(,\"value\":\"?[0-9]+)?" | grep -oE '[0-9]+$' || true)
+                    down=$(tr -d ' \n' <<< "$out" | grep -oE "\"name\":\"inbound>>>in-${l}>>>traffic>>>downlink\"(,\"value\":\"?[0-9]+)?" | grep -oE '[0-9]+$' || true)
+                    echo -e "  port ${l}: ↑ $(human_bytes "${up:-0}")  ↓ $(human_bytes "${down:-0}")"
+                done
+                ;;
+            iptables)
+                iptables -t nat -L PREROUTING -v -n -x 2>/dev/null | \
+                    awk -v tag="jojonet-relay-${Name} " '
+                        index($0, tag) {
+                            d = "?"
+                            for (i = 1; i <= NF; i++) if ($i ~ /^dpt:/) d = substr($i, 5)
+                            printf "  %s port %s → %s: %s packets, %s bytes\n", $4, d, substr($NF, 4), $1, $2
+                        }' || true
+                ;;
+            *)
+                for item in ${Ports//,/ }; do
+                    l="${item%%:*}"
+                    cnt=$(ss -Htn state established "( sport = :${l} )" 2>/dev/null | wc -l || echo 0)
+                    echo -e "  port ${l}: ${cnt} active TCP connection(s)"
+                done
+                ;;
+        esac
+    done
+}
+
+relay_menu() {
+    local c="" e="" t="" p="" pr="" n=""
+    while true; do
+        clear_screen
+        logo
+        print_banner "Relays — single server (hiddify-relay style)"
+        echo -e "  Users → ${GREEN}this server${NC}:port → main server:port (no JojoNet needed there)"
+        echo ""
+        relay_list
+        echo ""
+        menu_line "1) Add iptables relay (DNAT, fastest, TCP+UDP)"
+        menu_line "2) Add GOST relay"
+        menu_line "3) Add HAProxy relay (TCP)"
+        menu_line "4) Add Socat relay"
+        menu_line "5) Add Xray dokodemo relay (with traffic stats)"
+        menu_line "6) Traffic / connection stats"
+        menu_line "7) Remove relay"
+        menu_line "0) Back"
+        read -r -p "Choice: " c || return 0
+        case "$c" in
+            1|2|3|4|5)
+                case "$c" in 1) e=iptables ;; 2) e=gost ;; 3) e=haproxy ;; 4) e=socat ;; 5) e=xray ;; esac
+                read -r -p "Main server IP${e:+ (or domain)}: " t || continue
+                read -r -p "Ports, e.g. 443,8443 or 2096:443: " p || continue
+                pr=""
+                if [[ "$e" != "haproxy" ]]; then
+                    read -r -p "Protocol tcp/udp/both [both]: " pr || continue
+                fi
+                read -r -p "Name (optional): " n || continue
+                relay_add "$e" "$t" "$p" "$pr" "$n" || true
+                press_enter
+                ;;
+            6) relay_stats || true; press_enter ;;
+            7)
+                read -r -p "Relay name: " n || continue
+                [[ -n "$n" ]] && relay_remove "$n" || true
+                press_enter
+                ;;
+            0) return 0 ;;
+            *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ── Server tools (DNS / ping test / OS update) ──
+
+set_server_dns() {
+    local d1="${1:-}" d2="${2:-}" c=""
+    if [[ -z "$d1" ]]; then
+        menu_line "1) Cloudflare   1.1.1.1 1.0.0.1"
+        menu_line "2) Google       8.8.8.8 8.8.4.4"
+        menu_line "3) Shecan       178.22.122.100 185.51.200.2"
+        menu_line "4) Electro      78.157.42.100 78.157.42.101"
+        menu_line "5) Custom"
+        read -r -p "Choice: " c || return 1
+        case "$c" in
+            1) d1=1.1.1.1; d2=1.0.0.1 ;;
+            2) d1=8.8.8.8; d2=8.8.4.4 ;;
+            3) d1=178.22.122.100; d2=185.51.200.2 ;;
+            4) d1=78.157.42.100; d2=78.157.42.101 ;;
+            5) read -r -p "DNS 1: " d1 || return 1; read -r -p "DNS 2 (optional): " d2 || true ;;
+            *) return 1 ;;
+        esac
+    fi
+    validate_ipv4 "$d1" || { log_error "Invalid DNS: $d1"; return 1; }
+    [[ -z "$d2" ]] || validate_ipv4 "$d2" || { log_error "Invalid DNS: $d2"; return 1; }
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        install -d -m755 /etc/systemd/resolved.conf.d
+        printf '[Resolve]\nDNS=%s\nDomains=~.\n' "${d1}${d2:+ $d2}" > /etc/systemd/resolved.conf.d/99-jojonet.conf
+        systemctl restart systemd-resolved || { log_error "systemd-resolved restart failed"; return 1; }
+    else
+        [[ -e /etc/resolv.conf.jojonet.bak ]] || cp -P /etc/resolv.conf /etc/resolv.conf.jojonet.bak 2>/dev/null || true
+        [[ -L /etc/resolv.conf ]] && rm -f /etc/resolv.conf
+        printf 'nameserver %s\n' "$d1" ${d2:+"$d2"} > /etc/resolv.conf
+    fi
+    log_info "DNS set: $d1${d2:+ $d2}"
+}
+
+server_ping_test() {
+    local h out loss avg
+    echo -e "${CYAN}=== Ping test ===${NC}"
+    for h in github.com google.com cloudflare.com 1.1.1.1 8.8.8.8; do
+        out=$(ping -c 3 -W 2 -q "$h" 2>/dev/null || true)
+        loss=$(grep -oE '[0-9.]+% packet loss' <<< "$out" | cut -d% -f1 || true)
+        avg=$(grep -oE '= [0-9.]+/[0-9.]+' <<< "$out" | cut -d/ -f2 || true)
+        if [[ -n "$avg" ]]; then
+            echo -e "  ${GREEN}ok${NC}    ${h}  avg ${avg} ms  loss ${loss:-0}%"
+        else
+            echo -e "  ${RED}fail${NC}  ${h}"
+        fi
+    done
+}
+
+update_server_packages() {
+    log_note "Updating OS packages (this can take a while)..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf -y upgrade
+    elif command -v yum >/dev/null 2>&1; then
+        yum -y update
+    else
+        log_error "No supported package manager"
+        return 1
+    fi
+}
+
+server_tools_menu() {
+    local c=""
+    while true; do
+        clear_screen
+        logo
+        print_banner "Server tools"
+        menu_line "1) Set DNS"
+        menu_line "2) Ping test (GitHub / Google / Cloudflare)"
+        menu_line "3) Update OS packages"
+        menu_line "0) Back"
+        read -r -p "Choice: " c || return 0
+        case "$c" in
+            1) set_server_dns || true; press_enter ;;
+            2) server_ping_test; press_enter ;;
+            3) update_server_packages || true; press_enter ;;
+            0) return 0 ;;
+            *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
 create_boot_restore_service() {
     if ! cat << 'EOF' > "$BOOT_RESTORE_SCRIPT"
 #!/usr/bin/env bash
@@ -6752,6 +8593,8 @@ for conf in "$INSTANCES_DIR"/*.conf; do
         hysteria2) svc="jojonet-hy2@${name}.service" ;;
         rathole)   svc="jojonet-rathole@${name}.service" ;;
         wstunnel|ws) svc="jojonet-wstunnel@${name}.service" ;;
+        dokodemo|xray_reverse) svc="jojonet-xray@${name}.service" ;;
+        sit|gre6|ipip6) svc="jojonet-v6@${name}.service" ;;
         *)         svc="jojonet@${name}.service" ;;
     esac
     echo "[jojonet-boot] Ensuring $svc"
@@ -6819,6 +8662,8 @@ tunnel_service_unit() {
         hysteria2)  echo "jojonet-hy2@${name}.service" ;;
         rathole)    echo "jojonet-rathole@${name}.service" ;;
         wstunnel|ws) echo "jojonet-wstunnel@${name}.service" ;;
+        dokodemo|xray_reverse) echo "jojonet-xray@${name}.service" ;;
+        sit|gre6|ipip6) echo "jojonet-v6@${name}.service" ;;
         *)          echo "jojonet@${name}.service" ;;
     esac
 }
@@ -6902,6 +8747,10 @@ restart_tunnel() {
             pgrep -f "hysteria.*${name}" >/dev/null 2>&1 && unit_active=1
         elif [[ "$mode" == "tun_tcp" || "$mode" == "wireguard" || "$mode" == "gre" || "$mode" == "vxlan" ]]; then
             ip link show "$name" >/dev/null 2>&1 && unit_active=1
+        elif [[ "$mode" == "rathole" || "$mode" == "wstunnel" || "$mode" == "ws" ]]; then
+            unit_active=1
+        elif xray_mode "$mode"; then
+            xray_process_running "$name" && unit_active=1
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             unit_active=1
         fi
@@ -6946,6 +8795,15 @@ stop_tunnel_runtime() {
     systemctl stop "jojonet-u2r@${name}.service" >/dev/null 2>&1 || true
     pkill -f -- "tun-(server|client).*-device ${re}( |\$)" >/dev/null 2>&1 || true
     pkill -f -- "paqet run -c.*/${re}\\.yaml( |\$)" >/dev/null 2>&1 || true
+    pkill -f -- "xray run -c ${XRAY_CONFIG_DIR}/${re}\\.json( |\$)" >/dev/null 2>&1 || true
+    if [[ -r "$conf" ]] && grep -qE '^TunnelMode="(sit|gre6|ipip6)"' "$conf" 2>/dev/null; then
+        [[ -x "$V6_RUNNER" ]] && "$V6_RUNNER" stop "$conf" >/dev/null 2>&1 || true
+        local v6if=""
+        v6if=$(conf_get_field "$conf" "V6Iface")
+        if [[ -n "$v6if" ]] && ip link show "$v6if" >/dev/null 2>&1; then
+            ip link delete "$v6if" >/dev/null 2>&1 || true
+        fi
+    fi
     if [[ -r "$conf" ]] && grep -q '^TunnelMode="gre"' "$conf" 2>/dev/null; then
         local remote="" ports="" p
         remote=$(grep -E '^Tun_Remote_IP_Raw=' "$conf" 2>/dev/null | head -1 | cut -d'"' -f2)
@@ -6976,6 +8834,8 @@ tunnel_peer_setup_cmd() {
         hysteria2)   printf 'sudo jojonet --hy2 %s' "$loc_ip" ;;
         rathole)     printf 'sudo jojonet --rathole %s' "$loc_ip" ;;
         wstunnel|ws) printf 'sudo jojonet --wstunnel %s' "$loc_ip" ;;
+        dokodemo|xray_reverse|sit|gre6|ipip6)
+                     printf 'sudo jojonet %s %s' "$(tunnel_cli_flag "$mode")" "$loc_ip" ;;
         *)           printf 'sudo jojonet %s' "$loc_ip" ;;
     esac
 }
@@ -6989,7 +8849,7 @@ change_tunnel_peer_ip() {
     local peer_label="" old_peer="" Name="" TunnelMode="" Role="" Local_IP="" Remote_IP=""
     local Subnet_Byte="" Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" ForwardProto=""
-    local old_subnet="" old_tun_client="" old_tun_server=""
+    local old_subnet="" old_tun_client="" old_tun_server="" XRAY_NET="" v6_other=""
 
     set +e
     [[ -n "$tunnel_name" ]] || read -r -p "Tunnel name: " tunnel_name
@@ -7177,6 +9037,35 @@ change_tunnel_peer_ip() {
             tun_server=""
             tun_client=""
             ;;
+        wstunnel|ws)
+            tcp_port="${TcpPort:-$DEFAULT_WSTUNNEL_CTRL_PORT}"
+            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+            key_dir=$(ensure_wstunnel_token "$pair_id" "$rem_ip") || {
+                echo -e "${RED}[!] Wstunnel token setup failed.${NC}"
+                sleep 2; set -e; return 1
+            }
+            tun_ip="" tun_remote="" tun_server="" tun_client=""
+            ;;
+        dokodemo|xray_reverse)
+            tcp_port="${TcpPort:-$(xray_default_ctrl_port "$mode")}"
+            XRAY_NET="${XrayNet:-$DEFAULT_XRAY_NET}"
+            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+            key_dir=$(ensure_shared_secret "$pair_id" "$rem_ip" xray.uuid "Xray" uuid) || {
+                echo -e "${RED}[!] Xray UUID setup failed.${NC}"
+                sleep 2; set -e; return 1
+            }
+            tun_ip="" tun_remote="" tun_server="" tun_client=""
+            ;;
+        sit|gre6|ipip6)
+            if v6_other=$(v6_tunnel_for_peer "$rem_ip") && [[ "${v6_other%% *}" != "$tunnel_name" ]]; then
+                echo -e "${RED}[!] $rem_ip already has an IPv6 tunnel [${v6_other%% *}] — only one per peer.${NC}"
+                sleep 3; set -e; return 1
+            fi
+            tcp_port="" key_dir=""
+            v6_plan "$tunnel_name" "$role" "$loc_ip" "$rem_ip" "$mode"
+            subnet_byte="$V6_SB"
+            tun_ip="$V6_TUN_IP" tun_remote="$V6_TUN_REMOTE" tun_server="$V6_SERVER" tun_client="$V6_CLIENT"
+            ;;
         *)
             key_dir="${KeyDir:-}"
             subnet_byte=$(allocate_gre_subnet_byte "$loc_ip" "$rem_ip" "$role") || {
@@ -7194,7 +9083,7 @@ change_tunnel_peer_ip() {
     echo -e "\n${CYAN}--- New tunnel plan (replaces current) ---${NC}"
     echo -e "  Peer:      ${old_peer}  ->  ${GREEN}${rem_ip}${NC}"
     echo -e "  Subnet:    ${old_subnet:-?}  ->  ${GREEN}${subnet_byte}${NC}"
-    if [[ "$mode" =~ ^(gre|vxlan|wireguard|tun_tcp)$ ]]; then
+    if [[ "$mode" =~ ^(gre|vxlan|wireguard|tun_tcp|gre6|ipip6)$ ]]; then
         echo -e "  Overlay:   ${old_tun_client:-?} (Iran) <-> ${old_tun_server:-?} (Kharej)"
         echo -e "          -> ${GREEN}${tun_client} (Iran) <-> ${tun_server} (Kharej)${NC}"
     fi
@@ -7232,6 +9121,8 @@ change_tunnel_peer_ip() {
         cp "$backup" "$conf"
         rm -f "$backup"
         echo -e "${YELLOW}[*] Restored previous config; trying restart...${NC}"
+        repair_single_config "$conf" || true
+        systemctl enable "$(tunnel_service_unit "$tunnel_name")" >/dev/null 2>&1 || true
         restart_tunnel "$tunnel_name" || true
     fi
     sleep 3
@@ -7341,7 +9232,8 @@ teardown_tunnel_runtime() {
     pkill -f -- "/${re}\\.toml( |\$)" >/dev/null 2>&1 || true
     pkill -f -- "/${re}\\.cmd\\.sh( |\$)" >/dev/null 2>&1 || true
     rm -f "$PAQET_CONFIG_DIR/${name}.yaml" "$HY2_CONFIG_DIR/${name}.yaml" \
-        "$RATHOLE_CONFIG_DIR/${name}.toml" "$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh" 2>/dev/null || true
+        "$RATHOLE_CONFIG_DIR/${name}.toml" "$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh" \
+        "$XRAY_CONFIG_DIR/${name}.json" 2>/dev/null || true
     ip link show "$name" >/dev/null 2>&1 && ip link delete "$name" >/dev/null 2>&1 || true
     nft delete table ip "jojonet_$name" >/dev/null 2>&1 || true
     return 0
@@ -8543,6 +10435,11 @@ main_menu() {
         menu_line "19) Import manual GRETun"
         menu_line "20) Changelog / تغییرات نسخه‌ها"
         menu_line "21) WireGuard over ICMP / FakeTCP (udp2raw, anti-DPI)"
+        menu_line "22) Xray Dokodemo-door (Iran dials Kharej, VLESS)"
+        menu_line "23) Xray Reverse (Kharej dials Iran — Iran-access servers)"
+        menu_line "24) IPv6 tunnels: 6to4 / GRE6 / IPIP6"
+        menu_line "25) Relays — single server (iptables/GOST/HAProxy/Socat/Xray)"
+        menu_line "26) Server tools (DNS / ping test / OS update)"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -8615,6 +10512,22 @@ main_menu() {
                     *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
                 esac
                 ;;
+            22) quick_add_tunnel_xray dokodemo || true ;;
+            23) quick_add_tunnel_xray xray_reverse || true ;;
+            24)
+                echo "  1) 6to4 (SIT) — private IPv6 between the servers"
+                echo "  2) GRE6 over 6to4 — IPv4 overlay + port forward"
+                echo "  3) IPIP6 over 6to4 — IPv4 overlay + port forward (lighter)"
+                read -r -p "Choose [1-3]: " _vc || true
+                case "${_vc:-}" in
+                    1) quick_add_tunnel_v6 sit || true ;;
+                    2) quick_add_tunnel_v6 gre6 || true ;;
+                    3) quick_add_tunnel_v6 ipip6 || true ;;
+                    *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
+                esac
+                ;;
+            25) relay_menu || true ;;
+            26) server_tools_menu || true ;;
             0) clear_screen; opsec_scrub_history; exit 0 ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
         esac
@@ -8637,6 +10550,12 @@ create_rathole_runner_script >/dev/null 2>&1 || true
 create_rathole_service >/dev/null 2>&1 || true
 create_wstunnel_runner_script >/dev/null 2>&1 || true
 create_wstunnel_service >/dev/null 2>&1 || true
+create_xray_runner_script >/dev/null 2>&1 || true
+create_xray_service >/dev/null 2>&1 || true
+create_v6_runner_script >/dev/null 2>&1 || true
+create_v6_service >/dev/null 2>&1 || true
+create_relay_runner_script >/dev/null 2>&1 || true
+create_relay_service >/dev/null 2>&1 || true
 if [[ -x "$U2R_BIN" ]]; then
     create_u2r_runner_script >/dev/null 2>&1 || true
     create_u2r_service >/dev/null 2>&1 || true
@@ -8747,6 +10666,54 @@ if [[ "${1:-}" == "--rathole" || "${1:-}" == "--rh" ]] && [[ -n "${2:-}" ]]; the
 fi
 if [[ "${1:-}" == "--wstunnel" || "${1:-}" == "--ws" ]] && [[ -n "${2:-}" ]]; then
     quick_add_tunnel_wstunnel "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--dokodemo" || "${1:-}" == "--doko" ]] && [[ -n "${2:-}" ]]; then
+    quick_add_tunnel_xray dokodemo "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--xray-reverse" || "${1:-}" == "--xr" ]] && [[ -n "${2:-}" ]]; then
+    quick_add_tunnel_xray xray_reverse "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--6to4" || "${1:-}" == "--sit" ]] && [[ -n "${2:-}" ]]; then
+    quick_add_tunnel_v6 sit "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--gre6" && -n "${2:-}" ]]; then
+    quick_add_tunnel_v6 gre6 "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--ipip6" && -n "${2:-}" ]]; then
+    quick_add_tunnel_v6 ipip6 "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--relay" && -n "${2:-}" && -n "${3:-}" && -n "${4:-}" ]]; then
+    relay_add "$2" "$3" "$4" "${5:-}" "${6:-}" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--relay-list" ]]; then
+    relay_list
+    exit 0
+fi
+if [[ "${1:-}" == "--relay-remove" && -n "${2:-}" ]]; then
+    relay_remove "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--relay-stats" ]]; then
+    relay_stats "${2:-}" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--dns" ]]; then
+    set_server_dns "${2:-}" "${3:-}" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--ping-test" ]]; then
+    server_ping_test
+    exit 0
+fi
+if [[ "${1:-}" == "--update-server" ]]; then
+    update_server_packages && exit 0
     exit $?
 fi
 if [[ "${1:-}" == "--spoof-tunnel" || "${1:-}" == "--spoof" ]]; then

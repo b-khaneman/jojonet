@@ -1,4 +1,4 @@
-# JojoNet v1.5.9
+# JojoNet v1.6.0
 
 مدیر تانل **ایران ↔ خارج**  
 ریپو: https://github.com/b-khaneman/jojonet  
@@ -17,6 +17,7 @@ sudo jojonet --help
 
 | نسخه | چه چیزی اضافه / عوض شد |
 |------|-------------------------|
+| **1.6.0** | **Xray Dokodemo / Reverse**، **تانل‌های IPv6** (6to4 / GRE6 / IPIP6)، **رله تک‌سرور** (iptables/GOST/HAProxy/Socat/Xray)، ابزار DNS/پینگ/آپدیت |
 | **1.5.9** | **WireGuard داخل ICMP / FakeTCP** (`--wg-icmp` / `--wg-faketcp`)، **چک آمادگی Spoof** در پنل قبل از ساخت |
 | **1.5.8** | **Spoof Tunnel در پنل وب** (ساخت خودکار دو طرف + تست UDP سرتاسری)، `--spoof-remove` |
 | **1.5.7** | فیکس سینک کلید TUN/TCP و Paqet، `--delete`، export/import امن، **پنل وب فارسی** |
@@ -85,17 +86,17 @@ sudo jojonet
 sudo jojonet --version
 ```
 
-خروجی باید باشد: `jojonet 1.5.9`
+خروجی باید باشد: `jojonet 1.6.0`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole/Wstunnel که اول ایران بهتر است).
 
 ### نصب یک‌کلیکی از فایل zip
 
-فایل `JojoNet-v1.5.9-full.zip` را روی سرور کپی کن (مثلاً با `scp`) و:
+فایل `JojoNet-v1.6.0-full.zip` را روی سرور کپی کن (مثلاً با `scp`) و:
 
 ```bash
 sudo apt-get install -y unzip   # اگر unzip نداری
-unzip JojoNet-v1.5.9-full.zip -d jojonet && cd jojonet
+unzip JojoNet-v1.6.0-full.zip -d jojonet && cd jojonet
 sudo bash setup.sh              # منو: ۱) اسکریپت  ۲) پنل وب  ۳) هر دو
 ```
 
@@ -230,6 +231,56 @@ sudo jojonet --peer IP_خارج
 - پورت udp2raw از جفت سرور ساخته می‌شود (ICMP: `4096+X`، FakeTCP: `4352+X`)؛ با `JOJONET_WG_OBFS_PORT` قابل تغییر است. پورت UDP خود WireGuard روی خارج `پورت+10000` است و فقط روی localhost استفاده می‌شود.
 - سرویس کمکی: `jojonet-u2r@NAME.service` (همراه تانل start/stop می‌شود). قوانین iptables فقط برای IP همتا اضافه و موقع stop پاک می‌شوند.
 - برای FakeTCP پورت TCP روی خارج و برای ICMP پینگ ورودی باید از ایران باز باشد.
+
+---
+
+## Xray Dokodemo-door و Reverse (از 1.6.0)
+
+VLESS بین دو سرور. پورت‌های عمومی روی یک سمت به پورت هدف سمت دیگر فوروارد می‌شوند.
+
+| | Dokodemo-door | Reverse |
+|--|--|--|
+| **دستور** | `sudo jojonet --dokodemo PEER_IP` | `sudo jojonet --xray-reverse PEER_IP` |
+| **منو** | گزینه `22` | گزینه `23` |
+| **چه کسی dial می‌کند** | ایران به خارج | خارج به ایران (پورتال) |
+| **مناسب** | مسیر ایران→خارج باز است | سرور ایران‌اکسس / ایران به خارج وصل نمی‌شود |
+
+- انتقال: `tcp` (پیش‌فرض)، `ws` یا `grpc` — `JOJONET_XRAY_NET`
+- پورت کنترل یکسان روی هر دو طرف: Dokodemo `4443`، Reverse `4444` — `JOJONET_XRAY_CTRL_PORT`
+- فوروارد: `JOJONET_FWD_PORTS=443` یا `8443:443,2053` (ایران گوش می‌دهد : هدف خارج)
+- کلید مشترک: `/etc/jojonet/keys/pair_<IP>/xray.uuid`
+- سرویس: `jojonet-xray@NAME.service` — Xray v25.3.6
+
+---
+
+## تانل‌های IPv6: 6to4 / GRE6 / IPIP6 (از 1.6.0)
+
+بین دو سرور IPv4 یک لینک IPv6 خصوصی ساخته می‌شود. GRE6 و IPIP6 روی همان SIT یک اورلی IPv4 هم می‌گذارند.
+
+| | 6to4 (SIT) | GRE6 | IPIP6 |
+|--|--|--|--|
+| **دستور** | `sudo jojonet --6to4 PEER_IP` | `sudo jojonet --gre6 PEER_IP` | `sudo jojonet --ipip6 PEER_IP` |
+| **منو** | گزینه `24` ← `1` | گزینه `24` ← `2` | گزینه `24` ← `3` |
+| **آدرس** | `fd6a:XXXX:XXXX::1` / `::2` | overlay `172.22.X.1/2` | overlay `172.23.X.1/2` |
+
+- فقط **یک** تانل v6 بین هر جفت سرور.
+- سرویس: `jojonet-v6@NAME.service`
+
+---
+
+## رله تک‌سرور (از 1.6.0)
+
+کاربران به **سرور ایران** وصل می‌شوند؛ ترافیک به سرور اصلی (مقصد) می‌رود. روی مقصد JojoNet لازم نیست.
+
+```bash
+sudo jojonet --relay iptables 203.0.113.10 443,8443
+sudo jojonet --relay xray 203.0.113.10 2096:443 tcp
+sudo jojonet --relay-list
+sudo jojonet --relay-stats NAME
+sudo jojonet --relay-remove NAME
+```
+
+موتورها: `iptables` (سریع‌ترین، TCP+UDP)، `gost`، `haproxy` (فقط TCP)، `socat`، `xray` (آمار ترافیک). منو گزینه `25`.
 
 ---
 
@@ -385,7 +436,10 @@ sudo jojonet --role kharej --qs
 | GRE بسته، TCP باز | **TUN/TCP** یا **Rathole** / **Wstunnel** |
 | فیلتر شدید / نیاز سرعت | **Hysteria2** (+ Hop Port) |
 | مسیر ناپایدار | **Paqet** یا **Hysteria2** |
-| ریورس (خارج dial به ایران) | **Rathole** / **Wstunnel** |
+| ریورس (خارج dial به ایران) | **Rathole** / **Wstunnel** / **Xray Reverse** |
+| ایران به خارج وصل می‌شود، VLESS می‌خواهی | **Xray Dokodemo-door** |
+| نیاز به IPv6 خصوصی بین دو سرور | **6to4 / GRE6 / IPIP6** |
+| رله روی ایران بدون نصب روی مقصد | **رله iptables / GOST / Xray** |
 | هر دو provider قابلیت source spoof دارند | **Spoof Tunnel** |
 | DNS مناسب + لایه UDP قابل‌اعتماد داری | **QS-Tunnel + HY2/WG/xhttp-h3** |
 
@@ -419,6 +473,11 @@ sudo jojonet --import-config /root/jn-bak.tar.gz
 
 # حذف یک تانل (بدون پرسش)
 sudo jojonet --delete NAME
+
+# رله تک‌سرور
+sudo jojonet --relay iptables MAIN_IP 443,8443
+sudo jojonet --relay-list
+sudo jojonet --relay-remove NAME
 
 # کلید بدون SSH (WG/HY2/Rathole/Wstunnel: IP طرف مقابل — TUN/TCP و Paqet: شماره subnet)
 sudo jojonet --export-keys PEER_IP /root/k.tar.gz

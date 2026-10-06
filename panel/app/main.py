@@ -24,7 +24,13 @@ from .jobs import JobManager
 from .orchestrator import (
     DELETE_STEPS,
     DEPLOY_STEPS,
+    DNS_STEPS,
     INSTALL_STEPS,
+    OS_UPDATE_STEPS,
+    PING_TEST_STEPS,
+    RELAY_DELETE_STEPS,
+    RELAY_STATS_STEPS,
+    RELAY_STEPS,
     SPOOF_CHECK_STEPS,
     TEST_STEPS,
     VERIFY_STEPS,
@@ -42,7 +48,21 @@ from .security import (
     token_hash,
     verify_password,
 )
-from .validators import MODES, NAME_RE, USER_RE, valid_host_port, valid_ipv4
+from .validators import (
+    MODES,
+    NAME_RE,
+    RELAY_ENGINES,
+    RELAY_PROTOS,
+    USER_RE,
+    V6_MODES,
+    XRAY_MODES,
+    XRAY_NETS,
+    valid_host_port,
+    valid_ipv4,
+    valid_relay_name,
+    valid_relay_target,
+    valid_xray_ports,
+)
 
 COOKIE = "jn_session"
 STATIC_ASSETS = ("index.html", "app.js", "style.css", "logo.svg")
@@ -181,11 +201,30 @@ class SpoofOptions(BaseModel):
         return self
 
 
+class XrayOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    net: Literal["tcp", "ws", "grpc"] = "tcp"
+    ctrl_port: int | None = Field(default=None, ge=1, le=65535)
+    ports: str | None = Field(default=None, max_length=120)
+
+    @field_validator("ports")
+    @classmethod
+    def _ports(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        v = str(v).replace(" ", "")
+        if not valid_xray_ports(v):
+            raise ValueError("پورت‌های Xray باید به شکل 443 یا 8443:443 باشند (حداکثر ۱۶ مورد)")
+        return v
+
+
 class TunnelIn(BaseModel):
     mode: str
     iran_id: int
     kharej_id: int
     spoof: SpoofOptions | None = None
+    xray: XrayOptions | None = None
 
     @field_validator("mode")
     @classmethod
@@ -200,6 +239,73 @@ class TunnelIn(BaseModel):
             raise ValueError("برای تانل Spoof، IP جعلی هر دو سرور لازم است")
         if self.mode != "spoof":
             self.spoof = None
+        if self.mode not in XRAY_MODES:
+            self.xray = None
+        return self
+
+
+class RelayIn(BaseModel):
+    engine: str
+    iran_id: int
+    target: str
+    ports: str
+    proto: Literal["tcp", "udp", "both"] = "both"
+    name: str | None = Field(default=None, max_length=24)
+
+    @field_validator("engine")
+    @classmethod
+    def _engine(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in RELAY_ENGINES:
+            raise ValueError("موتور رله باید iptables، gost، haproxy، socat یا xray باشد")
+        return v
+
+    @field_validator("ports")
+    @classmethod
+    def _ports(cls, v: str) -> str:
+        v = v.replace(" ", "")
+        if not valid_xray_ports(v):
+            raise ValueError("پورت‌ها باید به شکل 443 یا 2096:443 باشند (حداکثر ۱۶ مورد)")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        v = v.strip().lower()
+        if not valid_relay_name(v):
+            raise ValueError("نام رله: حروف کوچک انگلیسی، عدد و خط تیره (حداکثر ۲۴)")
+        return v
+
+    @model_validator(mode="after")
+    def _target(self) -> "RelayIn":
+        self.target = self.target.strip()
+        if self.engine == "haproxy" and self.proto != "tcp":
+            raise ValueError("رله HAProxy فقط TCP است")
+        if not valid_relay_target(self.target, ipv4_only=self.engine == "iptables"):
+            raise ValueError("مقصد رله باید IPv4 معتبر باشد" if self.engine == "iptables" else "مقصد رله باید IPv4 یا دامنه معتبر باشد")
+        return self
+
+
+class DnsIn(BaseModel):
+    dns1: str
+    dns2: str | None = None
+
+    @field_validator("dns1", "dns2")
+    @classmethod
+    def _dns(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        v = str(v).strip()
+        if not valid_ipv4(v):
+            raise ValueError("آدرس DNS باید IPv4 معتبر باشد")
+        return v
+
+    @model_validator(mode="after")
+    def _need_primary(self) -> "DnsIn":
+        if not self.dns1:
+            raise ValueError("حداقل یک DNS لازم است")
         return self
 
 
@@ -427,6 +533,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "panel_version": PANEL_VERSION,
             "jojonet_version": bundle_version(settings.bundle_dir),
             "modes": [{"id": k, "label": v["label"], "first": v["first"], "desc": v["desc"]} for k, v in MODES.items()],
+            "xray_nets": list(XRAY_NETS),
+            "relay_engines": list(RELAY_ENGINES),
+            "relay_protos": list(RELAY_PROTOS),
         }
 
     # ---------- servers ----------
@@ -509,6 +618,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         get_server(server_id)
         if db.one("SELECT id FROM tunnels WHERE iran_id=? OR kharej_id=?", (server_id, server_id)):
             raise HTTPException(409, "این سرور در تانل‌ها استفاده شده است؛ ابتدا تانل‌ها را حذف کنید")
+        if db.one("SELECT id FROM relays WHERE server_id=?", (server_id,)):
+            raise HTTPException(409, "این سرور رله فعال دارد؛ ابتدا رله‌ها را حذف کنید")
         db.execute("DELETE FROM servers WHERE id=?", (server_id,))
         return {"ok": True}
 
@@ -570,6 +681,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if dup:
             raise HTTPException(409, "همین تانل قبلاً ساخته شده است؛ از «استقرار مجدد» استفاده کنید")
+        if data.mode in V6_MODES and db.one(
+            "SELECT id FROM tunnels WHERE iran_id=? AND kharej_id=? AND mode IN ('sit','gre6','ipip6')",
+            (iran["id"], kharej["id"]),
+        ):
+            raise HTTPException(409, "برای هر جفت سرور فقط یک تانل IPv6 (6to4/GRE6/IPIP6) مجاز است؛ ابتدا تانل قبلی را حذف کنید")
         if data.mode == "spoof" and db.one(
             "SELECT id FROM tunnels WHERE mode='spoof' AND (iran_id=? OR kharej_id=?)", (iran["id"], kharej["id"])
         ):
@@ -577,7 +693,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tid = db.insert("tunnels", {
             "mode": data.mode, "iran_id": iran["id"], "kharej_id": kharej["id"],
             "status": "deploying", "created_at": utcnow(),
-            "options": data.spoof.model_dump() if data.spoof else None,
+            "options": (
+                data.spoof.model_dump() if data.spoof else (data.xray.model_dump() if data.xray else None)
+            ),
         })
         label = MODES[data.mode]["label"]
         job_id = start_deploy(tid, f"ساخت تانل {label}: {iran['name']} ↔ {kharej['name']}", False)
@@ -608,6 +726,107 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                              lambda job: orch.job_delete(job, tunnel_id, force), tunnel_id=tunnel_id,
                              on_finish=mark_failed(tunnel_id))
         db.update("tunnels", tunnel_id, {"status": "deleting", "last_job_id": job_id})
+        return {"job_id": job_id}
+
+    def get_relay(relay_id: int) -> dict[str, Any]:
+        row = db.one("SELECT * FROM relays WHERE id=?", (relay_id,))
+        if row is None:
+            raise HTTPException(404, "رله پیدا نشد")
+        return row
+
+    def relay_out(row: dict[str, Any], names: dict[int, str] | None = None) -> dict[str, Any]:
+        names = server_names() if names is None else names
+        out = {k: row[k] for k in (
+            "id", "name", "engine", "server_id", "target", "ports", "proto",
+            "status", "last_job_id", "last_check", "created_at",
+        )}
+        out["server_name"] = names.get(row["server_id"], "?")
+        return out
+
+    def mark_relay_failed(relay_id: int):
+        def _done(ok: bool) -> None:
+            row = db.one("SELECT status FROM relays WHERE id=?", (relay_id,))
+            if row and not ok and row["status"] in ("deploying", "deleting"):
+                db.update("relays", relay_id, {"status": "failed"})
+        return _done
+
+    @app.get("/api/relays")
+    async def list_relays(_: dict = Depends(require_auth)) -> list[dict[str, Any]]:
+        names = server_names()
+        return [relay_out(r, names) for r in db.all("SELECT * FROM relays ORDER BY id DESC")]
+
+    @app.post("/api/relays")
+    async def add_relay(data: RelayIn, _: dict = Depends(require_auth)) -> dict[str, Any]:
+        iran = get_server(data.iran_id)
+        if iran["role"] != "iran":
+            raise HTTPException(422, "رله را روی سرور ایران بسازید")
+        name = data.name or f"{data.engine}-{data.ports.split(',')[0].split(':')[0]}"
+        if not valid_relay_name(name):
+            raise HTTPException(422, "نام رله نامعتبر است")
+        if db.one("SELECT id FROM relays WHERE name=?", (name,)):
+            raise HTTPException(409, "رله‌ای با این نام قبلاً ثبت شده است")
+        rid = db.insert("relays", {
+            "name": name, "engine": data.engine, "server_id": iran["id"],
+            "target": data.target, "ports": data.ports, "proto": data.proto,
+            "status": "deploying", "created_at": utcnow(),
+        })
+        job_id = jobs.create(
+            "relay_add", f"ساخت رله {name} ({data.engine})", RELAY_STEPS,
+            lambda job: orch.job_relay_add(job, rid), server_id=iran["id"], on_finish=mark_relay_failed(rid),
+        )
+        db.update("relays", rid, {"last_job_id": job_id})
+        return {"relay": relay_out(get_relay(rid)), "job_id": job_id}
+
+    @app.post("/api/relays/{relay_id}/stats")
+    async def relay_stats(relay_id: int, _: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_relay(relay_id)
+        job_id = jobs.create(
+            "relay_stats", f"آمار رله {row['name']}", RELAY_STATS_STEPS,
+            lambda job: orch.job_relay_stats(job, relay_id), server_id=row["server_id"],
+        )
+        db.update("relays", relay_id, {"last_job_id": job_id})
+        return {"job_id": job_id}
+
+    @app.delete("/api/relays/{relay_id}")
+    async def delete_relay(relay_id: int, data: DeleteIn | None = None, _: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_relay(relay_id)
+        force = bool(data and data.force is True)
+        if not force and row["status"] in ("deploying", "deleting"):
+            raise HTTPException(409, "یک عملیات دیگر روی این رله در حال اجراست")
+        job_id = jobs.create(
+            "relay_delete", f"حذف رله {row['name']}", RELAY_DELETE_STEPS,
+            lambda job: orch.job_relay_delete(job, relay_id, force), server_id=row["server_id"],
+            on_finish=mark_relay_failed(relay_id),
+        )
+        db.update("relays", relay_id, {"status": "deleting", "last_job_id": job_id})
+        return {"job_id": job_id}
+
+    @app.post("/api/servers/{server_id}/dns")
+    async def server_dns(server_id: int, data: DnsIn, _: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_server(server_id)
+        job_id = jobs.create(
+            "server_dns", f"تنظیم DNS روی {row['name']}", DNS_STEPS,
+            lambda job: orch.job_server_dns(job, server_id, data.dns1, data.dns2 or ""),
+            server_id=server_id,
+        )
+        return {"job_id": job_id}
+
+    @app.post("/api/servers/{server_id}/ping-test")
+    async def server_ping(server_id: int, _: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_server(server_id)
+        job_id = jobs.create(
+            "server_ping", f"تست پینگ {row['name']}", PING_TEST_STEPS,
+            lambda job: orch.job_server_ping(job, server_id), server_id=server_id,
+        )
+        return {"job_id": job_id}
+
+    @app.post("/api/servers/{server_id}/update-os")
+    async def server_update_os(server_id: int, _: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_server(server_id)
+        job_id = jobs.create(
+            "server_update", f"آپدیت سیستم {row['name']}", OS_UPDATE_STEPS,
+            lambda job: orch.job_server_update(job, server_id), server_id=server_id,
+        )
         return {"job_id": job_id}
 
     # ---------- jobs ----------

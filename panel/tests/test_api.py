@@ -68,7 +68,7 @@ def test_login_logout_and_csrf(client, admin):
     assert "httponly" in cookie and "samesite=strict" in cookie
     csrf = r.json()["csrf"]
     me = client.get("/api/me").json()
-    assert me["username"] == "admin" and me["csrf"] == csrf and me["jojonet_version"] == "1.5.9"
+    assert me["username"] == "admin" and me["csrf"] == csrf and me["jojonet_version"] == "1.6.0"
     assert client.post("/api/servers", json=SERVER).status_code == 403
     assert client.post("/api/servers", json=SERVER, headers={"X-CSRF-Token": "bad"}).status_code == 403
     assert client.post("/api/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
@@ -248,8 +248,14 @@ def test_password_change(client, auth, admin):
 def test_info_modes(client, auth):
     info = client.get("/api/info").json()
     ids = [m["id"] for m in info["modes"]]
-    assert ids == ["gre", "tun_tcp", "paqet", "vxlan", "wireguard", "wg_icmp", "wg_faketcp", "hysteria2", "rathole", "wstunnel", "spoof"]
-    assert {m["id"]: m["first"] for m in info["modes"]}["rathole"] == "iran"
+    assert ids == [
+        "gre", "tun_tcp", "paqet", "vxlan", "wireguard", "wg_icmp", "wg_faketcp", "hysteria2",
+        "rathole", "wstunnel", "dokodemo", "xray_reverse", "sit", "gre6", "ipip6", "spoof",
+    ]
+    firsts = {m["id"]: m["first"] for m in info["modes"]}
+    assert firsts["rathole"] == "iran" and firsts["dokodemo"] == "kharej" and firsts["xray_reverse"] == "iran"
+    assert info["xray_nets"] == ["tcp", "ws", "grpc"]
+    assert info["relay_engines"] == ["iptables", "gost", "haproxy", "socat", "xray"]
 
 
 def test_spoof_validation(client, auth, fake_orch):
@@ -287,6 +293,30 @@ def test_spoof_validation(client, auth, fake_orch):
     assert r.status_code == 200
     gre = next(t for t in client.get("/api/tunnels").json() if t["mode"] == "gre")
     assert gre["options"] is None
+
+
+def test_xray_and_relay_validation(client, auth, fake_orch):
+    iran = client.post("/api/servers", json=SERVER, headers=auth).json()
+    kharej = client.post("/api/servers", json=KHAREJ, headers=auth).json()
+    bad = [
+        {"mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"], "xray": {"net": "quic"}},
+        {"mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"], "xray": {"ports": "70000"}},
+        {"mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"], "xray": {"ports": "443;rm"}},
+        {"mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"], "xray": {"ctrl_port": 0}},
+    ]
+    for case in bad:
+        r = client.post("/api/tunnels", json=case, headers=auth)
+        assert r.status_code == 422, (case, r.text)
+    r = client.post("/api/tunnels", json={"mode": "dokodemo", "iran_id": iran["id"], "kharej_id": kharej["id"],
+                                         "xray": {"net": "grpc", "ports": "8443:443"}}, headers=auth)
+    assert r.status_code == 200
+    wait_job(client, r.json()["job_id"])
+    opts = next(t for t in client.get("/api/tunnels").json() if t["mode"] == "dokodemo")["options"]
+    assert opts["net"] == "grpc" and opts["ports"] == "8443:443"
+    assert client.post("/api/relays", json={"engine": "iptables", "iran_id": iran["id"], "target": "example.com", "ports": "443"}, headers=auth).status_code == 422
+    assert client.post("/api/relays", json={"engine": "haproxy", "iran_id": iran["id"], "target": "9.9.9.9", "ports": "443", "proto": "udp"}, headers=auth).status_code == 422
+    assert client.post("/api/relays", json={"engine": "nope", "iran_id": iran["id"], "target": "9.9.9.9", "ports": "443"}, headers=auth).status_code == 422
+    assert client.post("/api/servers/{}/dns".format(iran["id"]), json={"dns1": "not-ip"}, headers=auth).status_code == 422
 
 
 def test_cli_set_admin_and_has_admin(settings, monkeypatch, capsys):
