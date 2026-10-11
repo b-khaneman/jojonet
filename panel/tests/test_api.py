@@ -59,6 +59,26 @@ def test_requires_login(client):
     assert client.get("/api/me").status_code == 401
 
 
+def test_term_ws_requires_login(client):
+    with client.websocket_connect("/ws/term?server_id=1") as ws:
+        msg = ws.receive_json()
+        assert msg["t"] == "e"
+        assert "وارد" in msg["m"]
+
+
+def test_term_ws_unknown_server(client, auth):
+    with client.websocket_connect("/ws/term?server_id=99") as ws:
+        msg = ws.receive_json()
+        assert msg["t"] == "e"
+
+
+def test_index_has_side_terminals(client):
+    html = client.get("/").text
+    assert "id=\"hx-left\"" in html and "id=\"hx-right\"" in html
+    assert "vendor/xterm.min.js" in html
+    assert "0.67" not in html
+
+
 def test_login_logout_and_csrf(client, admin):
     r = client.post("/api/login", json={"username": "admin", "password": "nope"})
     assert r.status_code == 401
@@ -69,6 +89,7 @@ def test_login_logout_and_csrf(client, admin):
     csrf = r.json()["csrf"]
     me = client.get("/api/me").json()
     assert me["username"] == "admin" and me["csrf"] == csrf and me["jojonet_version"] == "1.6.0"
+    assert me["role"] == "owner" and me["days_left"] is None
     assert client.post("/api/servers", json=SERVER).status_code == 403
     assert client.post("/api/servers", json=SERVER, headers={"X-CSRF-Token": "bad"}).status_code == 403
     assert client.post("/api/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
@@ -147,6 +168,67 @@ def fake_orch(client, monkeypatch):
     monkeypatch.setattr(orch, "job_deploy", deploy)
     monkeypatch.setattr(orch, "job_redeploy", boom)
     return calls
+
+
+def test_live_tunnels_scan_and_enable_boot(client, auth, monkeypatch):
+    iran = client.post("/api/servers", json=SERVER, headers=auth).json()
+    kharej = client.post("/api/servers", json=KHAREJ, headers=auth).json()
+    orch = client.app.state.orch
+    owner_id = orch.db.one("SELECT owner_id FROM servers WHERE id=?", (iran["id"],))["owner_id"]
+    tid = orch.db.insert("tunnels", {
+        "mode": "gre", "iran_id": iran["id"], "kharej_id": kharej["id"],
+        "status": "ok", "iran_iface": "gre9", "kharej_iface": "gre9",
+        "created_at": "2026-01-01T00:00:00+00:00", "owner_id": owner_id,
+    })
+
+    async def fake_scan(servers, tunnels):
+        assert len(servers) == 2
+        return [
+            {
+                "id": iran["id"], "name": "Iran-1", "role": "iran", "host": SERVER["host"],
+                "ok": True, "error": None,
+                "tunnels": [{
+                    "name": "gre9", "mode": "gre", "role": "iran", "local_ip": "5.6.7.8",
+                    "remote_ip": "1.2.3.4", "status": "UP", "boot": False,
+                    "unit": "jojonet@gre9.service",
+                    "panel_tunnel_id": tid, "orphan": False,
+                }],
+            },
+            {
+                "id": kharej["id"], "name": "DE-1", "role": "kharej", "host": KHAREJ["host"],
+                "ok": True, "error": None,
+                "tunnels": [{
+                    "name": "orphan1", "mode": "icmp", "role": "kharej", "local_ip": "1.2.3.4",
+                    "remote_ip": "", "status": "UP", "boot": True,
+                    "unit": "jojonet-stream@orphan1.service",
+                    "panel_tunnel_id": None, "orphan": True,
+                }],
+            },
+        ]
+
+    boot_calls = []
+
+    async def fake_boot(job, server_id):
+        boot_calls.append(server_id)
+        await job.start(0)
+        await job.ok(0)
+        await job.start(1)
+        await job.ok(1, "ok")
+
+    monkeypatch.setattr(orch, "scan_live_tunnels", fake_scan)
+    monkeypatch.setattr(orch, "job_enable_boot", fake_boot)
+
+    live = client.get("/api/tunnels/live", headers=auth).json()
+    assert live["servers"][0]["tunnels"][0]["panel_tunnel_id"] == tid
+    assert live["servers"][1]["tunnels"][0]["orphan"] is True
+
+    job = wait_job(client, client.post(f"/api/servers/{iran['id']}/enable-boot", headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and boot_calls == [iran["id"]]
+
+    all_jobs = client.post("/api/servers/enable-boot-all", headers=auth).json()
+    assert all_jobs["count"] == 2 and len(all_jobs["job_ids"]) == 2
+    for jid in all_jobs["job_ids"]:
+        assert wait_job(client, jid)["status"] == "ok"
 
 
 def test_tunnel_lifecycle_with_fake_orchestrator(client, auth, fake_orch):
@@ -250,12 +332,19 @@ def test_info_modes(client, auth):
     ids = [m["id"] for m in info["modes"]]
     assert ids == [
         "gre", "tun_tcp", "paqet", "vxlan", "wireguard", "wg_icmp", "wg_faketcp", "hysteria2",
-        "rathole", "wstunnel", "dokodemo", "xray_reverse", "sit", "gre6", "ipip6", "spoof",
+        "rathole", "wstunnel", "dokodemo", "xray_reverse", "sit", "gre6", "ipip6", "dnstt", "icmp", "spoof",
     ]
     firsts = {m["id"]: m["first"] for m in info["modes"]}
     assert firsts["rathole"] == "iran" and firsts["dokodemo"] == "kharej" and firsts["xray_reverse"] == "iran"
     assert info["xray_nets"] == ["tcp", "ws", "grpc"]
     assert info["relay_engines"] == ["iptables", "gost", "haproxy", "socat", "xray"]
+    assert info["direct_modes"] == ["dnstt", "icmp"]
+    assert info["user_sides"] == ["iran", "kharej"]
+    assert info["vpn_panels"] == [
+        {"id": "xui", "label": "3x-ui سنایی"},
+        {"id": "xui_classic", "label": "X-UI اصلی"},
+        {"id": "pasarguard", "label": "پاسارگارد"},
+    ]
 
 
 def test_spoof_validation(client, auth, fake_orch):
@@ -317,6 +406,108 @@ def test_xray_and_relay_validation(client, auth, fake_orch):
     assert client.post("/api/relays", json={"engine": "haproxy", "iran_id": iran["id"], "target": "9.9.9.9", "ports": "443", "proto": "udp"}, headers=auth).status_code == 422
     assert client.post("/api/relays", json={"engine": "nope", "iran_id": iran["id"], "target": "9.9.9.9", "ports": "443"}, headers=auth).status_code == 422
     assert client.post("/api/servers/{}/dns".format(iran["id"]), json={"dns1": "not-ip"}, headers=auth).status_code == 422
+
+
+def test_dnstt_and_icmp_validation(client, auth, fake_orch):
+    iran = client.post("/api/servers", json=SERVER, headers=auth).json()
+    kharej = client.post("/api/servers", json=KHAREJ, headers=auth).json()
+    base_dt = {"mode": "dnstt", "iran_id": iran["id"], "kharej_id": kharej["id"]}
+    for case in (
+        {},
+        {"dnstt": {"domain": "nope"}},
+        {"dnstt": {"domain": "t.example.com", "resolver_mode": "ftp"}},
+        {"dnstt": {"domain": "t.example.com", "resolver_mode": "doh", "resolver": "http://evil"}},
+        {"dnstt": {"domain": "t.example.com", "ports": "70000"}},
+        {"dnstt": {"domain": "t.example.com", "extra": "x"}},
+    ):
+        r = client.post("/api/tunnels", json={**base_dt, **case}, headers=auth)
+        assert r.status_code == 422, (case, r.text)
+    r = client.post("/api/tunnels", json={**base_dt, "dnstt": {"domain": "t.example.com", "resolver_mode": "dot"}}, headers=auth)
+    assert r.status_code == 200, r.text
+    wait_job(client, r.json()["job_id"])
+    opts = next(t for t in client.get("/api/tunnels").json() if t["mode"] == "dnstt")["options"]
+    assert opts["domain"] == "t.example.com" and opts["resolver_mode"] == "dot"
+    other = client.post("/api/servers", json={**KHAREJ, "name": "NL-2", "host": "1.2.3.6"}, headers=auth).json()
+    r = client.post("/api/tunnels", json={**base_dt, "kharej_id": other["id"], "dnstt": {"domain": "u.example.com"}}, headers=auth)
+    assert r.status_code == 409
+    r = client.post("/api/tunnels", json={"mode": "icmp", "iran_id": iran["id"], "kharej_id": kharej["id"]}, headers=auth)
+    assert r.status_code == 200, r.text
+    wait_job(client, r.json()["job_id"])
+    r = client.post("/api/tunnels", json={"mode": "icmp", "iran_id": iran["id"], "kharej_id": other["id"]}, headers=auth)
+    assert r.status_code == 409
+
+
+def test_direct_mode_validation(client, auth, fake_orch):
+    iran = client.post("/api/servers", json=SERVER, headers=auth).json()
+    kharej = client.post("/api/servers", json=KHAREJ, headers=auth).json()
+    assert client.post("/api/tunnels", json={"mode": "gre", "direct": True, "kharej_id": kharej["id"]}, headers=auth).status_code == 422
+    assert client.post("/api/tunnels", json={"mode": "dnstt", "direct": True, "kharej_id": kharej["id"]}, headers=auth).status_code == 422
+    r = client.post(
+        "/api/tunnels",
+        json={"mode": "dnstt", "direct": True, "kharej_id": kharej["id"], "dnstt": {"domain": "t.example.com"}},
+        headers=auth,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()["tunnel"]
+    assert body["direct"] is True and body["iran_id"] == body["kharej_id"] == kharej["id"]
+    wait_job(client, r.json()["job_id"])
+    paired = client.post(
+        "/api/tunnels",
+        json={"mode": "dnstt", "iran_id": iran["id"], "kharej_id": kharej["id"], "dnstt": {"domain": "u.example.com"}},
+        headers=auth,
+    )
+    assert paired.status_code == 409
+    r = client.post("/api/tunnels", json={"mode": "icmp", "direct": True, "kharej_id": kharej["id"]}, headers=auth)
+    assert r.status_code == 200, r.text
+    wait_job(client, r.json()["job_id"])
+
+
+def test_users_side_validation(client, auth, fake_orch):
+    iran = client.post("/api/servers", json=SERVER, headers=auth).json()
+    kharej = client.post("/api/servers", json=KHAREJ, headers=auth).json()
+    assert client.post("/api/tunnels", json={
+        "mode": "spoof", "iran_id": iran["id"], "kharej_id": kharej["id"], "users": "kharej",
+        "spoof": {"iran_spoof_ip": "5.160.0.1", "kharej_spoof_ip": "8.8.4.4"},
+    }, headers=auth).status_code == 422
+    r = client.post("/api/tunnels", json={
+        "mode": "gre", "iran_id": iran["id"], "kharej_id": kharej["id"], "users": "kharej",
+    }, headers=auth)
+    assert r.status_code == 200, r.text
+    body = r.json()["tunnel"]
+    assert body["users"] == "kharej" and body["direct"] is False
+    wait_job(client, r.json()["job_id"])
+    r = client.post("/api/tunnels", json={
+        "mode": "icmp", "users": "kharej", "iran_id": iran["id"], "kharej_id": kharej["id"],
+    }, headers=auth)
+    assert r.status_code == 200, r.text
+    body = r.json()["tunnel"]
+    assert body["direct"] is True and body["users"] == "kharej" and body["iran_id"] == body["kharej_id"]
+    wait_job(client, r.json()["job_id"])
+
+
+def test_vpn_panel_validation(client, auth, monkeypatch):
+    iran = client.post("/api/servers", json=SERVER, headers=auth).json()
+    assert client.post(f"/api/servers/{iran['id']}/vpn-panel", json={"kind": "nope"}, headers=auth).status_code == 422
+    assert client.post(f"/api/servers/{iran['id']}/vpn-panel", json={}, headers=auth).status_code == 422
+
+    async def fake_vpn(job, server_id, kind):
+        await job.start(0)
+        await job.ok(0)
+        await job.start(1)
+        await job.ok(1)
+        await job.start(2)
+        await job.ok(2, kind)
+        await job.start(3)
+        await job.ok(3, "http://1.2.3.4:2053/")
+
+    monkeypatch.setattr(client.app.state.orch, "job_vpn_panel", fake_vpn)
+    r = client.post(f"/api/servers/{iran['id']}/vpn-panel", json={"kind": "xui"}, headers=auth)
+    assert r.status_code == 200 and "job_id" in r.json()
+    assert wait_job(client, r.json()["job_id"])["status"] == "ok"
+    r = client.post(f"/api/servers/{iran['id']}/vpn-panel", json={"kind": "pasarguard"}, headers=auth)
+    assert r.status_code == 200 and wait_job(client, r.json()["job_id"])["status"] == "ok"
+    r = client.post(f"/api/servers/{iran['id']}/vpn-panel", json={"kind": "xui_classic"}, headers=auth)
+    assert r.status_code == 200 and wait_job(client, r.json()["job_id"])["status"] == "ok"
 
 
 def test_cli_set_admin_and_has_admin(settings, monkeypatch, capsys):

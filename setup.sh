@@ -4,6 +4,9 @@
 #   sudo bash setup.sh            # menu
 #   sudo bash setup.sh script     # JojoNet tunnel script only
 #   sudo bash setup.sh panel [--port N] [--host ADDR] [--domain NAME [--email ADDR]] [--no-firewall]
+#   sudo bash setup.sh xui          # official MHSanaei 3x-ui (one click)
+#   sudo bash setup.sh xui-classic  # official alireza0 X-UI (one click)
+#   sudo bash setup.sh pasarguard   # official PasarGuard (one click)
 #   sudo bash setup.sh all   [panel options]
 #
 # Run from the extracted package directory (zip/tarball).
@@ -27,11 +30,14 @@ usage() {
     cat <<'EOF'
 JojoNet setup
 
-Usage: sudo bash setup.sh [script|panel|all] [panel options]
+Usage: sudo bash setup.sh [script|panel|xui|xui-classic|pasarguard|all] [panel options]
 
   script   Install the JojoNet tunnel script (install.sh)
   panel    Install the JojoNet web panel (panel/install-panel.sh)
-  all      Both (default when stdin is not a terminal)
+  xui         Install official MHSanaei 3x-ui
+  xui-classic Install official alireza0 X-UI classic
+  pasarguard  Install official PasarGuard
+  all      Script + JojoNet web panel (default when stdin is not a terminal)
 
 Panel options (passed to panel/install-panel.sh): --port N  --host ADDR
   --domain NAME [--email ADDR] (trusted Let's Encrypt certificate)  --no-domain  --no-firewall
@@ -45,12 +51,18 @@ show_menu() {
         printf '  1) نصب اسکریپت JojoNet       | Install JojoNet script\n'
         printf '  2) نصب پنل تحت وب            | Install web panel\n'
         printf '  3) نصب هر دو                 | Install both\n'
+        printf '  4) نصب پنل 3x-ui سنایی       | Install official 3x-ui (one click)\n'
+        printf '  5) نصب پنل X-UI اصلی         | Install official X-UI Alireza (one click)\n'
+        printf '  6) نصب پنل پاسارگارد         | Install official PasarGuard (one click)\n'
         printf '  0) خروج                      | Exit\n'
-        read -rp "Choose / انتخاب کنید [0-3]: " choice || exit 0
+        read -rp "Choose / انتخاب کنید [0-6]: " choice || exit 0
         case "$choice" in
             1) MODE="script"; return ;;
             2) MODE="panel"; return ;;
             3) MODE="all"; return ;;
+            4) MODE="xui"; return ;;
+            5) MODE="xui_classic"; return ;;
+            6) MODE="pasarguard"; return ;;
             0) exit 0 ;;
             *) warn "Invalid choice / گزینه نامعتبر" ;;
         esac
@@ -63,6 +75,8 @@ check_files() {
     case "$MODE" in
         script) need=(jojonet install.sh uninstall.sh) ;;
         panel)  need=(jojonet install.sh uninstall.sh panel/install-panel.sh panel/uninstall-panel.sh panel/app/cli.py) ;;
+        xui|xui_classic) need=(jojonet install.sh uninstall.sh) ;;
+        pasarguard) need=(jojonet install.sh uninstall.sh) ;;
         all)    need=(jojonet install.sh uninstall.sh panel/install-panel.sh panel/uninstall-panel.sh panel/app/cli.py) ;;
     esac
     for f in "${need[@]}"; do
@@ -92,6 +106,9 @@ main() {
     case "${1:-}" in
         script|1) MODE="script"; shift ;;
         panel|2)  MODE="panel"; shift ;;
+        xui|x-ui|3x-ui|4) MODE="xui"; shift ;;
+        xui-classic|xui_classic|alireza|5) MODE="xui_classic"; shift ;;
+        pasarguard|pasar|pg|6) MODE="pasarguard"; shift ;;
         all|both|3) MODE="all"; shift ;;
         -h|--help|help) usage; exit 0 ;;
     esac
@@ -128,6 +145,30 @@ main() {
     if [[ "$MODE" == "panel" || "$MODE" == "all" ]]; then
         log "Installing JojoNet Panel... / نصب پنل JojoNet"
         bash panel/install-panel.sh "$@"
+    fi
+    if [[ "$MODE" == "xui" ]]; then
+        if [[ ! -x /usr/local/bin/jojonet ]]; then
+            log "Installing JojoNet script first (required for 3x-ui)... / ابتدا اسکریپت"
+            bash install.sh
+        fi
+        log "Installing official 3x-ui / X-UI (MHSanaei)... / نصب پنل 3x-ui"
+        /usr/local/bin/jojonet --xui-install
+    fi
+    if [[ "$MODE" == "xui_classic" ]]; then
+        if [[ ! -x /usr/local/bin/jojonet ]]; then
+            log "Installing JojoNet script first (required for X-UI)... / ابتدا اسکریپت"
+            bash install.sh
+        fi
+        log "Installing official X-UI classic (alireza0)... / نصب پنل X-UI اصلی"
+        /usr/local/bin/jojonet --xui-classic-install
+    fi
+    if [[ "$MODE" == "pasarguard" ]]; then
+        if [[ ! -x /usr/local/bin/jojonet ]]; then
+            log "Installing JojoNet script first (required for PasarGuard)... / ابتدا اسکریپت"
+            bash install.sh
+        fi
+        log "Installing official PasarGuard... / نصب پنل پاسارگارد"
+        /usr/local/bin/jojonet --pasarguard-install
     fi
     log "Done. / انجام شد."
 }

@@ -25,6 +25,7 @@ FLAG_TO_MODE = {v["flag"]: k for k, v in MODES.items()}
 SECRET_FILE = {
     "paqet": "paqet.secret", "hysteria2": "hy2.auth", "rathole": "rathole.token", "wstunnel": "wstunnel.token",
     "dokodemo": "xray.uuid", "xray_reverse": "xray.uuid",
+    "dnstt": "dnstt.auth", "icmp": "pingtunnel.key",
 }
 PREFIX = {
     "gre": "172.20", "tun_tcp": "10.30", "vxlan": "10.40", "wireguard": "10.66", "wg_icmp": "10.67", "wg_faketcp": "10.68",
@@ -33,6 +34,7 @@ PREFIX = {
 NAME_PREFIX = {
     "wireguard": "wg", "wg_icmp": "wi", "wg_faketcp": "wf",
     "dokodemo": "dk", "xray_reverse": "xr", "sit": "s6", "gre6": "g6", "ipip6": "i6",
+    "dnstt": "dt", "icmp": "ic",
 }
 SRC_RE = re.compile(r"printf '%s\\n' (\S+) >")
 
@@ -57,6 +59,24 @@ class FakeServer:
         self.spoof_bin = False
         self.relays: dict[str, dict[str, str]] = {}
         self.dns: tuple[str, ...] = ()
+        self.vpn_panels: dict[str, bool] = {}
+
+    def vpn_creds_block(self, kind: str) -> str:
+        if kind in ("xui", "xui_classic"):
+            label = "X-UI اصلی" if kind == "xui_classic" else "3x-ui سنایی"
+            url = f"http://{self.host}:2053/"
+            return (
+                "===== JOJONET_VPN_CREDS =====\n"
+                f"kind=xui\nlabel={label}\nurl={url}\nusername=admin\npassword=admin123\n"
+                "===== END_JOJONET_VPN_CREDS =====\n"
+            )
+        url = f"http://{self.host}:8000/dashboard/"
+        return (
+            "===== JOJONET_VPN_CREDS =====\n"
+            f"kind=pasarguard\nlabel=پاسارگارد\nurl={url}\npassword=tmp-key-abc\n"
+            "note=کلید یک‌بارمصرف ورود اول\n"
+            "===== END_JOJONET_VPN_CREDS =====\n"
+        )
 
     def spoof_pair_ok(self) -> bool:
         """Both sides configured, pointing at each other, with mirrored spoof IPs and identical transports."""
@@ -224,6 +244,21 @@ class FakeServer:
         m = re.match(r"jojonet --delete (\S+) </dev/null", script)
         if m:
             return CmdResult(0 if self.confs.pop(m.group(1), None) else 1, "", "")
+        if script == orch_mod.LIST_TUNNELS_JSON:
+            import json
+
+            items = []
+            for name, c in self.confs.items():
+                mode = conf_mode(c)
+                unit = "jojonet-stream@" + name + ".service" if mode in ("dnstt", "icmp") else f"jojonet@{name}.service"
+                items.append({
+                    "name": name, "mode": mode, "role": c.get("Role", ""),
+                    "local_ip": c.get("Local_IP", ""), "remote_ip": c.get("Remote_IP", ""),
+                    "status": "UP" if self.healthy(name) else "DOWN", "boot": True, "unit": unit,
+                })
+            return CmdResult(0, json.dumps(items) + "\n", "")
+        if script == orch_mod.ENABLE_BOOT_CMD:
+            return CmdResult(0, "[+] Boot persistence OK. Enabled: 0 | Started: 0\n", "")
         m = re.match(r"ping(?: -6)? -c 3 -W 2 -q (\S+)", script)
         if m:
             ok = any(c.get("Tun_IP", "").startswith(m.group(1) + "/")
@@ -252,6 +287,43 @@ class FakeServer:
             return CmdResult(0, "  ok    github.com  avg 12 ms  loss 0%\n", "")
         if script == "jojonet --update-server </dev/null":
             return CmdResult(0, "packages updated\n", "")
+        if "jojonet --help" in script and "grep -F" in script:
+            flag = "--xui-classic-install" if "--xui-classic-install" in script else (
+                "--xui-install" if "--xui-install" in script else "--pasarguard-install"
+            )
+            if self.jojonet:
+                return CmdResult(0, f"{flag}\n", "")
+            return CmdResult(1, "", "")
+        if "jojonet --xui-classic-install" in script:
+            self.vpn_panels["xui_classic"] = True
+            return CmdResult(0, "classic X-UI installed\n" + self.vpn_creds_block("xui_classic"), "")
+        if "jojonet --xui-install" in script:
+            self.vpn_panels["xui"] = True
+            return CmdResult(0, "3x-ui installed\n" + self.vpn_creds_block("xui"), "")
+        if "jojonet --pasarguard-install" in script:
+            self.vpn_panels["pasarguard"] = True
+            return CmdResult(0, "PasarGuard installed\n" + self.vpn_creds_block("pasarguard"), "")
+        if "jojonet --vpn-panel-check" in script:
+            xui = self.vpn_panels.get("xui") or self.vpn_panels.get("xui_classic")
+            flavor = "classic" if self.vpn_panels.get("xui_classic") else ("sanaei" if self.vpn_panels.get("xui") else "")
+            pg = 1 if self.vpn_panels.get("pasarguard") else 0
+            return CmdResult(0, (
+                "===== JOJONET_VPN_CHECK =====\n"
+                f"xui={1 if xui else 0}\n"
+                f"xui_flavor={flavor}\n"
+                f"xui_running={1 if xui else 0}\n"
+                f"pasarguard={pg}\n"
+                f"pasarguard_running={pg}\n"
+                "===== END_JOJONET_VPN_CHECK =====\n"
+            ), "")
+        if "jojonet --vpn-panel-creds" in script:
+            if self.vpn_panels.get("xui"):
+                return CmdResult(0, self.vpn_creds_block("xui"), "")
+            if self.vpn_panels.get("xui_classic"):
+                return CmdResult(0, self.vpn_creds_block("xui_classic"), "")
+            if self.vpn_panels.get("pasarguard"):
+                return CmdResult(0, self.vpn_creds_block("pasarguard"), "")
+            return CmdResult(1, "No VPN panel login found.\n", "")
         raise AssertionError(f"unexpected command: {script[:200]}")
 
 
@@ -334,7 +406,10 @@ def make_servers(client, auth):
 @pytest.mark.parametrize("mode", [m for m in MODES if m != "spoof"])
 def test_deploy_verify_delete_every_mode(client, auth, world, mode):
     iran, kharej = make_servers(client, auth)
-    r = client.post("/api/tunnels", json={"mode": mode, "iran_id": iran["id"], "kharej_id": kharej["id"]}, headers=auth)
+    payload = {"mode": mode, "iran_id": iran["id"], "kharej_id": kharej["id"]}
+    if mode == "dnstt":
+        payload["dnstt"] = {"domain": "t.example.com"}
+    r = client.post("/api/tunnels", json=payload, headers=auth)
     job = wait_job(client, r.json()["job_id"])
     assert job["status"] == "ok", job["log"] + str(job["steps"])
     assert all(s["status"] in ("ok", "skipped") for s in job["steps"]), job["steps"]
@@ -585,7 +660,11 @@ def test_relay_and_server_tools(client, auth, world):
     assert world.servers["5.6.7.8"].relays["web"]["target"] == "9.9.9.9"
     job = wait_job(client, client.post(f"/api/relays/{rel['id']}/stats", headers=auth).json()["job_id"])
     assert job["status"] == "ok"
-    assert client.post("/api/relays", json={"engine": "iptables", "iran_id": kharej["id"], "target": "1.1.1.1", "ports": "80"}, headers=auth).status_code == 422
+    r = client.post("/api/relays", json={"engine": "iptables", "iran_id": kharej["id"], "target": "1.1.1.1", "ports": "80"}, headers=auth)
+    assert r.status_code == 200, r.text
+    job = wait_job(client, r.json()["job_id"])
+    assert job["status"] == "ok", job["log"]
+    assert world.servers["1.2.3.4"].relays["iptables-80"]["target"] == "1.1.1.1"
     job = wait_job(client, client.request("DELETE", f"/api/relays/{rel['id']}", json={"force": False}, headers=auth).json()["job_id"])
     assert job["status"] == "ok" and world.servers["5.6.7.8"].relays == {}
 
@@ -595,5 +674,62 @@ def test_relay_and_server_tools(client, auth, world):
     assert job["status"] == "ok"
     job = wait_job(client, client.post(f"/api/servers/{iran['id']}/update-os", headers=auth).json()["job_id"])
     assert job["status"] == "ok"
+    job = wait_job(client, client.post(f"/api/servers/{iran['id']}/vpn-panel", json={"kind": "xui"}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and world.servers["5.6.7.8"].vpn_panels.get("xui")
+    assert "JOJONET_VPN_CREDS" in job["log"] and "http://5.6.7.8:2053/" in job["log"]
+    assert job["steps"][-1]["name"] == "خواندن مشخصات ورود" and job["steps"][-1]["status"] == "ok"
+    job = wait_job(client, client.post(f"/api/servers/{iran['id']}/vpn-panel", json={"kind": "xui"}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and "از قبل" in job["log"]
+    job = wait_job(client, client.post(f"/api/servers/{kharej['id']}/vpn-panel", json={"kind": "pasarguard"}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and world.servers["1.2.3.4"].vpn_panels.get("pasarguard")
+    assert "tmp-key-abc" in job["log"] and "http://1.2.3.4:8000/dashboard/" in job["log"]
+    job = wait_job(client, client.post(f"/api/servers/{kharej['id']}/vpn-panel", json={"kind": "xui_classic"}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok" and world.servers["1.2.3.4"].vpn_panels.get("xui_classic")
+    assert "http://1.2.3.4:2053/" in job["log"]
     assert client.post("/api/servers", json={"name": "X", "role": "iran", "host": "5.6.7.8", "auth_type": "password", "password": "x"}, headers=auth).status_code == 409
+
+
+def test_direct_dnstt_icmp_on_kharej_only(client, auth, world):
+    iran, kharej = make_servers(client, auth)
+    r = client.post("/api/tunnels", json={
+        "mode": "dnstt", "direct": True, "kharej_id": kharej["id"],
+        "dnstt": {"domain": "t.example.com"},
+    }, headers=auth)
+    assert r.status_code == 200, r.text
+    job = wait_job(client, r.json()["job_id"])
+    assert job["status"] == "ok", job["log"] + str(job["steps"])
+    t = client.get("/api/tunnels").json()[0]
+    assert t["direct"] is True and t["iran_id"] == t["kharej_id"] == kharej["id"]
+    assert t["kharej_iface"] and not t["iran_iface"]
+    de = world.servers["1.2.3.4"]
+    assert any(c.get("Remote_IP") == "1.2.3.4" and c.get("TunnelMode") == "dnstt" for c in de.confs.values())
+    assert any("JOJONET_DIRECT=1" in cmd and "jojonet --dnstt 1.2.3.4" in cmd for _, cmd in world.log)
+    paired = client.post("/api/tunnels", json={
+        "mode": "dnstt", "iran_id": iran["id"], "kharej_id": kharej["id"],
+        "dnstt": {"domain": "u.example.com"},
+    }, headers=auth)
+    assert paired.status_code == 409
+    r = client.post("/api/tunnels", json={"mode": "icmp", "direct": True, "kharej_id": kharej["id"]}, headers=auth)
+    assert r.status_code == 200, r.text
+    job = wait_job(client, r.json()["job_id"])
+    assert job["status"] == "ok", job["log"]
+    assert any(c.get("TunnelMode") == "icmp" for c in de.confs.values())
+    job = wait_job(client, client.request("DELETE", f"/api/tunnels/{t['id']}", json={"force": False}, headers=auth).json()["job_id"])
+    assert job["status"] == "ok"
+
+
+def test_users_on_kharej_swaps_script_role(client, auth, world):
+    iran, kharej = make_servers(client, auth)
+    r = client.post("/api/tunnels", json={
+        "mode": "gre", "iran_id": iran["id"], "kharej_id": kharej["id"], "users": "kharej",
+    }, headers=auth)
+    assert r.status_code == 200, r.text
+    job = wait_job(client, r.json()["job_id"])
+    assert job["status"] == "ok", job["log"]
+    t = client.get("/api/tunnels").json()[0]
+    assert t["users"] == "kharej" and t["status"] == "ok"
+    de = [c for h, c in world.log if h == "1.2.3.4"]
+    ir = [c for h, c in world.log if h == "5.6.7.8"]
+    assert any("JOJONET_ROLE=iran" in c and "jojonet --peer" in c for c in de), de
+    assert any("JOJONET_ROLE=kharej" in c and "jojonet --peer" in c for c in ir), ir
 

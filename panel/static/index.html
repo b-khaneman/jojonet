@@ -1,14 +1,26 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-theme="night">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>پنل جوجونت</title>
 <link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=__V__">
 <link rel="stylesheet" href="/static/style.css?v=__V__">
+<script>
+(function () {
+  var t = '';
+  try { t = localStorage.getItem('jojonet-theme-2') || ''; } catch (e) {}
+  if (t !== 'day' && t !== 'night' && t !== 'jojo') t = 'night';
+  document.documentElement.setAttribute('data-theme', t);
+  document.documentElement.style.colorScheme = t === 'day' ? 'light' : 'dark';
+})();
+</script>
+<link rel="stylesheet" href="/static/vendor/xterm.css?v=__V__">
+<script src="/static/vendor/xterm.min.js?v=__V__" defer></script>
+<script src="/static/vendor/xterm-addon-fit.js?v=__V__" defer></script>
 <script src="/static/app.js?v=__V__" defer></script>
 </head>
 <body>
@@ -24,6 +36,11 @@
 </noscript>
 
 <section id="login-view" class="login-view" hidden>
+  <div class="theme-switch" role="radiogroup" aria-label="انتخاب تم">
+    <button type="button" class="theme-btn" role="radio" data-theme-set="jojo" aria-checked="false">فعلی</button>
+    <button type="button" class="theme-btn" role="radio" data-theme-set="day" aria-checked="false">روز</button>
+    <button type="button" class="theme-btn" role="radio" data-theme-set="night" aria-checked="true">شب</button>
+  </div>
   <form id="login-form" class="login-card" novalidate>
     <img class="login-logo" src="/static/logo.svg?v=__V__" alt="" width="64" height="64">
     <h1 class="login-title">پنل جوجونت</h1>
@@ -42,16 +59,47 @@
 </section>
 
 <div id="app-view" class="app-view" hidden>
+  <aside class="hx-dock hx-dock-left" id="hx-left" data-side="left">
+    <div class="hx-chrome">
+      <div class="hx-top">
+        <span class="hx-led" aria-hidden="true"></span>
+        <span class="hx-brand">ترمینال چپ</span>
+        <span class="hx-state" id="hx-left-state">قطع</span>
+        <button type="button" class="hx-close" id="hx-left-close" aria-label="بستن ترمینال چپ">بستن</button>
+      </div>
+      <div class="hx-toolbar">
+        <select id="hx-left-server" aria-label="سرور ترمینال چپ"></select>
+        <button type="button" class="hx-go" id="hx-left-go">اتصال</button>
+        <button type="button" class="hx-kill" id="hx-left-kill" hidden>قطع اتصال</button>
+      </div>
+      <div class="hx-boot" id="hx-left-boot" hidden></div>
+      <div class="hx-screen" id="hx-left-screen" role="application" aria-label="ترمینال چپ"></div>
+    </div>
+  </aside>
+  <div class="app-core">
   <header class="topbar">
     <div class="brand">
       <img src="/static/logo.svg?v=__V__" alt="" width="40" height="40">
       <div class="brand-text">
-        <h1 class="brand-title">پنل جوجونت</h1>
-        <p id="hdr-versions" class="versions"></p>
+        <h1 class="brand-title" aria-label="پنل جوجونت"><span class="brand-title-text">پنل جوجونت</span></h1>
+        <p class="brand-meta">
+          <span id="hdr-versions" class="versions"></span>
+          <a class="brand-tg" href="https://t.me/B_KHANEMAN" target="_blank" rel="noopener noreferrer" dir="ltr" title="پشتیبانی تلگرام">@B_KHANEMAN</a>
+        </p>
       </div>
     </div>
     <div class="top-actions">
-      <span id="hdr-user" class="user-chip" title="کاربر فعلی"></span>
+      <div class="user-meta">
+        <span id="hdr-user" class="user-chip" title="کاربر فعلی"></span>
+        <span id="hdr-quota" class="quota-chip" hidden></span>
+      </div>
+      <div class="theme-switch" role="radiogroup" aria-label="انتخاب تم">
+        <button type="button" class="theme-btn" role="radio" data-theme-set="jojo" aria-checked="false">فعلی</button>
+        <button type="button" class="theme-btn" role="radio" data-theme-set="day" aria-checked="false">روز</button>
+        <button type="button" class="theme-btn" role="radio" data-theme-set="night" aria-checked="true">شب</button>
+      </div>
+      <button id="hx-toggle-left" class="hx-fab" type="button" aria-label="ترمینال چپ" aria-pressed="false" title="ترمینال چپ">ترمینال چپ</button>
+      <button id="hx-toggle-right" class="hx-fab" type="button" aria-label="ترمینال راست" aria-pressed="false" title="ترمینال راست">ترمینال راست</button>
       <button id="btn-password" class="btn btn-ghost btn-sm" type="button">تغییر رمز عبور</button>
       <button id="btn-logout" class="btn btn-ghost btn-sm" type="button">خروج</button>
     </div>
@@ -61,7 +109,10 @@
     <button type="button" class="tab" role="tab" id="tabbtn-servers" data-tab="servers" aria-controls="tab-servers" aria-selected="true">سرورها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-tunnels" data-tab="tunnels" aria-controls="tab-tunnels" aria-selected="false" tabindex="-1">تانل‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-relays" data-tab="relays" aria-controls="tab-relays" aria-selected="false" tabindex="-1">رله‌ها</button>
-    <button type="button" class="tab" role="tab" id="tabbtn-jobs" data-tab="jobs" aria-controls="tab-jobs" aria-selected="false" tabindex="-1">کارها (لاگ)</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-panels" data-tab="panels" aria-controls="tab-panels" aria-selected="false" tabindex="-1">پنل‌ها</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-outbounds" data-tab="outbounds" aria-controls="tab-outbounds" aria-selected="false" tabindex="-1">اوتباند</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-jobs" data-tab="jobs" aria-controls="tab-jobs" aria-selected="false" tabindex="-1">مانیتور</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-users" data-tab="users" aria-controls="tab-users" aria-selected="false" tabindex="-1" hidden>مدیریت</button>
   </nav>
 
   <main id="main" class="main" tabindex="-1">
@@ -100,13 +151,16 @@
               <select id="tf-mode" required aria-describedby="tf-mode-desc"></select>
               <p id="tf-mode-desc" class="hint"></p>
             </div>
-            <div class="field">
+            <div class="field" id="tf-iran-field">
               <label for="tf-iran">سرور ایران</label>
               <select id="tf-iran" required></select>
             </div>
             <div class="field">
               <label for="tf-kharej">سرور خارج</label>
               <select id="tf-kharej" required></select>
+            </div>
+            <div class="field field-wide" id="tf-direct-wrap" hidden>
+              <label class="check" for="tf-direct"><input id="tf-direct" type="checkbox"><span>فقط سرور خارج (بدون ایران) — کلاینت DNSTT/ICMP روی دستگاه کاربر اجرا می‌شود</span></label>
             </div>
           </div>
           <div id="tf-spoof" class="auth-section spoof-section" hidden>
@@ -159,7 +213,7 @@
             </div>
           </div>
           <div id="tf-xray" class="auth-section spoof-section" hidden>
-            <p class="hint">VLESS روی هر دو سرور باید یکی باشد. پورت‌ها: <code>443</code> یا <code>8443:443</code> (ایران گوش می‌دهد : هدف خارج).</p>
+            <p class="hint" id="tf-xr-hint">VLESS روی هر دو سرور باید یکی باشد. پورت‌ها: <code>443</code> یا <code>8443:443</code>. سمت «کاربران» گوش می‌دهد؛ سمت دیگر مقصد سرویس است.</p>
             <div class="form-grid">
               <div class="field">
                 <label for="tf-xr-net">انتقال</label>
@@ -179,6 +233,44 @@
               </div>
             </div>
           </div>
+          <div id="tf-dnstt" class="auth-section spoof-section" hidden>
+            <p class="hint">رکورد NS دامنه باید به IP سرور خارج اشاره کند. مثال: <code>t.example.com NS ns.t.example.com</code> و <code>ns.t.example.com A &lt;IP خارج&gt;</code>. فقط یک DNSTT روی هر سرور.</p>
+            <div class="form-grid">
+              <div class="field field-wide">
+                <label for="tf-dt-domain">دامنه DNSTT</label>
+                <input id="tf-dt-domain" type="text" dir="ltr" autocomplete="off" spellcheck="false" placeholder="t.example.com">
+              </div>
+              <div class="field">
+                <label for="tf-dt-mode">Resolver ایران</label>
+                <select id="tf-dt-mode">
+                  <option value="doh" selected>DoH (HTTPS)</option>
+                  <option value="dot">DoT (TLS/853)</option>
+                  <option value="udp">UDP DNS</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="tf-dt-resolver">آدرس resolver (اختیاری)</label>
+                <input id="tf-dt-resolver" type="text" dir="ltr" autocomplete="off" spellcheck="false" placeholder="https://cloudflare-dns.com/dns-query">
+              </div>
+              <div class="field">
+                <label for="tf-dt-dnsport">پورت UDP خارج</label>
+                <input id="tf-dt-dnsport" type="number" dir="ltr" min="1" max="65535" value="5300">
+              </div>
+              <div class="field">
+                <label for="tf-dt-ports">پورت‌های فوروارد</label>
+                <input id="tf-dt-ports" type="text" dir="ltr" autocomplete="off" spellcheck="false" placeholder="443 یا 8443:443" value="443">
+              </div>
+            </div>
+          </div>
+          <div id="tf-icmp" class="auth-section spoof-section" hidden>
+            <p class="hint" id="tf-icmp-hint">تانل ICMP با pingtunnel و ChaCha20 است؛ با گزینه WireGuard/ICMP فرق دارد. پینگ بین دو سرور باید باز باشد. فقط یک تانل ICMP روی هر سرور. می‌تواند فقط روی خارج (بدون ایران) ساخته شود.</p>
+            <div class="form-grid">
+              <div class="field field-wide">
+                <label for="tf-ic-ports">پورت‌های فوروارد</label>
+                <input id="tf-ic-ports" type="text" dir="ltr" autocomplete="off" spellcheck="false" placeholder="443 یا 8443:443" value="443">
+              </div>
+            </div>
+          </div>
           <div class="form-actions">
             <button id="tf-submit" class="btn btn-primary" type="submit">ساخت تانل</button>
           </div>
@@ -187,13 +279,27 @@
 
       <h3 class="sub-head">تانل‌های موجود</h3>
       <div id="tunnels-list" class="list-area"></div>
+
+      <div class="live-tunnels-block">
+        <div class="section-head live-tunnels-head">
+          <div>
+            <h3 class="sub-head">تانل‌های فعال روی سرورها</h3>
+            <p class="muted">اسکن زنده از هر سرور (systemd + instances). تانل‌های یتیم فقط روی سرور هستند و در پنل ثبت نشده‌اند.</p>
+          </div>
+          <div class="section-actions">
+            <button id="btn-scan-live" class="btn btn-sm" type="button">بروزرسانی اسکن</button>
+            <button id="btn-enable-boot-all" class="btn btn-sm btn-primary" type="button">ماندن بعد از ریبوت (همه)</button>
+          </div>
+        </div>
+        <div id="live-tunnels-list" class="list-area"></div>
+      </div>
     </section>
 
     <section id="tab-relays" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-relays" hidden>
       <div class="section-head">
         <div>
           <h2>رله‌ها</h2>
-          <p class="muted">رله تک‌سرور روی ایران: کاربران به این سرور وصل می‌شوند و ترافیک به سرور اصلی می‌رود (بدون نصب JojoNet روی مقصد).</p>
+          <p class="muted">رله تک‌سرور روی ایران یا خارج: کاربران به همین سرور وصل می‌شوند و ترافیک به مقصد می‌رود (بدون نصب JojoNet روی مقصد).</p>
         </div>
         <div class="section-actions">
           <button id="btn-refresh-relays" class="btn btn-sm" type="button">بروزرسانی</button>
@@ -215,7 +321,7 @@
               </select>
             </div>
             <div class="field">
-              <label for="rf-iran">سرور ایران</label>
+              <label for="rf-iran">سرور (ایران یا خارج)</label>
               <select id="rf-iran" required></select>
             </div>
             <div class="field">
@@ -248,19 +354,212 @@
       <div id="relays-list" class="list-area"></div>
     </section>
 
-    <section id="tab-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-jobs" hidden>
+    <section id="tab-panels" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-panels" hidden>
       <div class="section-head">
         <div>
-          <h2>کارها (لاگ)</h2>
-          <p class="muted">آخرین عملیات‌ها؛ این فهرست هر ۵ ثانیه خودکار بروزرسانی می‌شود. برای دیدن جزئیات روی هر کار بزنید.</p>
-        </div>
-        <div class="section-actions">
-          <button id="btn-refresh-jobs" class="btn btn-sm" type="button">بروزرسانی</button>
+          <h2>پنل‌های VPN</h2>
+          <p class="muted">نصب یک‌کلیکی 3x-ui سنایی، X-UI اصلی و پاسارگارد. بعد از تأیید، پیشرفت نصب و مشخصات ورود همین‌جا نمایش داده می‌شود.</p>
         </div>
       </div>
-      <div id="jobs-list" class="list-area"></div>
+      <div class="card create-card vpn-install-card">
+        <h3 class="card-title">نصب یک‌کلیکی</h3>
+        <form id="vpn-panel-form" class="form" novalidate>
+          <div id="vpf-error" class="form-error" role="alert" hidden></div>
+          <div class="field vpn-server-field">
+            <label for="vpf-server">سرور</label>
+            <select id="vpf-server" required></select>
+          </div>
+          <div class="vpn-panel-cards" role="group" aria-label="نوع پنل">
+            <button type="button" class="vpn-panel-card" data-kind="xui" id="vpf-xui">
+              <strong>3x-ui سنایی</strong>
+              <span>پنل MHSanaei برای VLESS / VMess / Trojan</span>
+            </button>
+            <button type="button" class="vpn-panel-card" data-kind="xui_classic" id="vpf-xui-classic">
+              <strong>X-UI اصلی</strong>
+              <span>پنل کلاسیک علیرضا (alireza0). با 3x-ui همزمان نصب نمی‌شود.</span>
+            </button>
+            <button type="button" class="vpn-panel-card" data-kind="pasarguard" id="vpf-pasarguard">
+              <strong>پاسارگارد</strong>
+              <span>پنل پاسارگارد (Docker). روی سرور 1 گیگ ممکن است سنگین باشد.</span>
+            </button>
+          </div>
+          <p class="muted vpn-install-hint" id="vpf-hint">سرور را انتخاب کنید، روی پنل بزنید، تأیید کنید؛ نصب زنده اینجا مانیتور می‌شود و مشخصات ورود جداگانه نشان داده می‌شود.</p>
+        </form>
+      </div>
+      <div id="vpn-monitor" class="ops-console vpn-monitor" hidden>
+        <div class="ops-topbar">
+          <span class="ops-led" aria-hidden="true"></span>
+          <span class="ops-brand">JOJONET // INSTALL</span>
+          <span class="ops-live is-live">LIVE</span>
+        </div>
+        <div class="ops-body">
+          <div class="vpn-monitor-head">
+            <div>
+              <h3 id="vpn-mon-title" class="card-title">مانیتور نصب</h3>
+              <p id="vpn-mon-sub" class="muted"></p>
+            </div>
+            <div id="vpn-mon-status" class="job-status"></div>
+          </div>
+          <div class="ops-progress">
+            <div class="vpn-mon-track" aria-hidden="true">
+              <div id="vpn-mon-bar" class="vpn-mon-bar"></div>
+            </div>
+            <p id="vpn-mon-pct" class="vpn-mon-pct">0٪</p>
+          </div>
+          <ol id="vpn-mon-steps" class="steps"></ol>
+          <p id="vpn-mon-now" class="log-now">در انتظار شروع…</p>
+          <div class="log-head">
+            <h3 class="sub-head">گزارش نصب</h3>
+            <div class="log-actions">
+              <button id="vpn-mon-raw" class="btn btn-sm btn-ghost" type="button">جزئیات فنی</button>
+              <button id="vpn-mon-follow" class="btn btn-sm btn-ghost" type="button" hidden>رفتن به انتهای گزارش</button>
+            </div>
+          </div>
+          <div id="vpn-mon-log" class="log-feed" dir="rtl" tabindex="0" aria-label="گزارش نصب پنل"></div>
+          <pre id="vpn-mon-rawlog" class="log log-raw" dir="ltr" hidden></pre>
+        </div>
+      </div>
+      <div id="vpn-creds" class="vpn-creds" hidden>
+        <div class="vpn-creds-head">
+          <h3 class="card-title">مشخصات ورود پنل</h3>
+          <p class="muted" id="vpn-creds-label"></p>
+        </div>
+        <div id="vpn-creds-fields" class="vpn-creds-fields"></div>
+        <p class="muted vpn-creds-note" id="vpn-creds-note" hidden></p>
+      </div>
+    </section>
+
+    <section id="tab-outbounds" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-outbounds" hidden>
+      <div class="section-head">
+        <div>
+          <h2>اوتباند X-UI از تانل</h2>
+          <p class="muted">بعد از ساخت تانل، در 3x-ui / X-UI یک outbound از نوع Freedom بگذارید تا ترافیک پنل از تانل بیرون برود. برای هر تانل، سرور و مقادیر آماده است.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-outbounds" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div class="card create-card outbound-howto">
+        <h3 class="card-title">مسیر کلی در پنل</h3>
+        <ol class="outbound-steps">
+          <li>پنل 3x-ui سنایی یا X-UI اصلی را روی سروری که پایین نوشته شده باز کنید.</li>
+          <li>بروید به <strong>Xray Settings</strong> یا تنظیمات Xray ← <strong>Outbounds</strong> / خروجی‌ها.</li>
+          <li><strong>Add Outbound</strong> بزنید، پروتکل را <strong>Freedom</strong> بگذارید و فیلدهای کارت تانل را وارد کنید.</li>
+          <li>در <strong>Routing</strong> همین تگ را outbound پیش‌فرض کنید، ذخیره کنید و Xray را ری‌استارت کنید.</li>
+        </ol>
+      </div>
+      <h3 class="sub-head">دستور هر تانل</h3>
+      <div id="outbounds-list" class="list-area"></div>
+    </section>
+
+    <section id="tab-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-jobs" hidden>
+      <div class="ops-console ops-jobs">
+        <div class="ops-topbar">
+          <span class="ops-led" aria-hidden="true"></span>
+          <span class="ops-brand">JOJONET // MONITOR</span>
+          <span class="ops-live" id="jobs-ops-live">STANDBY</span>
+          <span class="ops-clock" id="jobs-ops-clock" dir="ltr"></span>
+        </div>
+        <div class="ops-body">
+          <div class="ops-intro">
+            <div>
+              <h2>مانیتور عملیات</h2>
+              <p class="ops-intro-sub">لاگ زنده سیستم. برای جزئیات روی هر خط بزنید. همگام‌سازی هر ۵ ثانیه.</p>
+            </div>
+            <button id="btn-refresh-jobs" class="btn btn-sm ops-sync" type="button">همگام‌سازی</button>
+          </div>
+          <div id="jobs-list" class="list-area ops-screen"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-users" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-users" hidden>
+      <div class="section-head">
+        <div>
+          <h2>مدیریت مشتریان</h2>
+          <p class="muted">حساب مشتری بسازید، سقف و اشتراک بگذارید. هر مشتری فقط سرور و تانل خودش را می‌بیند.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-users" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div class="card create-card" id="term-policy-card">
+        <h3 class="card-title">ترمینال صفحه اصلی</h3>
+        <p class="muted">ترمینال چپ و راست را برای همه ببندید، یا برای هر مشتری جداگانه خاموش کنید.</p>
+        <label class="check" for="set-terms-enabled">
+          <input id="set-terms-enabled" type="checkbox" checked>
+          <span>نمایش ترمینال برای همه کاربران مجاز</span>
+        </label>
+      </div>
+      <div class="card create-card">
+        <h3 class="card-title">ساخت مشتری</h3>
+        <form id="user-form" class="form" novalidate>
+          <div id="uf-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="uf-username">نام کاربری</label>
+              <input id="uf-username" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="32">
+            </div>
+            <div class="field">
+              <label for="uf-password">رمز عبور</label>
+              <input id="uf-password" type="text" dir="ltr" autocomplete="off" placeholder="خالی = تولید تصادفی">
+              <p class="hint">اگر خالی بماند، رمز تصادفی ساخته و یک‌بار نشان داده می‌شود.</p>
+            </div>
+            <div class="field">
+              <label for="uf-days">روز اشتراک</label>
+              <input id="uf-days" type="number" dir="ltr" min="1" max="3650" value="30">
+            </div>
+            <div class="field">
+              <label for="uf-max-servers">سقف سرور</label>
+              <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+            </div>
+            <div class="field">
+              <label for="uf-max-tunnels">سقف تانل</label>
+              <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+            </div>
+            <div class="field">
+              <label for="uf-max-relays">سقف رله</label>
+              <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+            </div>
+            <div class="field field-wide">
+              <label for="uf-note">یادداشت</label>
+              <input id="uf-note" type="text" maxlength="500" autocomplete="off">
+            </div>
+            <fieldset class="field field-wide">
+              <legend>قابلیت‌ها</legend>
+              <label class="check" for="uf-vpn"><input id="uf-vpn" type="checkbox" checked><span>نصب پنل VPN</span></label>
+              <label class="check" for="uf-relay"><input id="uf-relay" type="checkbox" checked><span>ساخت رله</span></label>
+              <label class="check" for="uf-os"><input id="uf-os" type="checkbox" checked><span>آپدیت سیستم</span></label>
+              <label class="check" for="uf-term"><input id="uf-term" type="checkbox" checked><span>ترمینال صفحه اصلی</span></label>
+            </fieldset>
+          </div>
+          <div class="form-actions">
+            <button id="uf-submit" class="btn btn-primary" type="submit">ساخت مشتری</button>
+          </div>
+        </form>
+      </div>
+      <h3 class="sub-head">مشتریان</h3>
+      <div id="users-list" class="list-area"></div>
     </section>
   </main>
+  </div>
+  <aside class="hx-dock hx-dock-right" id="hx-right" data-side="right">
+    <div class="hx-chrome">
+      <div class="hx-top">
+        <span class="hx-led" aria-hidden="true"></span>
+        <span class="hx-brand">ترمینال راست</span>
+        <span class="hx-state" id="hx-right-state">قطع</span>
+        <button type="button" class="hx-close" id="hx-right-close" aria-label="بستن ترمینال راست">بستن</button>
+      </div>
+      <div class="hx-toolbar">
+        <select id="hx-right-server" aria-label="سرور ترمینال راست"></select>
+        <button type="button" class="hx-go" id="hx-right-go">اتصال</button>
+        <button type="button" class="hx-kill" id="hx-right-kill" hidden>قطع اتصال</button>
+      </div>
+      <div class="hx-boot" id="hx-right-boot" hidden></div>
+      <div class="hx-screen" id="hx-right-screen" role="application" aria-label="ترمینال راست"></div>
+    </div>
+  </aside>
 </div>
 
 <div id="modal-root"></div>

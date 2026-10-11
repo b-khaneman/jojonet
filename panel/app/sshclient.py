@@ -5,7 +5,7 @@ import hashlib
 import base64
 import shlex
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 import asyncssh
 
@@ -74,6 +74,7 @@ class RemoteSession:
         self.creds = creds
         self.connect_timeout = connect_timeout
         self.conn: asyncssh.SSHClientConnection | None = None
+        self.proc: asyncssh.SSHClientProcess | None = None
         self.is_root = False
         self.hostkey: str | None = None
 
@@ -90,7 +91,7 @@ class RemoteSession:
     async def __aexit__(self, *exc) -> None:  # noqa: ANN002
         await self.close()
 
-    async def connect(self) -> None:
+    async def _open_conn(self) -> None:
         c = self.creds
         keys = None
         if c.private_key:
@@ -128,10 +129,14 @@ class RemoteSession:
             raise SSHError(f"اتصال به {c.host}:{c.port} در زمان مقرر برقرار نشد") from exc
         except (OSError, asyncssh.Error) as exc:
             raise SSHError(f"اتصال SSH به {c.host}:{c.port} ناموفق بود: {exc}") from exc
+        if client.seen is None:
+            await self.close()
+            raise SSHError("کلید هاست سرور دریافت نشد")
+        self.hostkey = client.seen
+
+    async def connect(self) -> None:
+        await self._open_conn()
         try:
-            if client.seen is None:
-                raise SSHError("کلید هاست سرور دریافت نشد")
-            self.hostkey = client.seen
             res = await self.run_raw("id -u")
             self.is_root = res.stdout.strip() == "0"
             if not self.is_root:
@@ -146,7 +151,42 @@ class RemoteSession:
             await self.close()
             raise
 
+    async def connect_plain(self) -> None:
+        await self._open_conn()
+
+    async def start_shell(self, cols: int = 80, rows: int = 24) -> Any:
+        if self.conn is None:
+            raise SSHError("اتصال SSH برقرار نیست")
+        cols = max(20, min(int(cols or 80), 300))
+        rows = max(8, min(int(rows or 24), 120))
+        try:
+            self.proc = await self.conn.create_process(
+                term_type="xterm-256color",
+                term_size=(cols, rows),
+                encoding=None,
+            )
+        except asyncssh.Error as exc:
+            raise SSHError(f"باز کردن شل تعاملی ناموفق بود: {exc}") from exc
+        return self.proc
+
+    def resize_shell(self, cols: int, rows: int) -> None:
+        if self.proc is None:
+            return
+        cols = max(20, min(int(cols or 80), 300))
+        rows = max(8, min(int(rows or 24), 120))
+        try:
+            self.proc.change_terminal_size(cols, rows)
+        except Exception:
+            pass
+
     async def close(self) -> None:
+        proc = self.proc
+        self.proc = None
+        if proc is not None:
+            try:
+                proc.close()
+            except Exception:
+                pass
         if self.conn is not None:
             self.conn.close()
             try:

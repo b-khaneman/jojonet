@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import re
 import secrets
 import shlex
@@ -19,10 +20,12 @@ from .jobs import Job, JobManager, StepFailed
 from .security import Vault
 from .sshclient import RemoteSession, ServerCreds, fingerprint
 from .validators import (
+    DNSTT_MODES,
     IP_KEYDIR_MODES,
     MODES,
     RELAY_ENGINES,
     SHARED_KEY_FILES,
+    STREAM_MODES,
     SPOOF_MARK,
     SPOOF_UNIT,
     SUBNET_KEYDIR_MODES,
@@ -33,6 +36,8 @@ from .validators import (
     conf_mode,
     ip_keydir,
     split_confs,
+    valid_dnstt_domain,
+    valid_dnstt_resolver,
     valid_iface,
     valid_ipv4,
     valid_ipv6,
@@ -75,6 +80,8 @@ echo "systemd=$(command -v systemctl >/dev/null 2>&1 && echo yes || echo no)"
 """
 
 DUMP_CONFS = 'for f in /etc/jojonet/instances/*.conf; do [ -f "$f" ] || continue; echo "==> $f <=="; cat "$f"; echo; done'
+LIST_TUNNELS_JSON = "jojonet --list-tunnels --json </dev/null"
+ENABLE_BOOT_CMD = "jojonet --enable-boot </dev/null"
 
 SPOOF_CONFIG = "/etc/jojonet/spoof/config.json"
 SPOOF_STATE = (
@@ -219,6 +226,76 @@ def xray_env(opts: dict[str, Any] | None) -> str:
     if ports and valid_xray_ports(ports):
         parts.append(f"JOJONET_FWD_PORTS={shlex.quote(ports)}")
     return (" " + " ".join(parts)) if parts else ""
+
+
+def dnstt_env(opts: dict[str, Any] | None) -> str:
+    if not opts:
+        return ""
+    parts: list[str] = []
+    domain = str(opts.get("domain") or "").strip().lower().rstrip(".")
+    if valid_dnstt_domain(domain):
+        parts.append(f"JOJONET_DNSTT_DOMAIN={shlex.quote(domain)}")
+    mode = str(opts.get("resolver_mode") or "doh").strip().lower()
+    if mode in DNSTT_MODES:
+        parts.append(f"JOJONET_DNSTT_MODE={shlex.quote(mode)}")
+    resolver = str(opts.get("resolver") or "").strip()
+    if resolver and valid_dnstt_resolver(mode, resolver):
+        parts.append(f"JOJONET_DNSTT_RESOLVER={shlex.quote(resolver)}")
+    dns_port = opts.get("dns_port")
+    if dns_port:
+        parts.append(f"JOJONET_DNSTT_DNS_PORT={int(dns_port)}")
+    ports = str(opts.get("ports") or "").replace(" ", "")
+    if ports and valid_xray_ports(ports):
+        parts.append(f"JOJONET_FWD_PORTS={shlex.quote(ports)}")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def icmp_env(opts: dict[str, Any] | None) -> str:
+    if not opts:
+        return ""
+    ports = str(opts.get("ports") or "").replace(" ", "")
+    if ports and valid_xray_ports(ports):
+        return f" JOJONET_FWD_PORTS={shlex.quote(ports)}"
+    return ""
+
+
+def mode_env(mode: str, opts: dict[str, Any] | None) -> str:
+    extra = ""
+    if mode in XRAY_MODES:
+        extra = xray_env(opts)
+    elif mode == "dnstt":
+        extra = dnstt_env(opts)
+    elif mode == "icmp":
+        extra = icmp_env(opts)
+    if opts and opts.get("direct"):
+        extra += " JOJONET_DIRECT=1"
+    return extra
+
+
+def is_direct_tunnel(t: dict[str, Any]) -> bool:
+    opts = t.get("options") or {}
+    if opts.get("direct"):
+        return True
+    return t.get("iran_id") == t.get("kharej_id")
+
+
+def tunnel_users(t: dict[str, Any]) -> str:
+    if is_direct_tunnel(t):
+        return "kharej"
+    u = (t.get("options") or {}).get("users")
+    return u if u in ("iran", "kharej") else "iran"
+
+
+def script_role(geo_role: str, mode: str, users: str) -> str:
+    """JOJONET_ROLE for a geographically iran/kharej server.
+
+    When users connect on Kharej, the script's iran role (listen / DNAT) is
+    placed on the foreign VPS so traffic goes Kharej → Iran. DNSTT/ICMP and
+    Spoof keep geographic roles (server/NS and Spoof listen stay on Iran/Kharej as designed).
+    """
+    if users != "kharej" or mode in STREAM_MODES or mode == "spoof":
+        return geo_role
+    return "iran" if geo_role == "kharej" else "kharej"
 
 
 def bundle_version(bundle_dir: Path) -> str | None:
@@ -382,15 +459,17 @@ class Orchestrator:
             secrets=[s for s in (password, passphrase, sudo) if s],
         )
 
-    async def open(self, job: Job, row: dict[str, Any]) -> RemoteSession:
+    async def open(self, job: Job | None, row: dict[str, Any]) -> RemoteSession:
         sess = RemoteSession(self.creds(row), connect_timeout=self.settings.ssh_connect_timeout)
         await sess.connect()
         if not row["hostkey"] and sess.hostkey:
             fp = fingerprint(sess.hostkey)
             self.db.update("servers", row["id"], {"hostkey": sess.hostkey, "hostkey_fingerprint": fp})
             row["hostkey"] = sess.hostkey
-            await job.log(f"[{row['name']}] کلید هاست ثبت شد: {fp}")
-        await job.log(f"[{row['name']}] اتصال برقرار شد ({'root' if sess.is_root else 'sudo'})")
+            if job is not None:
+                await job.log(f"[{row['name']}] کلید هاست ثبت شد: {fp}")
+        if job is not None:
+            await job.log(f"[{row['name']}] اتصال برقرار شد ({'root' if sess.is_root else 'sudo'})")
         return sess
 
     def set_check(self, server_id: int, ok: bool, info: str) -> None:
@@ -522,9 +601,68 @@ class Orchestrator:
         await job.log(f"[{row['name']}] تانل {conf['Name']} ساخته شد")
         return conf
 
+    async def _deploy_direct(self, job: Job, tunnel_id: int) -> None:
+        t = self.tunnel(tunnel_id)
+        mode = t["mode"]
+        kharej = self.server(t["kharej_id"])
+        if mode not in STREAM_MODES:
+            raise StepFailed("این روش به جفت ایران و خارج نیاز دارد")
+        if kharej["role"] != "kharej":
+            raise StepFailed("حالت مستقیم فقط روی سرور خارج اجرا می‌شود")
+        if not valid_ipv4(kharej["host"]):
+            raise StepFailed(f"IP سرور {kharej['name']} معتبر نیست")
+        self.db.update("tunnels", tunnel_id, {"status": "deploying", "last_job_id": job.id})
+        async with self._lock(kharej["id"]):
+            await job.start(0)
+            async with await self.open(job, kharej) as sess:
+                await job.ok(0)
+                await job.start(1)
+                info = await self.ensure_ready(job, sess, kharej)
+                await job.ok(1, f"jojonet {info.get('jojonet', '')}")
+                await job.start(2)
+                src = info.get("src", "")
+                if src and src != kharej["host"]:
+                    await job.log(f"⚠ {kharej['name']}: IP خروجی {src} با {kharej['host']} فرق دارد (NAT)")
+                drop_modes = [mode]
+                confs = await self.confs(sess)
+                seen: set[str] = set()
+                for drop in drop_modes:
+                    old = self.find_conf(confs, kharej["host"], drop)
+                    if old and old["Name"] not in seen:
+                        seen.add(old["Name"])
+                        await job.log(f"[{kharej['name']}] تانل قبلی {old['Name']} حذف می‌شود")
+                        await self.delete_remote(job, sess, kharej["name"], old["Name"])
+                await job.ok(2)
+                await job.step(3, "skipped", "کلیدها روی همین سرور ساخته می‌شوند")
+                await job.start(4, f"{kharej['name']} (kharej / مستقیم)")
+                extra = mode_env(mode, t.get("options"))
+                c1 = await self.deploy_side(job, sess, kharej, "kharej", mode, kharej["host"], extra)
+                self.db.update(
+                    "tunnels",
+                    tunnel_id,
+                    {
+                        "kharej_iface": c1["Name"],
+                        "iran_iface": None,
+                        "tun_iran_ip": None,
+                        "tun_kharej_ip": _ip_only(c1.get("Tun_IP", "")),
+                        "forward_ports": c1.get("Ports", "") or None,
+                    },
+                )
+                await job.ok(4, c1["Name"])
+                await job.step(5, "skipped", "حالت مستقیم: کلاینت روی دستگاه کاربر است")
+                await job.step(6, "skipped", "سرور ایران ندارد")
+                await job.start(7)
+                ok, summary = await self.verify(job, {kharej["id"]: sess}, tunnel_id)
+                if not ok:
+                    raise StepFailed(summary)
+                await job.ok(7, summary)
+
     async def job_deploy(self, job: Job, tunnel_id: int) -> None:
         t = self.tunnel(tunnel_id)
         mode = t["mode"]
+        if is_direct_tunnel(t):
+            await self._deploy_direct(job, tunnel_id)
+            return
         iran, kharej = self.server(t["iran_id"]), self.server(t["kharej_id"])
         for r in (iran, kharej):
             if not valid_ipv4(r["host"]):
@@ -605,9 +743,14 @@ class Orchestrator:
                 else:
                     await job.ok(3, "کلیدها پس از ساخت سمت اول همگام می‌شوند" if mode in SUBNET_KEYDIR_MODES | IP_KEYDIR_MODES else "نیاز ندارد")
 
-                await job.start(4, f"{first['name']} ({first_role})")
-                extra = xray_env(t.get("options")) if mode in XRAY_MODES else ""
-                c1 = await self.deploy_side(job, sess[first["id"]], first, first_role, mode, second["host"], extra)
+                users = tunnel_users(t)
+                role_first = script_role(first_role, mode, users)
+                role_second = script_role(second_role, mode, users)
+                if role_first != first_role:
+                    await job.log("کاربران روی سرور خارج هستند — پورت ورودی روی خارج، مقصد سرویس روی ایران (تانل خارج → ایران)")
+                await job.start(4, f"{first['name']} ({first_role}" + (f" / نقش {role_first}" if role_first != first_role else "") + ")")
+                extra = mode_env(mode, t.get("options"))
+                c1 = await self.deploy_side(job, sess[first["id"]], first, role_first, mode, second["host"], extra)
                 self.db.update("tunnels", tunnel_id, {f"{first_role}_iface": c1["Name"]})
                 await job.ok(4, c1["Name"])
 
@@ -631,19 +774,20 @@ class Orchestrator:
                 else:
                     await job.step(5, "skipped", "نیاز ندارد")
 
-                await job.start(6, f"{second['name']} ({second_role})")
-                c2 = await self.deploy_side(job, sess[second["id"]], second, second_role, mode, first["host"], extra)
+                await job.start(6, f"{second['name']} ({second_role}" + (f" / نقش {role_second}" if role_second != second_role else "") + ")")
+                c2 = await self.deploy_side(job, sess[second["id"]], second, role_second, mode, first["host"], extra)
                 self.db.update("tunnels", tunnel_id, {f"{second_role}_iface": c2["Name"]})
                 await job.ok(6, c2["Name"])
 
                 c_iran, c_kharej = (c2, c1) if first_role == "kharej" else (c1, c2)
+                listen = c1 if role_first == "iran" else c2 if role_second == "iran" else c_iran
                 self.db.update(
                     "tunnels",
                     tunnel_id,
                     {
                         "tun_iran_ip": _ip_only(c_iran.get("Tun_IP", "")),
                         "tun_kharej_ip": _ip_only(c_kharej.get("Tun_IP", "")),
-                        "forward_ports": c_iran.get("Ports", "") or None,
+                        "forward_ports": listen.get("Ports", "") or c_iran.get("Ports", "") or c_kharej.get("Ports", "") or None,
                     },
                 )
                 await job.start(7)
@@ -896,7 +1040,10 @@ class Orchestrator:
             return await self.verify_spoof(job, sessions, t)
         iran, kharej = self.server(t["iran_id"]), self.server(t["kharej_id"])
         problems: list[str] = []
-        for r, iface in ((kharej, t["kharej_iface"]), (iran, t["iran_iface"])):
+        sides = [(kharej, t["kharej_iface"])]
+        if not is_direct_tunnel(t):
+            sides.append((iran, t["iran_iface"]))
+        for r, iface in sides:
             if not valid_iface(iface):
                 problems.append(f"{r['name']}: نام تانل ثبت نشده")
                 continue
@@ -912,6 +1059,10 @@ class Orchestrator:
                 problems.append(f"{r['name']}: سرویس {iface} سالم نیست")
         ping_info = ""
         remote_ip = t["tun_kharej_ip"]
+        if is_direct_tunnel(t):
+            remote_ip = None
+            if not problems:
+                ping_info = "سرویس خارج سالم است (حالت مستقیم؛ کلاینت روی دستگاه کاربر)"
         if remote_ip and (valid_ipv4(remote_ip) or valid_ipv6(remote_ip)):
             ok_ping = False
             fam = "-6 " if ":" in remote_ip else ""
@@ -936,6 +1087,17 @@ class Orchestrator:
 
     async def job_verify(self, job: Job, tunnel_id: int) -> None:
         t = self.tunnel(tunnel_id)
+        if is_direct_tunnel(t):
+            kharej = self.server(t["kharej_id"])
+            await job.start(0)
+            async with await self.open(job, kharej) as sk:
+                await job.ok(0)
+                await job.start(1)
+                ok, summary = await self.verify(job, {kharej["id"]: sk}, tunnel_id)
+                if not ok:
+                    raise StepFailed(summary)
+                await job.ok(1, summary)
+            return
         iran, kharej = self.server(t["iran_id"]), self.server(t["kharej_id"])
         await job.start(0)
         async with await self.open(job, iran) as si, await self.open(job, kharej) as sk:
@@ -989,8 +1151,6 @@ class Orchestrator:
     async def job_relay_add(self, job: Job, relay_id: int) -> None:
         row = self.relay(relay_id)
         srv = self.server(row["server_id"])
-        if srv["role"] != "iran":
-            raise StepFailed("رله فقط روی سرور ایران ساخته می‌شود")
         engine, target, ports, proto, name = row["engine"], row["target"], row["ports"], row["proto"], row["name"]
         if engine not in RELAY_ENGINES or not valid_relay_name(name):
             raise StepFailed("تنظیمات رله نامعتبر است")
@@ -1097,6 +1257,174 @@ class Orchestrator:
                 raise StepFailed(f"تست پینگ روی {row['name']} ناموفق بود (کد {res.rc})")
             await job.ok(1, "تست پینگ انجام شد")
 
+    async def probe_vpn_panels(self, server_id: int) -> dict[str, Any]:
+        row = self.server(server_id)
+        async with self._lock(server_id):
+            sess = RemoteSession(self.creds(row), connect_timeout=self.settings.ssh_connect_timeout)
+            async with sess:
+                res = await sess.run_root(
+                    "TERM=dumb timeout 25 jojonet --vpn-panel-check </dev/null",
+                    timeout=35,
+                )
+        info = parse_vpn_check(res.stdout or "")
+        out = vpn_check_summary(info)
+        out["ok"] = bool(res.ok and info)
+        return out
+
+    async def job_vpn_panel(self, job: Job, server_id: int, kind: str) -> None:
+        flag = VPN_PANEL_FLAGS.get(kind)
+        label = VPN_PANEL_LABELS.get(kind, kind)
+        if not flag:
+            raise StepFailed("نوع پنل نامعتبر است")
+        row = self.server(server_id)
+        async with self._lock(server_id):
+            await job.start(0)
+            async with await self.open(job, row) as sess:
+                await job.ok(0)
+                await job.start(1)
+                probe = await sess.run_root(f"jojonet --help 2>/dev/null | grep -F -- {shlex.quote(flag)}", timeout=30)
+                if not probe.ok:
+                    await job.log(f"[{row['name']}] jojonet این فلگ را ندارد؛ اسکریپت از بسته پنل نصب می‌شود")
+                    await self.install_jojonet(job, sess, row["name"])
+                await job.ok(1)
+                await job.start(2)
+                check = await sess.run_root(
+                    "TERM=dumb timeout 25 jojonet --vpn-panel-check </dev/null",
+                    timeout=35,
+                    on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+                )
+                info = parse_vpn_check(check.stdout or "")
+                if vpn_panel_conflict(kind, info):
+                    raise StepFailed(vpn_panel_conflict_msg(kind, info))
+                skipped = False
+                if check.ok and vpn_panel_already(kind, info):
+                    skipped = True
+                    await job.log(f"[{row['name']}] همین پنل از قبل روی سرور نصب است؛ نصب دوباره انجام نشد.")
+                    await job.ok(2, f"{label} از قبل نصب بود")
+                    res = check
+                else:
+                    cmd = (
+                        "cd /root 2>/dev/null || cd /; "
+                        f"TERM=dumb timeout 900 jojonet {flag} </dev/null"
+                    )
+                    res = await sess.run_root(cmd, timeout=960, on_line=lambda l: job.log(f"[{row['name']}] {l}"))
+                    if not res.ok:
+                        raise StepFailed(f"نصب {label} روی {row['name']} ناموفق بود (کد {res.rc})")
+                    await job.ok(2, f"{label} نصب شد")
+                await job.start(3)
+                creds_res = await sess.run_root(
+                    "TERM=dumb timeout 40 jojonet --vpn-panel-creds </dev/null",
+                    timeout=50,
+                    on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+                )
+                creds = parse_vpn_creds(f"{res.stdout or ''}\n{creds_res.stdout or ''}")
+                if creds.get("url") or creds.get("username") or creds.get("password"):
+                    await job.log("")
+                    await job.log("----- مشخصات ورود پنل -----")
+                    if creds.get("label"):
+                        await job.log(f"  پنل:   {creds['label']}")
+                    if creds.get("url"):
+                        await job.log(f"  آدرس:  {creds['url']}")
+                    if creds.get("username"):
+                        await job.log(f"  کاربر: {creds['username']}")
+                    if creds.get("password"):
+                        await job.log(f"  رمز:   {creds['password']}")
+                    if creds.get("note"):
+                        await job.log(f"  نکته:  {creds['note']}")
+                    await job.log("  این مشخصات را ذخیره کنید.")
+                    await job.log("----------------------------")
+                    await job.ok(3, creds.get("url") or "مشخصات ورود آماده است")
+                else:
+                    await job.log(f"[{row['name']}] مشخصات ورود در خروجی نصب پیدا نشد؛ لاگ بالا را ببینید.")
+                    await job.ok(3, "نصب شد؛ مشخصات ورود را از لاگ بخوانید")
+                self.set_check(server_id, True, f"{label} از قبل نصب بود" if skipped else f"{label} نصب شد")
+
+    def match_panel_tunnel_id(self, server_id: int, name: str, tunnels: list[dict[str, Any]]) -> int | None:
+        for t in tunnels:
+            if t.get("iran_id") == server_id and t.get("iran_iface") == name:
+                return int(t["id"])
+            if t.get("kharej_id") == server_id and t.get("kharej_iface") == name:
+                return int(t["id"])
+        return None
+
+    async def scan_server_live(self, job: Job | None, row: dict[str, Any], tunnels: list[dict[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "id": row["id"],
+            "name": row["name"],
+            "role": row["role"],
+            "host": row["host"],
+            "ok": False,
+            "error": None,
+            "tunnels": [],
+        }
+        try:
+            async with await self.open(job, row) as sess:
+                if job is not None:
+                    await job.log(f"[{row['name']}] اسکن تانل‌های زنده")
+                res = await sess.run_root(LIST_TUNNELS_JSON, timeout=60)
+                if not res.ok:
+                    out["error"] = f"خواندن لیست ناموفق بود (کد {res.rc})"
+                    return out
+                items = parse_live_tunnels(res.stdout or "")
+                live = []
+                for item in items:
+                    name = item.get("name") or ""
+                    tid = self.match_panel_tunnel_id(row["id"], name, tunnels) if valid_iface(name) else None
+                    live.append({
+                        **item,
+                        "panel_tunnel_id": tid,
+                        "orphan": tid is None,
+                    })
+                out["ok"] = True
+                out["tunnels"] = live
+                return out
+        except Exception as exc:
+            out["error"] = str(exc)[:240]
+            return out
+
+    async def scan_live_tunnels(self, servers: list[dict[str, Any]], tunnels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not servers:
+            return []
+        results = await asyncio.gather(*(self.scan_server_live(None, row, tunnels) for row in servers))
+        return list(results)
+
+    async def job_enable_boot(self, job: Job, server_id: int) -> None:
+        row = self.server(server_id)
+        async with self._lock(server_id):
+            await job.start(0)
+            async with await self.open(job, row) as sess:
+                await job.ok(0)
+                await job.start(1)
+                res = await sess.run_root(
+                    ENABLE_BOOT_CMD, timeout=180, on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+                )
+                if not res.ok:
+                    raise StepFailed(f"فعال‌سازی ماندگاری ریبوت روی {row['name']} ناموفق بود (کد {res.rc})")
+                await job.ok(1, "ماندن بعد از ریبوت فعال شد")
+
+    async def job_delete_remote_tunnel(self, job: Job, server_id: int, name: str, force: bool) -> None:
+        if not valid_iface(name):
+            raise StepFailed("نام تانل نامعتبر است")
+        row = self.server(server_id)
+        await job.start(0)
+        failed = False
+        try:
+            async with self._lock(server_id):
+                async with await self.open(job, row) as sess:
+                    if await self.delete_remote(job, sess, row["name"], name):
+                        await job.ok(0, name)
+                    else:
+                        failed = True
+                        await job.step(0, "failed", "حذف ناقص")
+        except Exception as exc:
+            failed = True
+            await job.log(str(exc))
+            await job.step(0, "failed", str(exc)[:200])
+        if failed and not force:
+            raise StepFailed(f"حذف تانل {name} از {row['name']} کامل نشد؛ حذف اجباری را بزنید")
+        if failed:
+            await job.log(f"حذف اجباری: {name} از پنل نادیده گرفته شد (روی سرور ممکن است مانده باشد)")
+
     async def job_server_update(self, job: Job, server_id: int) -> None:
         row = self.server(server_id)
         async with self._lock(server_id):
@@ -1115,6 +1443,45 @@ class Orchestrator:
 def _ip_only(value: str) -> str | None:
     ip = (value or "").split("/", 1)[0].strip()
     return ip if valid_ipv4(ip) or valid_ipv6(ip) else None
+
+
+def parse_live_tunnels(text: str) -> list[dict[str, Any]]:
+    """Parse `jojonet --list-tunnels --json` stdout into a list of tunnel dicts."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    # Prefer the last JSON array in case banners precede it.
+    start = raw.rfind("[")
+    end = raw.rfind("]")
+    if start < 0 or end < start:
+        return []
+    try:
+        data = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or not valid_iface(name):
+            continue
+        boot = item.get("boot")
+        if isinstance(boot, str):
+            boot = boot.strip().lower() in ("1", "true", "yes", "enabled")
+        out.append({
+            "name": name,
+            "mode": str(item.get("mode") or "").strip() or "gre",
+            "role": str(item.get("role") or "").strip(),
+            "local_ip": str(item.get("local_ip") or "").strip(),
+            "remote_ip": str(item.get("remote_ip") or "").strip(),
+            "status": str(item.get("status") or "").strip() or "DOWN",
+            "boot": bool(boot),
+            "unit": str(item.get("unit") or "").strip(),
+        })
+    return out
 
 
 DEPLOY_STEPS = [
@@ -1138,3 +1505,111 @@ RELAY_STATS_STEPS = ["اتصال SSH", "خواندن آمار"]
 DNS_STEPS = ["اتصال SSH", "آماده‌سازی jojonet", "تنظیم DNS"]
 PING_TEST_STEPS = ["اتصال SSH", "تست پینگ"]
 OS_UPDATE_STEPS = ["اتصال SSH", "آپدیت بسته‌های سیستم"]
+ENABLE_BOOT_STEPS = ["اتصال SSH", "فعال‌سازی ماندگاری بعد از ریبوت"]
+REMOTE_DELETE_STEPS = ["حذف از سرور"]
+VPN_PANEL_STEPS = ["اتصال SSH", "آماده‌سازی jojonet", "نصب یک‌کلیکی پنل", "خواندن مشخصات ورود"]
+VPN_CHECK_BEGIN = "===== JOJONET_VPN_CHECK ====="
+VPN_CHECK_END = "===== END_JOJONET_VPN_CHECK ====="
+VPN_CHECK_KEYS = ("xui", "xui_flavor", "xui_running", "pasarguard", "pasarguard_running")
+VPN_CREDS_BEGIN = "===== JOJONET_VPN_CREDS ====="
+VPN_CREDS_END = "===== END_JOJONET_VPN_CREDS ====="
+VPN_CREDS_KEYS = ("kind", "label", "url", "username", "password", "note")
+
+
+def parse_vpn_creds(text: str) -> dict[str, str]:
+    if not text:
+        return {}
+    start = text.rfind(VPN_CREDS_BEGIN)
+    if start < 0:
+        return {}
+    rest = text[start + len(VPN_CREDS_BEGIN) :]
+    end = rest.find(VPN_CREDS_END)
+    block = rest if end < 0 else rest[:end]
+    out: dict[str, str] = {}
+    for raw in block.splitlines():
+        line = re.sub(r"^\[.*?\]\s*", "", raw).strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip().lower()
+        val = val.strip()
+        if key in VPN_CREDS_KEYS and val:
+            out[key] = val
+    return out
+
+
+def parse_vpn_check(text: str) -> dict[str, str]:
+    if not text:
+        return {}
+    start = text.rfind(VPN_CHECK_BEGIN)
+    if start < 0:
+        return {}
+    rest = text[start + len(VPN_CHECK_BEGIN) :]
+    end = rest.find(VPN_CHECK_END)
+    block = rest if end < 0 else rest[:end]
+    out: dict[str, str] = {}
+    for raw in block.splitlines():
+        line = re.sub(r"^\[.*?\]\s*", "", raw).strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip().lower()
+        val = val.strip()
+        if key in VPN_CHECK_KEYS:
+            out[key] = val
+    return out
+
+
+def vpn_panel_already(kind: str, info: dict[str, str]) -> bool:
+    if kind == "pasarguard":
+        return info.get("pasarguard") == "1"
+    if kind == "xui":
+        return info.get("xui") == "1" and info.get("xui_flavor", "unknown") in ("sanaei", "unknown", "")
+    if kind == "xui_classic":
+        return info.get("xui") == "1" and info.get("xui_flavor") == "classic"
+    return False
+
+
+def vpn_panel_conflict(kind: str, info: dict[str, str]) -> bool:
+    if info.get("xui") != "1":
+        return False
+    flavor = info.get("xui_flavor") or "unknown"
+    if kind == "xui":
+        return flavor == "classic"
+    if kind == "xui_classic":
+        return flavor == "sanaei"
+    return False
+
+
+def vpn_panel_conflict_msg(kind: str, info: dict[str, str]) -> str:
+    if kind == "xui":
+        return "روی این سرور قبلاً X-UI اصلی نصب شده است. با 3x-ui همزمان نصب نمی‌شود. اول حذف کنید."
+    if kind == "xui_classic":
+        return "روی این سرور قبلاً 3x-ui سنایی نصب شده است. با X-UI اصلی همزمان نصب نمی‌شود. اول حذف کنید."
+    return "نوع دیگری از پنل روی این سرور نصب است."
+
+
+def vpn_check_summary(info: dict[str, str]) -> dict[str, Any]:
+    xui = info.get("xui") == "1"
+    pg = info.get("pasarguard") == "1"
+    flavor = info.get("xui_flavor") or ""
+    return {
+        "xui": xui,
+        "xui_flavor": flavor,
+        "xui_running": info.get("xui_running") == "1",
+        "pasarguard": pg,
+        "pasarguard_running": info.get("pasarguard_running") == "1",
+        "xui_label": "X-UI اصلی" if flavor == "classic" else ("3x-ui سنایی" if xui else ""),
+    }
+
+
+VPN_PANEL_FLAGS = {
+    "xui": "--xui-install",
+    "xui_classic": "--xui-classic-install",
+    "pasarguard": "--pasarguard-install",
+}
+VPN_PANEL_LABELS = {
+    "xui": "3x-ui سنایی",
+    "xui_classic": "X-UI اصلی",
+    "pasarguard": "پاسارگارد",
+}

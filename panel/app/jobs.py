@@ -104,6 +104,7 @@ class JobManager:
         func: JobFunc,
         server_id: int | None = None,
         tunnel_id: int | None = None,
+        owner_id: int | None = None,
         on_finish: Callable[[bool], Awaitable[None] | None] | None = None,
     ) -> int:
         job_id = self.db.insert(
@@ -116,6 +117,7 @@ class JobManager:
                 "log": "",
                 "server_id": server_id,
                 "tunnel_id": tunnel_id,
+                "owner_id": owner_id,
                 "created_at": utcnow(),
             },
         )
@@ -159,11 +161,14 @@ class JobManager:
         self.flush_log(job_id)
         return self.db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
 
-    def list(self, limit: int = 50) -> list[dict[str, Any]]:
-        return self.db.all(
-            "SELECT id, kind, title, status, server_id, tunnel_id, created_at, finished_at FROM jobs ORDER BY id DESC LIMIT ?",
-            (limit,),
+    def list(self, limit: int = 50, owner_id: int | None = None) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT id, kind, title, status, server_id, tunnel_id, owner_id, created_at, finished_at "
+            "FROM jobs"
         )
+        if owner_id is None:
+            return self.db.all(sql + " ORDER BY id DESC LIMIT ?", (limit,))
+        return self.db.all(sql + " WHERE owner_id=? ORDER BY id DESC LIMIT ?", (owner_id, limit))
 
     def subscribe(self, job_id: int) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=5000)

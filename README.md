@@ -17,7 +17,7 @@ sudo jojonet --help
 
 | نسخه | چه چیزی اضافه / عوض شد |
 |------|-------------------------|
-| **1.6.0** | **Xray Dokodemo / Reverse**، **تانل‌های IPv6** (6to4 / GRE6 / IPIP6)، **رله تک‌سرور** (iptables/GOST/HAProxy/Socat/Xray)، ابزار DNS/پینگ/آپدیت |
+| **1.6.0** | **Xray Dokodemo / Reverse**، **تانل‌های IPv6** (6to4 / GRE6 / IPIP6)، **رله تک‌سرور** (ایران یا خارج)، **DNSTT/ICMP مستقیم** روی یک سرور خارج، ابزار DNS/پینگ/آپدیت |
 | **1.5.9** | **WireGuard داخل ICMP / FakeTCP** (`--wg-icmp` / `--wg-faketcp`)، **چک آمادگی Spoof** در پنل قبل از ساخت |
 | **1.5.8** | **Spoof Tunnel در پنل وب** (ساخت خودکار دو طرف + تست UDP سرتاسری)، `--spoof-remove` |
 | **1.5.7** | فیکس سینک کلید TUN/TCP و Paqet، `--delete`، export/import امن، **پنل وب فارسی** |
@@ -60,17 +60,7 @@ sudo jojonet --update
 sudo jojonet --update --force
 ```
 
-اگر نسخهٔ قدیمی داری و `--update` کار نمی‌کند:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
-```
-
-اگر GitHub فیلتر است:
-
-```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo bash
-```
+اگر نسخهٔ قدیمی داری و `--update` کار نمی‌کند، همان دستور نصب را دوباره بزن (بخش «نصب اسکریپت»).
 
 - کانفیگ‌های `/etc/jojonet/` پاک نمی‌شوند
 - بکاپ باینری قبلی: `/usr/local/bin/jojonet.bak.VERSION`
@@ -78,10 +68,19 @@ curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo
 
 ---
 
-## نصب (هر دو سرور)
+## نصب اسکریپت (یک دستور)
+
+روی هر سرور (ایران و خارج) فقط این را بزن:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
+```
+
+اگر GitHub فیلتر است: `curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo bash`
+
+بعد از نصب:
+
+```bash
 sudo jojonet
 sudo jojonet --version
 ```
@@ -89,24 +88,6 @@ sudo jojonet --version
 خروجی باید باشد: `jojonet 1.6.0`
 
 > همیشه **اول سرور خارج** را راه بینداز، بعد **سرور ایران** (به‌جز Rathole/Wstunnel که اول ایران بهتر است).
-
-### نصب یک‌کلیکی از فایل zip
-
-فایل `JojoNet-v1.6.0-full.zip` را روی سرور کپی کن (مثلاً با `scp`) و:
-
-```bash
-sudo apt-get install -y unzip   # اگر unzip نداری
-unzip JojoNet-v1.6.0-full.zip -d jojonet && cd jojonet
-sudo bash setup.sh              # منو: ۱) اسکریپت  ۲) پنل وب  ۳) هر دو
-```
-
-بدون منو:
-
-```bash
-sudo bash setup.sh script   # فقط اسکریپت jojonet
-sudo bash setup.sh panel    # فقط پنل وب
-sudo bash setup.sh all      # هر دو
-```
 
 ---
 
@@ -121,6 +102,22 @@ sudo jojonet-panel set-admin    # تغییر رمز مدیر
 ```
 
 راهنمای کامل: [panel/README.md](./panel/README.md)
+
+### اختیاری / پیشرفته — نصب از zip یا setup.sh
+
+اگر فایل `JojoNet-v1.6.0-full.zip` داری (مثلاً آفلاین):
+
+```bash
+sudo apt-get install -y unzip
+unzip JojoNet-v1.6.0-full.zip -d jojonet && cd jojonet
+sudo bash setup.sh              # منو: اسکریپت / پنل / هر دو / پنل‌های VPN
+# یا بدون منو:
+sudo bash setup.sh script       # فقط jojonet
+sudo bash setup.sh panel        # فقط پنل وب
+sudo bash setup.sh all          # اسکریپت + پنل
+```
+
+برای اسکریپت روی سرور اینترنت‌دار همان **یک دستور** `install.sh` کافی است؛ zip فقط جایگزین آفلاین است.
 
 ---
 
@@ -268,9 +265,54 @@ VLESS بین دو سرور. پورت‌های عمومی روی یک سمت به
 
 ---
 
+## DNSTT — تونل DNS (از 1.6.0)
+
+وقتی TCP/UDP فیلتر است ولی DNS (DoH/DoT) باز است. دامنه باید NSاش روی IP سرور خارج باشد.
+
+| | |
+|--|--|
+| **دستور** | `JOJONET_DNSTT_DOMAIN=t.example.com sudo jojonet --dnstt PEER_IP` |
+| **منو** | گزینه `28` (جفت ایران↔خارج) یا `30` (فقط خارج) |
+| **ترتیب** | اول خارج، بعد ایران (همان دامنه روی هر دو). **مستقیم:** `sudo jojonet --direct dnstt` — کلاینت روی دستگاه کاربر |
+
+رکورد DNS در zone والد:
+
+```
+t.example.com.     NS  ns.t.example.com.
+ns.t.example.com.  A   <KHAREJ_IP>
+```
+
+- Resolver ایران: `JOJONET_DNSTT_MODE=doh|dot|udp` (پیش‌فرض `doh`) و `JOJONET_DNSTT_RESOLVER`
+- پورت UDP خارج: `JOJONET_DNSTT_DNS_PORT=5300` (پورت ۵۳ با iptables به همین پورت REDIRECT می‌شود)
+- فوروارد پورت: `JOJONET_FWD_PORTS=443` یا `8443:443`
+- کلیدها: `dnstt.priv` / `dnstt.pub` / `dnstt.auth` در `/etc/jojonet/keys/pair_<IP>/`
+- فقط **یک** تانل DNSTT روی هر سرور (UDP/53)
+- سرویس: `jojonet-stream@NAME.service`
+
+---
+
+## ICMP — pingtunnel (از 1.6.0)
+
+وقتی TCP/UDP/DNS بسته‌اند ولی پینگ کار می‌کند. رمز ChaCha20. **با** `--wg-icmp` (WireGuard داخل udp2raw) فرق دارد.
+
+| | |
+|--|--|
+| **دستور** | `sudo jojonet --icmp PEER_IP` |
+| **منو** | گزینه `29` (جفت) یا `30` / `sudo jojonet --direct icmp` (فقط خارج؛ کلاینت روی دستگاه کاربر) |
+| **ترتیب** | اول خارج (server)، بعد ایران (client + فوروارد پورت) |
+
+- فوروارد: `JOJONET_FWD_PORTS=443`
+- کلیدها: `pingtunnel.key` (عدد) و `pingtunnel.encrypt` (hex)
+- تا وقتی تانل بالاست، کرنل به پینگ معمولی جواب نمی‌دهد (`icmp_echo_ignore_all=1`)؛ با stop برمی‌گردد
+- فقط **یک** تانل ICMP روی هر سرور (سوکت raw)
+- باینری: pingtunnel 2.10 با sha256 پین شده
+- سرویس: `jojonet-stream@NAME.service`
+
+---
+
 ## رله تک‌سرور (از 1.6.0)
 
-کاربران به **سرور ایران** وصل می‌شوند؛ ترافیک به سرور اصلی (مقصد) می‌رود. روی مقصد JojoNet لازم نیست.
+کاربران به **همین سرور** (ایران یا خارج) وصل می‌شوند؛ ترافیک به سرور اصلی (مقصد) می‌رود. روی مقصد JojoNet لازم نیست.
 
 ```bash
 sudo jojonet --relay iptables 203.0.113.10 443,8443
@@ -439,7 +481,7 @@ sudo jojonet --role kharej --qs
 | ریورس (خارج dial به ایران) | **Rathole** / **Wstunnel** / **Xray Reverse** |
 | ایران به خارج وصل می‌شود، VLESS می‌خواهی | **Xray Dokodemo-door** |
 | نیاز به IPv6 خصوصی بین دو سرور | **6to4 / GRE6 / IPIP6** |
-| رله روی ایران بدون نصب روی مقصد | **رله iptables / GOST / Xray** |
+| رله روی ایران یا خارج بدون نصب روی مقصد | **رله iptables / GOST / Xray** |
 | هر دو provider قابلیت source spoof دارند | **Spoof Tunnel** |
 | DNS مناسب + لایه UDP قابل‌اعتماد داری | **QS-Tunnel + HY2/WG/xhttp-h3** |
 

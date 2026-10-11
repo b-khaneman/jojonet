@@ -50,7 +50,13 @@ def admin(settings: Settings) -> tuple[str, str]:
     from app.security import hash_password
 
     db = Database(settings.db_path)
-    db.insert("admins", {"username": "admin", "pw_hash": hash_password("correct-horse-1"), "created_at": utcnow()})
+    db.insert("admins", {
+        "username": "admin",
+        "pw_hash": hash_password("correct-horse-1"),
+        "created_at": utcnow(),
+        "role": "owner",
+        "enabled": 1,
+    })
     db.close()
     return "admin", "correct-horse-1"
 

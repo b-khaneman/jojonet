@@ -5,8 +5,8 @@ set -Euo pipefail
 IFS=$'\n\t'
 
 # =========================================================
-# JOJONET — Iran ↔ Foreign Tunnel Manager
-# Modes: GRE | TUN/TCP | Paqet | VXLAN
+# JOJONET — Iran ↔ Foreign Tunnel Manage
+# Modes: GRE | TUN/TCP | Paqet | VXLAN | DNSTT | ICMP
 # Author: @B_KHANEMAN
 # Support: @B_KHANEMAN
 # License: commercial monthly subscription (crypto / web checkout)
@@ -68,6 +68,7 @@ PAQET_CORE_REPO="hanselime/paqet"
 PAQET_CORE_VERSION="${JOJONET_PAQET_CORE_VERSION:-v1.0.0-alpha.16}"
 BOOT_SERVICE="/etc/systemd/system/jojonet-boot.service"
 LOCALTUN_RELEASE="https://github.com/Azumi67/LocalTun_TCP/releases/download/v1.7"
+LOCALTUN_SHA256_AMD64="f40aaf88fb44d33713a2dc918820de34e94ff1bfcc5c906e616f8549ba2d3cfe"
 TUNTCP_BIN_DIR="/usr/local/bin"
 KEYS_ROOT="/etc/jojonet/keys"
 DEFAULT_PAQET_PORT=443
@@ -152,7 +153,7 @@ STEALTH_MODE=0
 
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -160,7 +161,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -317,22 +318,8 @@ license_activate() {
 }
 
 require_active_license() {
-    local now left
-    if ! license_load; then
-        echo -e "${RED}[!] JojoNet فقط با اشتراک ماهانه کار می‌کند.${NC}" >&2
-        echo -e "    خرید وب / رمزارز: ${CYAN}$(license_shop_link)${NC}" >&2
-        echo -e "    بعد از پرداخت: ${CYAN}sudo jojonet --activate KEY${NC}" >&2
-        return 1
-    fi
-    now="$(date +%s)"
-    if (( LICENSE_EXP <= now )); then
-        echo -e "${RED}[!] اشتراک ماهانه تمام شده است. تمدید: $(license_shop_link)${NC}" >&2
-        return 1
-    fi
-    left="$(license_days_left)"
-    if (( left <= 5 )); then
-        echo -e "${YELLOW}[!] ${left} روز تا پایان اشتراک — تمدید: $(license_shop_link)${NC}" >&2
-    fi
+    # Tunnel access is sold through the web panel account (quotas / expiry).
+    # --activate / --license stay for older installs and do not block execution.
     return 0
 }
 
@@ -413,17 +400,38 @@ verify_sha256() {
 }
 
 download_verified() {
-    local url="$1" dest="$2" asset_name="$3" expected=""
-    expected=$(lookup_checksum "$asset_name" || true)
+    local url="$1" dest="$2" asset_name="$3" expected="${4:-}"
+    [[ -n "$expected" ]] || expected=$(lookup_checksum "$asset_name" || true)
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$dest" || return 1
+        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 --retry-delay 2 "$url" -o "$dest" || return 1
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$dest" "$url" || return 1
+        wget -qO "$dest" --timeout=180 "$url" || return 1
     else
         log_error "curl or wget required."
         return 1
     fi
     verify_sha256 "$dest" "$expected"
+}
+
+github_release_urls() {
+    local url="$1"
+    printf '%s\n' \
+        "$url" \
+        "https://ghproxy.net/${url}" \
+        "https://mirror.ghproxy.com/${url}"
+}
+
+download_verified_github() {
+    local dest="$1" asset="$2" official="$3" expected="${4:-}" url=""
+    while IFS= read -r url; do
+        [[ -z "$url" ]] && continue
+        echo -e "  ${CYAN}try${NC} $url" >&2
+        if download_verified "$url" "$dest" "$asset" "$expected"; then
+            return 0
+        fi
+        rm -f "$dest"
+    done < <(github_release_urls "$official")
+    return 1
 }
 
 # ==========================================
@@ -662,7 +670,7 @@ resolve_server_role() {
 }
 
 # Key files that must be identical on both sides of a pair. WireGuard private keys are per-side and never shared.
-JOJONET_SHARED_KEY_FILES=(private_key.pem public_key.pem paqet.secret hy2.auth rathole.token wstunnel.token udp2raw.key xray.uuid)
+JOJONET_SHARED_KEY_FILES=(private_key.pem public_key.pem paqet.secret hy2.auth rathole.token wstunnel.token udp2raw.key xray.uuid dnstt.priv dnstt.pub dnstt.auth pingtunnel.key pingtunnel.encrypt)
 readonly JOJONET_SSH_OPTS=(-o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o BatchMode=yes)
 
 pair_keydir_for() {
@@ -924,6 +932,29 @@ healthcheck_tunnel() {
             [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
             [[ -n "${XrayJson:-}" ]] && echo -e "  config:  ${XrayJson}"
             ;;
+        dnstt)
+            if stream_process_running "$name"; then
+                echo -e "  process: ${GREEN}running${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  process: ${RED}not running${NC}"
+                fatal=1
+            fi
+            echo -e "  domain:  ${DnsDomain:-?}  resolver: ${DnsMode:-doh} ${DnsResolver:-}"
+            echo -e "  dns udp: ${TcpPort:-5300}  ($([[ "${Role:-}" == "kharej" ]] && echo server || echo client))"
+            [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
+            ;;
+        icmp)
+            if stream_process_running "$name"; then
+                echo -e "  process: ${GREEN}running${NC}"
+                ok=$((ok + 1))
+            else
+                echo -e "  process: ${RED}not running${NC}"
+                fatal=1
+            fi
+            echo -e "  carrier: ICMP echo + ChaCha20  ($([[ "${Role:-}" == "kharej" ]] && echo server || echo client))"
+            [[ -n "${Ports:-}" ]] && echo -e "  forward: ${Ports}"
+            ;;
         sit|gre6|ipip6)
             if ip link show "${V6Iface:-$name}" >/dev/null 2>&1; then
                 echo -e "  sit:     ${GREEN}present${NC} (${V6Iface:-$name})"
@@ -1088,7 +1119,7 @@ preflight_tunnel_check() {
         local first="${fp%%,*}"
         first="${first// /}"
         case "$mode" in
-            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2|rathole|wstunnel|ws|gre6|ipip6)
+            gre|vxlan|tun_tcp|wireguard|paqet|hysteria2|rathole|wstunnel|ws|gre6|ipip6|dnstt|icmp)
                 if [[ -n "$first" ]] && iran_dnat_port_in_use "$first"; then
                     echo -e "  ${YELLOW}[!] Forward port $first already used — will auto-pick alternate${NC}"
                     warns=$((warns + 1))
@@ -1150,6 +1181,14 @@ show_pairing_card() {
         dokodemo|xray_reverse)
             echo -e "  ${CYAN}UUID:${NC}         synced from IP pair (xray.uuid)"
             echo -e "  ${CYAN}Peer MUST use:${NC} same control port + transport (VLESS/${XRAY_NET:-$DEFAULT_XRAY_NET})"
+            ;;
+        dnstt)
+            echo -e "  ${CYAN}Domain:${NC}       ${DnsDomain:-$JOJONET_DNSTT_DOMAIN}  (NS must point at Kharej)"
+            echo -e "  ${CYAN}Peer MUST use:${NC} same domain + keys (dnstt.priv/pub/auth)"
+            ;;
+        icmp)
+            echo -e "  ${CYAN}Keys:${NC}         pingtunnel.key + pingtunnel.encrypt (ChaCha20)"
+            echo -e "  ${CYAN}Note:${NC}         kernel ping replies are disabled while this tunnel runs"
             ;;
         sit)
             echo -e "  ${CYAN}IPv6:${NC}         private fd6a:… /64 derived from the IP pair"
@@ -1310,7 +1349,7 @@ import_manual_gretun() {
     if [[ "$addr" == *".1/"* ]]; then role="kharej"
     elif [[ "$addr" == *".2/"* ]]; then role="iran"
     else
-        read -r -p "Role [1=Iran 2=Kharej]: " _r
+        read -r -p "Role [1=Iran 2=Kharej]: " _
         [[ "$_r" == "2" ]] && role="kharej" || role="iran"
     fi
     subnet_byte=$(echo "$addr" | awk -F'[./]' '{print $3}')
@@ -1418,9 +1457,15 @@ Repo: ${JOJONET_REPO}
   UUID مشترک (xray.uuid)، دانلود Xray با بررسی SHA-256، تست کانفیگ با xray run -test، پورت LISTEN:TARGET
 - تانل‌های IPv6: 6to4 (SIT با IPv6 خصوصی fd6a:…)، GRE6 و IPIP6 روی 6to4 با DNAT پورت‌ها — --6to4 / --gre6 / --ipip6
 - رله تک‌سرور به سبک hiddify-relay: iptables / GOST / HAProxy / Socat / Xray (آمار ترافیک) — منو 25 / --relay
-- ابزار سرور: تنظیم DNS، تست پینگ، آپدیت سیستم — منو 26 / --dns / --ping-test / --update-server
+- ابزار سرور: تنظیم DNS، تست پینگ، آپدیت سیستم — منو 26 / --dns / --ping-test / --update-serve
 - Fix: تغییر IP طرف مقابل برای Wstunnel کلید جفت جدید را می‌سازد (قبلاً مسیر GRE و کلید قدیمی)
 - پنل: همه تانل‌ها و رله‌های جدید از داخل وب‌پنل
+- تانل جدید: DNSTT (تونل DNS روی DoH/DoT/UDP، دامنه NS روی خارج) — sudo jojonet --dnstt <PEER_IP>
+- تانل جدید: ICMP/pingtunnel (ChaCha20 روی پینگ؛ وقتی TCP/UDP بسته‌اند) — sudo jojonet --icmp <PEER_IP>
+- حالت مستقیم (بدون سرور ایران): DNSTT/ICMP فقط روی خارج، یا رله روی هر سرور — sudo jojonet --direct dnstt|icmp  |  منو 30
+  یکی از هر کدام روی هر سرور؛ با --wg-icmp (udp2raw+WireGuard) فرق دارد
+- بخش جدا: نصب یک‌کلیکی 3x-ui سنایی، X-UI اصلی (علیرضا) و پاسارگارد — منو 31 / --xui-install / --xui-classic-install / --pasarguard-install
+- بعد از نصب پنل: مشخصات ورود (آدرس / کاربر / رمز) با --vpn-panel-creds و منو 31 گزینه 10
 
 ## 1.5.9
 - تانل جدید: WireGuard داخل ICMP (پکت‌های پینگ) — sudo jojonet --wg-icmp <PEER_IP>
@@ -1461,7 +1506,7 @@ Repo: ${JOJONET_REPO}
 
 ## 1.5.5
 - Spoof Tunnel v3.1.0-beta.0: checksum رسمی، spoof_ip/file، TCP/UDP/ICMP/ICMPv6
-- QS-Tunnel: commit پین‌شده، Python 3.12+، ایران=client، خارج=server
+- QS-Tunnel: commit پین‌شده، Python 3.12+، ایران=client، خارج=serve
 - هر دو standalone systemd service هستند و overlay معمول JojoNet نیستند
 - CLI: --spoof-tunnel / --spoof و --qs-tunnel / --qs
 
@@ -1541,12 +1586,12 @@ EOF
 
 show_help() {
     cat <<EOF
-JOJONET v${JOJONET_VERSION} — Iran ↔ Kharej tunnel manager
+JOJONET v${JOJONET_VERSION} — Iran ↔ Kharej tunnel manage
 
 Usage:
   sudo jojonet                         Interactive menu
-  sudo jojonet <PEER_IP>               Quick GRE to peer
-  sudo jojonet --peer <PEER_IP>        Quick GRE to peer
+  sudo jojonet <PEER_IP>               Quick GRE to pee
+  sudo jojonet --peer <PEER_IP>        Quick GRE to pee
   sudo jojonet --tun-tcp <PEER_IP>     TUN/PrivateIP/TCP tunnel
   sudo jojonet --paqet <PEER_IP>       Paqet (Raw/KCP) tunnel
   sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
@@ -1561,6 +1606,18 @@ Usage:
   sudo jojonet --6to4 <PEER_IP>        6to4 SIT: private IPv6 between servers [--sit]
   sudo jojonet --gre6 <PEER_IP>        GRE6 over 6to4 (IPv4 overlay + DNAT)
   sudo jojonet --ipip6 <PEER_IP>       IPIP6 over 6to4 (IPv4 overlay + DNAT)
+  sudo jojonet --dnstt [PEER_IP]       DNSTT DNS tunnel (omit PEER = direct Kharej)
+  sudo jojonet --icmp [PEER_IP]        ICMP tunnel (omit PEER = direct Kharej)
+  sudo jojonet --direct dnstt|icmp     Same as above with no Iran VPS (client on user device)
+  sudo jojonet --xui-install           One-click official MHSanaei 3x-ui (Sanaei)
+  sudo jojonet --xui-classic-install   One-click official alireza0 X-UI (classic)
+  sudo jojonet --xui-status            Show X-UI unit / ports / flavor
+  sudo jojonet --xui-uninstall         Stop and disable X-UI (either flavor)
+  sudo jojonet --pasarguard-install    One-click official PasarGuard (SQLite)
+  sudo jojonet --pasarguard-status     Show PasarGuard URL / containers
+  sudo jojonet --pasarguard-uninstall  Stop PasarGuard containers
+  sudo jojonet --vpn-panel-creds       Show VPN panel login (URL / user / password)
+  sudo jojonet --vpn-panel-check       Detect installed VPN panels on this server
   sudo jojonet --relay <ENGINE> <DEST> <PORTS> [tcp|udp|both] [NAME]
                                        Single-server relay: iptables|gost|haproxy|socat|xray
   sudo jojonet --relay-list | --relay-remove <NAME> | --relay-stats [NAME]
@@ -1578,7 +1635,8 @@ Usage:
   sudo jojonet --import-config <FILE>  Restore tunnel configs from backup
   sudo jojonet --fix-tunnels             Repair configs + restart all tunnels
   sudo jojonet --change-peer <NAME> <IP>  Change peer IP and redeploy
-  sudo jojonet --list-tunnels [--detail] List tunnels
+  sudo jojonet --list-tunnels [--detail|--json] List tunnels (JSON for panels)
+  sudo jojonet --enable-boot           Enable reboot persistence for all tunnels
   sudo jojonet --health <NAME>         Healthcheck one tunnel
   sudo jojonet --delete <NAME>         Delete one tunnel (no prompt) [--remove]
   sudo jojonet --changelog             Show version history / تغییرات نسخه‌ها
@@ -1596,6 +1654,10 @@ What's new in v${JOJONET_VERSION}:
   • New: --dokodemo / --xray-reverse — Xray VLESS tunnels (tcp/ws/grpc), reverse for Iran-access servers
   • New: --6to4 / --gre6 / --ipip6 — IPv6 (SIT) tunnels with IPv4 overlay + port forward
   • New: --relay — single-server relays (iptables / GOST / HAProxy / Socat / Xray with stats)
+  • New: --dnstt — DNS tunnel (DoH/DoT/UDP)  JOJONET_DNSTT_DOMAIN=t.example.com
+  • New: --icmp — ICMP echo tunnel (pingtunnel + ChaCha20; distinct from --wg-icmp)
+  • New: --xui-install / --xui-classic-install / --pasarguard-install — one-click VPN panels (menu 31)
+  • New: --vpn-panel-creds — print VPN panel login after install
   • New: --dns / --ping-test / --update-server server tools
   • Web panel: all new tunnels and relays — sudo bash panel/install-panel.sh
   Full list:  sudo jojonet --changelog
@@ -1616,6 +1678,10 @@ Environment:
   JOJONET_SHOP_URL=https://pay.example.com   Monthly subscription shop (web + crypto)
   JOJONET_XRAY_CTRL_PORT=4443          Xray control port (dokodemo 4443 / reverse 4444; same on both)
   JOJONET_FWD_PORTS=443,8443:2053      Forward ports (Xray: PORT or IRAN_LISTEN:KHAREJ_TARGET)
+  JOJONET_DNSTT_DOMAIN=t.example.com   DNSTT: NS-delegated subdomain (required)
+  JOJONET_DNSTT_MODE=doh|dot|udp       DNSTT resolver (default doh)
+  JOJONET_DNSTT_RESOLVER=https://cloudflare-dns.com/dns-query
+  JOJONET_DNSTT_DNS_PORT=5300          Kharej dnstt-server UDP listen (53 redirected)
   JOJONET_ALLOW_UNSIGNED=1
   JOJONET_QUICK_PROBE_MTU=1
   JOJONET_SPOOF_IP / JOJONET_SPOOF_PEER_IP   Spoof: this side / peer spoofed source IPv4
@@ -1632,7 +1698,7 @@ Quick start (auto — type + peer IP only):
 Quick start (GRE):
   1) Kharej first:  sudo jojonet <IRAN_IP>
   2) Iran second:   sudo jojonet <KHAREJ_IP>
-  3) Pairing card shows exact command for peer server
+  3) Pairing card shows exact command for peer serve
 
 Rathole reverse:
   1) Iran:   sudo jojonet --rathole <KHAREJ_IP>
@@ -1646,7 +1712,17 @@ Xray (either order; same transport + control port on both):
   Dokodemo: Iran → sudo jojonet --dokodemo <KHAREJ_IP> | Kharej → sudo jojonet --dokodemo <IRAN_IP>
   Reverse:  Iran → sudo jojonet --xray-reverse <KHAREJ_IP> | Kharej → sudo jojonet --xray-reverse <IRAN_IP>
 
-Relay (only on the Iran relay server):
+DNSTT (Kharej first; NS of JOJONET_DNSTT_DOMAIN must point at Kharej):
+  Pair:   Kharej → JOJONET_DNSTT_DOMAIN=t.example.com sudo jojonet --dnstt <IRAN_IP>
+          Iran   → JOJONET_DNSTT_DOMAIN=t.example.com sudo jojonet --dnstt <KHAREJ_IP>
+  Direct (no Iran VPS): JOJONET_DNSTT_DOMAIN=t.example.com sudo jojonet --direct dnstt
+
+ICMP pingtunnel (Kharej first; ping must work; not --wg-icmp):
+  Pair:   Kharej → sudo jojonet --icmp <IRAN_IP>
+          Iran   → sudo jojonet --icmp <KHAREJ_IP>
+  Direct (no Iran VPS): sudo jojonet --direct icmp
+
+Relay (single server — Iran or Kharej; destination does not need JojoNet):
   sudo jojonet --relay iptables <MAIN_SERVER_IP> 443,8443
   sudo jojonet --relay xray <MAIN_SERVER_IP> 2096:443 tcp
 
@@ -1965,7 +2041,7 @@ apply_global_sysctl() {
         cat <<EOF > "$SYSCTL_FILE"
 # JojoNet network profile
 net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_congestion_control=bb
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
@@ -2065,7 +2141,7 @@ gre_subnet_for_pair() {
     echo "$b"
 }
 
-# Another GRE tunnel on THIS server already uses this subnet for a different peer
+# Another GRE tunnel on THIS server already uses this subnet for a different pee
 gre_subnet_taken_locally() {
     local byte="$1" rem="$2" f r mode
     shopt -s nullglob
@@ -2278,6 +2354,10 @@ generate_tunnel_name_from_peer() {
         prefix="g6"
     elif [[ "$mode" == "ipip6" ]]; then
         prefix="i6"
+    elif [[ "$mode" == "dnstt" ]]; then
+        prefix="dt"
+    elif [[ "$mode" == "icmp" ]]; then
+        prefix="ic"
     elif [[ "$mode" == "gre" && -n "$subnet_byte" ]]; then
         prefix="gr"
         suffix="b${subnet_byte}"
@@ -2344,6 +2424,8 @@ wait_for_tunnel_up() {
             fi
         elif xray_mode "$mode"; then
             xray_process_running "$name" && return 0
+        elif stream_mode "$mode"; then
+            stream_process_running "$name" && return 0
         elif ip link show "$name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             return 0
         fi
@@ -2582,6 +2664,8 @@ refresh_runtime_templates() {
     create_xray_service || return 1
     create_v6_runner_script || return 1
     create_v6_service || return 1
+    create_stream_runner_script || return 1
+    create_stream_service || return 1
     create_relay_runner_script || return 1
     create_relay_service || return 1
     if [[ -x "$U2R_BIN" ]]; then
@@ -2634,6 +2718,8 @@ tunnel_mode_label() {
         sit)           printf '%s' "6to4 (SIT IPv6)" ;;
         gre6)          printf '%s' "GRE6 over 6to4" ;;
         ipip6)         printf '%s' "IPIP6 over 6to4" ;;
+        dnstt)         printf '%s' "DNSTT (DNS tunnel)" ;;
+        icmp)          printf '%s' "ICMP (pingtunnel)" ;;
         *)             printf '%s' "${1:-?}" ;;
     esac
 }
@@ -2726,6 +2812,12 @@ tunnel_endpoint_summary() {
         dokodemo|xray_reverse)
             extra="VLESS/${XrayNet:-tcp} control TCP ${TcpPort:-?}"
             ;;
+        dnstt)
+            extra="DNS ${DnsDomain:-?} ${DnsMode:-doh}"
+            ;;
+        icmp)
+            extra="ICMP echo ChaCha20"
+            ;;
         paqet)
             extra="KCP port ${TcpPort:-?}"
             [[ -n "${Ports:-}" ]] && extra="${extra} | forward ${Ports}"
@@ -2777,7 +2869,7 @@ list_all_tunnels() {
 
     if (( ${#files[@]} == 0 )); then
         echo -e "${YELLOW}[!] No tunnels configured.${NC}"
-        return 1
+        return 0
     fi
 
     echo -e "\n${CYAN}=== Tunnel Map (${#files[@]} configured) ===${NC}"
@@ -2786,7 +2878,7 @@ list_all_tunnels() {
     local Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
 
     for file in "${files[@]}"; do
         idx=$((idx + 1))
@@ -2806,6 +2898,46 @@ list_all_tunnels() {
     done
 
     echo -e "${CYAN}Summary:${NC} ${GREEN}${total_up}${NC}/${#files[@]} active"
+    return 0
+}
+
+list_all_tunnels_json() {
+    shopt -s nullglob
+    local files=("$INSTANCES_DIR"/*.conf)
+    shopt -u nullglob
+    local file first=1 unit status boot_json
+    local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    local Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    local Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
+
+    printf '['
+    for file in "${files[@]}"; do
+        if ! load_instance_config "$file"; then
+            continue
+        fi
+        [[ -n "${Name:-}" ]] || continue
+        unit=$(tunnel_service_unit "$Name")
+        status=$(tunnel_status_word "$Name")
+        if tunnel_boot_enabled "$Name"; then boot_json=true; else boot_json=false; fi
+        (( first )) || printf ','
+        first=0
+        printf '\n  {"name":%s,"mode":%s,"role":%s,"local_ip":%s,"remote_ip":%s,"status":%s,"boot":%s,"unit":%s}' \
+            "$(json_string "${Name}")" \
+            "$(json_string "${TunnelMode:-gre}")" \
+            "$(json_string "${Role:-}")" \
+            "$(json_string "${Local_IP:-}")" \
+            "$(json_string "${Remote_IP:-}")" \
+            "$(json_string "${status}")" \
+            "$boot_json" \
+            "$(json_string "${unit}")"
+    done
+    if (( first )); then
+        printf ']\n'
+    else
+        printf '\n]\n'
+    fi
     return 0
 }
 
@@ -2877,6 +3009,17 @@ show_tunnel_detail_card() {
             [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}  (Iran LISTEN:TARGET → Kharej 127.0.0.1)" || true
             [[ -n "${XrayJson:-}" ]] && echo -e "  ${GREEN}Config:${NC}      ${XrayJson}" || true
             ;;
+        dnstt)
+            echo -e "  ${GREEN}Domain:${NC}      ${DnsDomain:-?}"
+            echo -e "  ${GREEN}Resolver:${NC}    ${DnsMode:-doh} ${DnsResolver:-}"
+            echo -e "  ${GREEN}DNS UDP:${NC}     ${TcpPort:-5300}  ($([[ "${Role:-}" == "kharej" ]] && echo 'server NS' || echo client))"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}  (Iran LISTEN:TARGET → Kharej 127.0.0.1)" || true
+            ;;
+        icmp)
+            echo -e "  ${GREEN}Carrier:${NC}     ICMP echo + ChaCha20 (pingtunnel)"
+            echo -e "  ${GREEN}Side:${NC}        $([[ "${Role:-}" == "kharej" ]] && echo SERVER || echo CLIENT)"
+            [[ -n "${Ports:-}" ]] && echo -e "  ${GREEN}Forward:${NC}     ${Ports}  (Iran LISTEN:TARGET → Kharej 127.0.0.1)" || true
+            ;;
         sit|gre6|ipip6)
             echo -e "  ${GREEN}SIT:${NC}         ${V6Iface:-$Name}  ${V6Local:-?} ↔ ${V6Remote:-?}"
             [[ "$mode" != "sit" ]] && echo -e "  ${GREEN}Overlay:${NC}     ${Tun_Client_IP:-?} (Iran) ↔ ${Tun_Server_IP:-?} (Kharej)" || true
@@ -2884,7 +3027,7 @@ show_tunnel_detail_card() {
     esac
 
     [[ -n "${Ports:-}" && "$mode" != "paqet" && "$mode" != "hysteria2" && "$mode" != "rathole" && "$mode" != "wstunnel" && \
-        "$mode" != "dokodemo" && "$mode" != "xray_reverse" ]] && \
+        "$mode" != "dokodemo" && "$mode" != "xray_reverse" && "$mode" != "dnstt" && "$mode" != "icmp" ]] && \
         echo -e "  ${GREEN}Port forward:${NC}   ${Ports} → Kharej tunnel IP" || true
     echo -e "  ${GREEN}MTU:${NC}          ${Suggested_MTU:-default}"
     echo -e "  ${GREEN}Subnet ID:${NC}    ${Subnet_Byte:-?}"
@@ -2972,11 +3115,8 @@ install_tun_tcp_binaries() {
     if [[ -x "$TUNTCP_BIN_DIR/tun-server" && -x "$TUNTCP_BIN_DIR/tun-client" ]]; then
         return 0
     fi
-    command -v unzip >/dev/null 2>&1 || {
-        log_error "unzip required for TUN/TCP mode."
-        return 1
-    }
-    local zip arch_zip tmpdir url
+    ensure_unzip || return 1
+    local zip arch_zip tmpdir url expected=""
     arch_zip=$(detect_cpu_arch_zip) || {
         log_error "Unsupported CPU for TUN/TCP binaries."
         return 1
@@ -2984,7 +3124,9 @@ install_tun_tcp_binaries() {
     tmpdir=$(mktemp -d /tmp/jojonet-tun.XXXXXX) || return 1
     url="${LOCALTUN_RELEASE}/${arch_zip}"
     log_note "Downloading LocalTun TCP ($arch_zip)..."
-    if ! download_verified "$url" "$tmpdir/$arch_zip" "$arch_zip"; then
+    expected=""
+    [[ "$arch_zip" == "amd64.zip" ]] && expected="$LOCALTUN_SHA256_AMD64"
+    if ! download_verified_github "$tmpdir/$arch_zip" "$arch_zip" "$url" "$expected"; then
         rm -rf "$tmpdir"
         return 1
     fi
@@ -3241,7 +3383,7 @@ write_paqet_server_yaml() {
     local name="$1" port="$2" secret="$3" conn="$4" mtu="$5" yaml="$6"
     get_paqet_network_info || return 1
     cat > "$yaml" <<EOF
-# JojoNet Paqet Server
+# JojoNet Paqet Serve
 role: "server"
 log:
   level: "info"
@@ -3358,7 +3500,7 @@ deploy_tunnel() {
     local paqet_yaml="$PAQET_CONFIG_DIR/${ins_name}.yaml" vxlan_vni="" vxlan_port="" hy_yaml=""
     local wg_priv="" wg_pub="" wg_peer="" hy_sni="${DEFAULT_HY2_SNI}" hy_hop_range="" hy_hop_interval=""
     local rh_toml="" ws_cmd="" hy_tls_mode="insecure" hy_domain="" hy_acme_email="" hy_cert_path="" hy_key_path=""
-    local wg_obfs="" obfs_port="" xray_json="" xray_net="" v6_iface="" v6_local="" v6_remote=""
+    local wg_obfs="" obfs_port="" xray_json="" xray_net="" v6_iface="" v6_local="" v6_remote="" dns_domain="" dns_resolver="" dns_mode=""
 
     apply_global_sysctl || return 1
 
@@ -3367,7 +3509,7 @@ deploy_tunnel() {
             gre|vxlan|tun_tcp|wireguard|gre6|ipip6)
                 fwd_port=$(resolve_iran_forward_port "443" "${fwd_port:-}")
                 ;;
-            paqet|hysteria2|rathole|wstunnel|ws)
+            paqet|hysteria2|rathole|wstunnel|ws|dnstt|icmp)
                 fwd_port=$(resolve_iran_forward_port "443" "${fwd_port:-}")
                 ;;
         esac
@@ -3538,6 +3680,61 @@ deploy_tunnel() {
             return 1
         fi
         svc_unit="jojonet-v6@${ins_name}.service"
+    elif stream_mode "$tunnel_mode"; then
+        install_gost_binary || return 1
+        create_stream_runner_script || return 1
+        create_stream_service || return 1
+        dns_domain="${DnsDomain:-}"
+        dns_resolver="${DnsResolver:-}"
+        dns_mode=$(printf '%s' "${DnsMode:-}" | tr '[:upper:]' '[:lower:]')
+        [[ -n "$subnet_byte" ]] || subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+        [[ -n "$fwd_port" ]] || fwd_port="$DEFAULT_DNSTT_FWD"
+        fwd_port=$(xray_normalize_ports "$fwd_port") || return 1
+        if [[ "$tunnel_mode" == "dnstt" ]]; then
+            install_dnstt_binaries || return 1
+            install -d -m700 "$DNSTT_CONFIG_DIR"
+            dns_domain="${dns_domain%.}"
+            dns_domain="${dns_domain,,}"
+            valid_dns_name "$dns_domain" || { log_error "DNSTT domain required (JOJONET_DNSTT_DOMAIN=t.example.com)"; return 1; }
+            [[ -n "$dns_mode" ]] || dns_mode="$DEFAULT_DNSTT_MODE"
+            valid_dnstt_mode "$dns_mode" || { log_error "DNSTT resolver mode must be doh|dot|udp"; return 1; }
+            if [[ -z "$dns_resolver" ]]; then
+                case "$dns_mode" in
+                    doh) dns_resolver="$DEFAULT_DNSTT_DOH" ;;
+                    dot) dns_resolver="$DEFAULT_DNSTT_DOT" ;;
+                    udp) dns_resolver="$DEFAULT_DNSTT_UDP" ;;
+                esac
+            fi
+            valid_dnstt_resolver "$dns_mode" "$dns_resolver" || { log_error "Invalid DNSTT resolver: $dns_resolver"; return 1; }
+            [[ -n "$tcp_port" ]] || tcp_port="$DEFAULT_DNSTT_DNS_PORT"
+            validate_single_port "$tcp_port" || { log_error "Invalid DNSTT DNS port: $tcp_port"; return 1; }
+            tcp_port=$((10#$tcp_port))
+            [[ -s "$key_dir/dnstt.priv" && -s "$key_dir/dnstt.pub" && -s "$key_dir/dnstt.auth" ]] || {
+                log_error "DNSTT keys missing in $key_dir"
+                return 1
+            }
+            if [[ "$(count_tunnels_of_mode dnstt "$ins_name")" != "0" ]]; then
+                log_error "Only one DNSTT tunnel per server (UDP/53)."
+                return 1
+            fi
+            ensure_dnstt_firewall "$role_conf" "$tcp_port" "$fwd_port" || true
+        else
+            install_pingtunnel_binary || return 1
+            install -d -m700 "$ICMP_CONFIG_DIR"
+            [[ -n "$tcp_port" ]] || tcp_port=$(stream_loop_port 14800 "$subnet_byte")
+            validate_single_port "$tcp_port" || { log_error "Invalid ICMP SOCKS port: $tcp_port"; return 1; }
+            tcp_port=$((10#$tcp_port))
+            icmpint_file "$key_dir/pingtunnel.key" && hex_file_min "$key_dir/pingtunnel.encrypt" || {
+                log_error "ICMP keys missing in $key_dir"
+                return 1
+            }
+            if [[ "$(count_tunnels_of_mode icmp "$ins_name")" != "0" ]]; then
+                log_error "Only one ICMP tunnel per server (raw ICMP socket)."
+                return 1
+            fi
+            ensure_icmp_firewall "$role_conf" "$fwd_port" || true
+        fi
+        svc_unit="jojonet-stream@${ins_name}.service"
     else
         create_template_script || return 1
         create_template_service || return 1
@@ -3597,6 +3794,9 @@ V6Local="$v6_local"
 V6Remote="$v6_remote"
 XrayJson="$xray_json"
 XrayNet="$xray_net"
+DnsDomain="$dns_domain"
+DnsResolver="$dns_resolver"
+DnsMode="$dns_mode"
 EOF
 
     chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; return 1; }
@@ -3659,6 +3859,8 @@ EOF
             [[ -f "${rh_toml:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
         elif xray_mode "$tunnel_mode"; then
             xray_process_running "$ins_name" && iface_ok=1
+        elif stream_mode "$tunnel_mode"; then
+            stream_process_running "$ins_name" && iface_ok=1
         elif ip link show "$ins_name" 2>/dev/null | grep -qE 'state UP|UP,'; then
             iface_ok=1
         fi
@@ -3681,6 +3883,11 @@ EOF
             elif xray_mode "$tunnel_mode"; then
                 echo -e "  Control TCP: $tcp_port  |  Transport: VLESS/$xray_net  |  Forward: ${fwd_port:-?}"
                 echo -e "  Config: ${xray_json:-n/a}"
+            elif [[ "$tunnel_mode" == "dnstt" ]]; then
+                echo -e "  Domain: $dns_domain  |  Resolver: $dns_mode $dns_resolver  |  DNS UDP: $tcp_port"
+                echo -e "  Forward: ${fwd_port:-?}  (Iran public TCP → Kharej 127.0.0.1)"
+            elif [[ "$tunnel_mode" == "icmp" ]]; then
+                echo -e "  Carrier: ICMP echo + ChaCha20  |  Forward: ${fwd_port:-?}"
             elif v6_mode "$tunnel_mode"; then
                 echo -e "  SIT: $v6_iface  IPv6 ${v6_local} ↔ ${v6_remote}"
                 [[ -n "$tun_ip" ]] && echo -e "  Overlay: $ins_name  IP: $tun_ip${fwd_port:+  |  Forward: $fwd_port}"
@@ -3688,8 +3895,10 @@ EOF
                 echo -e "  UDP port: $tcp_port  |  Interface: $ins_name  |  IP: $tun_ip"
             elif [[ "$tunnel_mode" == "vxlan" ]]; then
                 echo -e "  VNI: $vxlan_vni  |  UDP: $vxlan_port  |  Interface: $ins_name"
+            elif [[ "$tunnel_mode" == "tun_tcp" ]]; then
+                echo -e "  TUN/TCP  |  Interface: $ins_name  |  IP: $tun_ip  |  TCP: $tcp_port"
             else
-                echo -e "  Plain GRE  |  Interface: $ins_name  |  IP: $tun_ip"
+                echo -e "  GRE  |  Interface: $ins_name  |  IP: $tun_ip"
             fi
             if systemctl is-enabled --quiet "$svc_unit" 2>/dev/null; then
                 hint "Enabled on boot."
@@ -4277,7 +4486,7 @@ create_template_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4285,7 +4494,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4505,7 +4714,7 @@ create_tuntcp_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4513,7 +4722,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4723,7 +4932,7 @@ create_paqet_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4731,7 +4940,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4853,7 +5062,7 @@ create_vxlan_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -4861,7 +5070,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -4941,8 +5150,10 @@ case "$ACTION" in
         fi
 
         log "VXLAN add: vni=$VxlanVni remote=$Remote_IP local=$Local_IP udp=$VxlanPort dev=$DEFAULT_IFACE"
+        # iproute2 on Ubuntu 24+/26 requires srcport MIN MAX (not a single port).
         ip link add "$Name" type vxlan id "$VxlanVni" dev "$DEFAULT_IFACE" \
-            remote "$Remote_IP" local "$Local_IP" dstport "$VxlanPort" srcport "$VxlanPort" \
+            remote "$Remote_IP" local "$Local_IP" dstport "$VxlanPort" \
+            srcport "$VxlanPort" "$VxlanPort" \
             || { log "ERROR: VXLAN creation failed"; exit 1; }
 
         ip addr flush dev "$Name" >/dev/null 2>&1
@@ -5096,14 +5307,7 @@ install_wireguard_tools() {
         return 0
     fi
     log_note "Installing wireguard-tools..."
-    if command -v apt-get >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools >/dev/null 2>&1 || \
-            apt-get install -y wireguard-tools >/dev/null 2>&1 || true
-    elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y wireguard-tools >/dev/null 2>&1 || true
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y wireguard-tools >/dev/null 2>&1 || true
-    fi
+    jojonet_pkg_install wireguard-tools wireguard || jojonet_pkg_install wireguard-tools || true
     command -v wg >/dev/null 2>&1 || {
         log_error "wireguard-tools (wg) not available. Install: apt install wireguard-tools"
         return 1
@@ -5153,7 +5357,7 @@ create_wg_runner_script() {
 set -Eeuo pipefail
 
 # Safe config loader — whitelist keys only (never source shell)
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -5161,7 +5365,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -5203,6 +5407,8 @@ fi
 table_name="jojonet_$Name"
 priv="${WgPrivateKey:-${KeyDir}/wg_private.key}"
 peer_pub="${WgPeerPublicKey:-${KeyDir}/wg_peer_public.key}"
+# AppArmor 'wg' on Ubuntu 24+/26 may only read keys under /etc/wireguard/
+wg_priv_run="/etc/wireguard/jojonet-${Name}.key"
 listen_port="${TcpPort:-51820}"
 mtu="${Suggested_MTU:-$DEFAULT_WG_MTU}"
 endpoint="${Remote_IP}:${listen_port}"
@@ -5216,6 +5422,7 @@ cleanup() {
     trap - ERR
     ip link delete "$Name" >/dev/null 2>&1 || true
     nft delete table ip "$table_name" >/dev/null 2>&1 || true
+    rm -f "/etc/wireguard/jojonet-${Name}.key"
 }
 
 case "$ACTION" in
@@ -5254,6 +5461,9 @@ case "$ACTION" in
         allow="${Tun_Server_IP}/32,${Tun_Client_IP}/32"
         [[ -n "$Tun_Server_IP" && -n "$Tun_Client_IP" ]] || allow="10.66.0.0/16"
         ip link add dev "$Name" type wireguard || { log "ERROR: create wg iface"; exit 1; }
+        install -d -m700 /etc/wireguard
+        install -m600 "$priv" "$wg_priv_run" || { log "ERROR: cannot stage private key for AppArmor wg"; exit 1; }
+        priv="$wg_priv_run"
         if [[ "$Role" == "kharej" ]]; then
             _own_pub=$(wg pubkey < "$priv" 2>/dev/null || true)
             _peer_key=""
@@ -5831,7 +6041,7 @@ install_hysteria2_binary() {
 
 # Pull a shared secret from the peer, or create it and push it. Prints the key dir.
 ensure_shared_secret() {
-    local pair_id="$1" peer_ip="$2" name="$3" label="$4" gen="${5:-hex}"
+    local pair_id="$1" peer_ip="$2" name="$3" label="$4" gen="${5:-hex}" n
     local keydir="$KEYS_ROOT/pair_${pair_id}"
     install -d -m700 "$keydir"
     if [[ ! -s "$keydir/$name" && -n "$peer_ip" ]]; then
@@ -5840,6 +6050,9 @@ ensure_shared_secret() {
     if [[ ! -s "$keydir/$name" ]]; then
         if [[ "$gen" == "uuid" ]]; then
             (umask 077 && gen_uuid > "$keydir/$name") || return 1
+        elif [[ "$gen" == "icmpint" ]]; then
+            n=$(( 16#$(openssl rand -hex 4) % 2147483646 + 1 ))
+            (umask 077 && printf '%s\n' "$n" > "$keydir/$name") || return 1
         else
             (umask 077 && openssl rand -hex 24 > "$keydir/$name")
         fi
@@ -5903,7 +6116,7 @@ build_hy2_runtime_config() {
             client_tls_block=$'tls:\n  sni: '"${sni}"$'\n  insecure: false'
             ;;
         *)
-            # Self-signed: hysteria server REQUIRES tls or acme — generate a cert once per pair
+            # Self-signed: hysteria server REQUIRES tls or acme — generate a cert once per pai
             if [[ "$role" == "kharej" ]]; then
                 if [[ ! -s "$keydir/hy2.crt" || ! -s "$keydir/hy2.key" ]]; then
                     if ! openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
@@ -6011,7 +6224,7 @@ create_hy2_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -6019,7 +6232,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -6268,7 +6481,7 @@ quick_add_tunnel_hy2() {
                 set -e
                 return 1
             fi
-            read -r -p "Hop port range [$hop_range]: " _hr
+            read -r -p "Hop port range [$hop_range]: " _h
             hop_range=${_hr:-$hop_range}
             hop_range="${hop_range//' '/}"
             if ! validate_hy2_port_or_range "$hop_range" || [[ ! "$hop_range" =~ - ]]; then
@@ -6423,7 +6636,7 @@ install_rathole_binary() {
     fi
     local arch zip fname tmpdir url ok=0
     arch=$(detect_cpu_arch_rathole) || { log_error "Unsupported CPU for Rathole"; return 1; }
-    command -v unzip >/dev/null 2>&1 || { log_error "unzip required for Rathole"; return 1; }
+    ensure_unzip || return 1
     fname="rathole-${arch}.zip"
     tmpdir=$(mktemp -d /tmp/jojonet-rathole.XXXXXX) || return 1
     log_note "Downloading Rathole ${RATHOLE_VERSION} ($fname)..."
@@ -6556,7 +6769,7 @@ create_rathole_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -6564,7 +6777,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -6929,7 +7142,7 @@ create_wstunnel_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -6937,7 +7150,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -7161,8 +7374,8 @@ quick_add_tunnel_wstunnel() {
 
 jojonet_pkg_install() {
     if command -v apt-get >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1 || \
-            { apt-get update >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1; }
+        timeout 90 env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1 || \
+            { timeout 90 apt-get update >/dev/null 2>&1 && timeout 90 env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1; }
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y "$@" >/dev/null 2>&1
     elif command -v yum >/dev/null 2>&1; then
@@ -7330,7 +7543,7 @@ ensure_unzip() {
     command -v unzip >/dev/null 2>&1 && return 0
     log_note "Installing unzip..."
     jojonet_pkg_install unzip || true
-    command -v unzip >/dev/null 2>&1 || { log_error "unzip is required for Xray"; return 1; }
+    command -v unzip >/dev/null 2>&1 || { log_error "unzip is required"; return 1; }
 }
 
 install_xray_binary() {
@@ -7476,7 +7689,7 @@ create_xray_runner_script() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -7484,7 +7697,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -7705,6 +7918,8 @@ tunnel_cli_flag() {
         sit) echo "--6to4" ;;
         gre6) echo "--gre6" ;;
         ipip6) echo "--ipip6" ;;
+        dnstt) echo "--dnstt" ;;
+        icmp) echo "--icmp" ;;
         *) echo "--${1:-gre}" ;;
     esac
 }
@@ -7762,7 +7977,7 @@ create_v6_runner_script() {
 #!/usr/bin/env bash
 set -Euo pipefail
 
-_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet"
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
 
 load_safe_config() {
     local file="$1" line key val
@@ -7770,7 +7985,7 @@ load_safe_config() {
     Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
     Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
     PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
     [[ -r "$file" ]] || return 1
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -8044,6 +8259,1577 @@ quick_add_tunnel_v6() {
     if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "" \
         "" "" "0" "$fwd_port" "$mode" "" "" "" "" "tcp"; then
         echo -e "${GREEN}[+] $(tunnel_mode_label "$mode") [$ins_name] is up.${NC}"
+        sleep 2
+        set -e
+        return 0
+    fi
+    sleep 3
+    set -e
+    return 1
+}
+
+# ==========================================
+# v1.6.0 — DNSTT (DoH/DoT/UDP DNS tunnel) and ICMP (pingtunnel + ChaCha20)
+# Iran dials Kharej. Public ports on Iran are forwarded to 127.0.0.1 on Kharej.
+# One DNSTT per Kharej (UDP/53). One ICMP tunnel per host (raw ICMP socket).
+# ==========================================
+
+DNSTT_SERVER_BIN="/usr/local/bin/dnstt-server"
+DNSTT_CLIENT_BIN="/usr/local/bin/dnstt-client"
+DNSTT_VERSION="${JOJONET_DNSTT_VERSION:-v1.20260501.0}"
+DNSTT_GOMOD="www.bamsoftware.com/git/dnstt.git"
+DEFAULT_DNSTT_DNS_PORT=5300
+DEFAULT_DNSTT_MODE="doh"
+DEFAULT_DNSTT_DOH="https://cloudflare-dns.com/dns-query"
+DEFAULT_DNSTT_DOT="1.1.1.1:853"
+DEFAULT_DNSTT_UDP="1.1.1.1:53"
+DEFAULT_DNSTT_FWD="443"
+PINGTUNNEL_BIN="/usr/local/bin/pingtunnel"
+PINGTUNNEL_VERSION="${JOJONET_PINGTUNNEL_VERSION:-2.10}"
+PINGTUNNEL_SHA256_AMD64="2a4902f62ffc2eae7fefde97a6edbc3db9f2d63a53cd17501c2dc4277b05a897"
+PINGTUNNEL_SHA256_ARM64="e4b4ee5e208eac377a2308883ac75a592b02cc56c45de11d331c85ee25e4e8b7"
+STREAM_RUNNER="/usr/local/bin/jojonet-run-stream.sh"
+STREAM_SERVICE="/etc/systemd/system/jojonet-stream@.service"
+STREAM_RUN_DIR="/run/jojonet"
+ICMP_CONFIG_DIR="$JOJONET_ROOT/icmp"
+DNSTT_CONFIG_DIR="$JOJONET_ROOT/dnstt"
+
+dnstt_mode() { [[ "${1:-}" == "dnstt" ]]; }
+icmp_mode() { [[ "${1:-}" == "icmp" ]]; }
+stream_mode() { dnstt_mode "$1" || icmp_mode "$1"; }
+
+valid_dns_name() {
+    local n="${1:-}"
+    [[ ${#n} -ge 4 && ${#n} -le 253 ]] || return 1
+    [[ "$n" == *.* ]] || return 1
+    [[ "$n" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]
+}
+
+valid_dnstt_mode() { [[ "${1:-}" =~ ^(doh|dot|udp)$ ]]; }
+
+valid_https_url() {
+    local u="${1:-}" re
+    re='^https://[A-Za-z0-9./_~:?&=%+-]+$'
+    [[ "$u" =~ $re ]] || return 1
+    [[ "$u" != *..* && "$u" != *$'\n'* && "$u" != *$'\r'* && ${#u} -le 200 ]]
+}
+
+valid_dnstt_resolver() {
+    local mode="$1" r="$2"
+    case "$mode" in
+        doh) valid_https_url "$r" ;;
+        dot)
+            if [[ "$r" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?$ ]]; then
+                validate_ipv4 "${r%%:*}" || return 1
+                [[ "$r" == *:* ]] && { validate_single_port "${r##*:}" || return 1; }
+                return 0
+            fi
+            valid_dns_name "${r%%:*}" || return 1
+            [[ "$r" == *:* ]] && { validate_single_port "${r##*:}" || return 1; }
+            return 0
+            ;;
+        udp)
+            [[ "$r" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(:[0-9]{1,5})?$ ]] || return 1
+            validate_ipv4 "${r%%:*}" || return 1
+            [[ "$r" == *:* ]] && { validate_single_port "${r##*:}" || return 1; }
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+count_tunnels_of_mode() {
+    local want="$1" skip="${2:-}" n=0 f m nm
+    shopt -s nullglob
+    for f in "$INSTANCES_DIR"/*.conf; do
+        nm=$(conf_get_field "$f" "Name")
+        [[ "$nm" == "$skip" ]] && continue
+        m=$(conf_get_field "$f" "TunnelMode")
+        [[ "$m" == "$want" ]] && n=$((n + 1))
+    done
+    shopt -u nullglob
+    echo "$n"
+}
+
+stream_loop_port() {
+    local base="$1" sb="${2:-10}"
+    [[ "$sb" =~ ^[0-9]+$ ]] || sb=10
+    (( sb < 1 )) && sb=10
+    echo $((base + (sb % 400)))
+}
+
+hex64_file() {
+    local v
+    [[ -s "$1" ]] || return 1
+    v=$(tr -d '\r\n ' < "$1")
+    [[ "$v" =~ ^[0-9a-fA-F]{64}$ ]]
+}
+
+hex_file_min() {
+    local v
+    [[ -s "$1" ]] || return 1
+    v=$(tr -d '\r\n ' < "$1")
+    [[ "$v" =~ ^[0-9a-fA-F]{16,128}$ ]]
+}
+
+icmpint_file() {
+    local v
+    [[ -s "$1" ]] || return 1
+    v=$(tr -d '\r\n ' < "$1")
+    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v >= 1 && 10#$v <= 2147483647 ))
+}
+
+ensure_go_compiler() {
+    command -v go >/dev/null 2>&1 && return 0
+    log_note "Installing Go to build dnstt..."
+    jojonet_pkg_install golang-go golang || true
+    command -v go >/dev/null 2>&1 || { log_error "Go compiler is required to build dnstt"; return 1; }
+}
+
+install_dnstt_binaries() {
+    if [[ -x "$DNSTT_SERVER_BIN" && -x "$DNSTT_CLIENT_BIN" ]]; then
+        return 0
+    fi
+    ensure_go_compiler || return 1
+    local tmp goproxy
+    tmp=$(mktemp -d /tmp/jojonet-dnstt.XXXXXX) || return 1
+    goproxy="${GOPROXY:-https://proxy.golang.org,https://goproxy.io,https://goproxy.cn,direct}"
+    log_note "Building dnstt ${DNSTT_VERSION} (Go module, checksum database)..."
+    if ! env GOPROXY="$goproxy" GO111MODULE=on GOSUMDB="${GOSUMDB:-sum.golang.org}" GOPATH="$tmp" GOBIN="$tmp/bin" \
+        GOCACHE="$tmp/cache" \
+        go install "${DNSTT_GOMOD}/dnstt-server@${DNSTT_VERSION}" \
+        "${DNSTT_GOMOD}/dnstt-client@${DNSTT_VERSION}" >&2; then
+        rm -rf "$tmp"
+        log_error "Failed to build dnstt ${DNSTT_VERSION}. Check outbound HTTPS to a Go module proxy."
+        return 1
+    fi
+    if [[ ! -x "$tmp/bin/dnstt-server" || ! -x "$tmp/bin/dnstt-client" ]]; then
+        rm -rf "$tmp"
+        log_error "dnstt binaries missing after go install"
+        return 1
+    fi
+    install -m755 "$tmp/bin/dnstt-server" "$DNSTT_SERVER_BIN"
+    install -m755 "$tmp/bin/dnstt-client" "$DNSTT_CLIENT_BIN"
+    rm -rf "$tmp"
+    log_info "dnstt installed: $DNSTT_SERVER_BIN + $DNSTT_CLIENT_BIN ($DNSTT_VERSION)"
+}
+
+detect_pingtunnel_asset() {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "pingtunnel_linux_amd64.zip ${PINGTUNNEL_SHA256_AMD64}" ;;
+        aarch64|arm64) echo "pingtunnel_linux_arm64.zip ${PINGTUNNEL_SHA256_ARM64}" ;;
+        *) return 1 ;;
+    esac
+}
+
+install_pingtunnel_binary() {
+    [[ -x "$PINGTUNNEL_BIN" ]] && return 0
+    local spec asset want tmpdir got
+    spec=$(detect_pingtunnel_asset) || { log_error "Unsupported CPU for pingtunnel: $(uname -m)"; return 1; }
+    asset="${spec%% *}"
+    want="${spec#* }"
+    ensure_unzip || return 1
+    tmpdir=$(mktemp -d /tmp/jojonet-icmp.XXXXXX) || return 1
+    log_note "Downloading pingtunnel ${PINGTUNNEL_VERSION} ($asset)..."
+    if ! download_external_asset \
+        "https://github.com/esrrhs/pingtunnel/releases/download/${PINGTUNNEL_VERSION}/${asset}" \
+        "$tmpdir/$asset"; then
+        rm -rf "$tmpdir"
+        log_error "Failed to download pingtunnel ${PINGTUNNEL_VERSION}"
+        return 1
+    fi
+    got=$(sha256_of "$tmpdir/$asset")
+    if [[ "${got,,}" != "${want,,}" ]]; then
+        rm -rf "$tmpdir"
+        log_error "pingtunnel checksum mismatch"
+        log_error "  expected: $want"
+        log_error "  actual:   $got"
+        return 1
+    fi
+    if ! unzip -o -q "$tmpdir/$asset" pingtunnel -d "$tmpdir" || [[ ! -f "$tmpdir/pingtunnel" ]]; then
+        rm -rf "$tmpdir"
+        log_error "pingtunnel binary missing in $asset"
+        return 1
+    fi
+    install -m755 "$tmpdir/pingtunnel" "$PINGTUNNEL_BIN"
+    rm -rf "$tmpdir"
+    log_info "pingtunnel installed: $PINGTUNNEL_BIN (${PINGTUNNEL_VERSION})"
+}
+
+ensure_dnstt_keys() {
+    local pair_id="$1" peer_ip="${2:-}"
+    local keydir="$KEYS_ROOT/pair_${pair_id}"
+    install -d -m700 "$keydir"
+    if [[ ! -s "$keydir/dnstt.priv" && -n "$peer_ip" ]]; then
+        peer_pull_key "$peer_ip" "dnstt.priv" "$keydir/dnstt.priv" || true
+        peer_pull_key "$peer_ip" "dnstt.pub" "$keydir/dnstt.pub" || true
+        peer_pull_key "$peer_ip" "dnstt.auth" "$keydir/dnstt.auth" || true
+    fi
+    if ! hex64_file "$keydir/dnstt.priv" || ! hex64_file "$keydir/dnstt.pub"; then
+        [[ -x "$DNSTT_SERVER_BIN" ]] || { log_error "dnstt-server missing for keygen"; return 1; }
+        rm -f "$keydir/dnstt.priv" "$keydir/dnstt.pub"
+        (umask 077 && "$DNSTT_SERVER_BIN" -gen-key -privkey-file "$keydir/dnstt.priv" -pubkey-file "$keydir/dnstt.pub") \
+            >/dev/null || { log_error "dnstt-server -gen-key failed"; return 1; }
+        hex64_file "$keydir/dnstt.priv" && hex64_file "$keydir/dnstt.pub" || {
+            log_error "dnstt produced invalid keys"
+            return 1
+        }
+        chmod 600 "$keydir/dnstt.priv" "$keydir/dnstt.pub"
+        if [[ -n "$peer_ip" ]]; then
+            peer_push_key "$peer_ip" "$keydir/dnstt.priv" "dnstt.priv" || true
+            peer_push_key "$peer_ip" "$keydir/dnstt.pub" "dnstt.pub" || true
+        fi
+    fi
+    if ! hex_file_min "$keydir/dnstt.auth"; then
+        ensure_shared_secret "$pair_id" "$peer_ip" dnstt.auth "DNSTT SOCKS" hex >/dev/null || return 1
+    fi
+    printf '%s' "$keydir"
+}
+
+ensure_icmp_keys() {
+    local pair_id="$1" peer_ip="${2:-}"
+    local keydi
+    keydir=$(ensure_shared_secret "$pair_id" "$peer_ip" pingtunnel.key "ICMP" icmpint) || return 1
+    ensure_shared_secret "$pair_id" "$peer_ip" pingtunnel.encrypt "ICMP encrypt" hex >/dev/null || return 1
+    printf '%s' "$keydir"
+}
+
+ensure_dnstt_firewall() {
+    local role="$1" dns_port="$2" ports="${3:-}" item p
+    local -a open_udp=() open_tcp=() plist=()
+    if [[ "$role" == "kharej" ]]; then
+        open_udp+=(53)
+        [[ "$dns_port" != "53" ]] && open_udp+=("$dns_port")
+    elif [[ "$role" == "iran" ]]; then
+        IFS=',' read -ra plist <<< "$ports"
+        for item in "${plist[@]}"; do
+            open_tcp+=("${item%%:*}")
+        done
+    fi
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+        for p in "${open_udp[@]+"${open_udp[@]}"}"; do
+            ufw allow "${p}/udp" comment "jojonet-dnstt-${p}" >/dev/null 2>&1 || true
+        done
+        for p in "${open_tcp[@]+"${open_tcp[@]}"}"; do
+            ufw allow "${p}/tcp" comment "jojonet-dnstt-${p}" >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then
+        for p in "${open_udp[@]+"${open_udp[@]}"}"; do
+            firewall-cmd --permanent --add-port="${p}/udp" >/dev/null 2>&1 || true
+        done
+        for p in "${open_tcp[@]+"${open_tcp[@]}"}"; do
+            firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true
+        done
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+ensure_icmp_firewall() {
+    local role="$1" ports="${2:-}" item p
+    [[ "$role" == "iran" ]] || return 0
+    local -a open_tcp=() plist=()
+    IFS=',' read -ra plist <<< "$ports"
+    for item in "${plist[@]}"; do
+        open_tcp+=("${item%%:*}")
+    done
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+        for p in "${open_tcp[@]+"${open_tcp[@]}"}"; do
+            ufw allow "${p}/tcp" comment "jojonet-icmp-${p}" >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qi running; then
+        for p in "${open_tcp[@]+"${open_tcp[@]}"}"; do
+            firewall-cmd --permanent --add-port="${p}/tcp" >/dev/null 2>&1 || true
+        done
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+create_stream_runner_script() {
+    if ! cat << 'EOF' > "$STREAM_RUNNER"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+_JOJONET_CONF_KEYS="Name TunnelMode Role Local_IP Remote_IP Subnet_Byte Tun_IP Tun_Remote_IP_Raw Tun_Server_IP Tun_Client_IP Suggested_MTU Ports TcpPort KeyDir GreKey PaqetYaml ForwardProto VxlanVni VxlanPort WgPrivateKey WgPublicKey WgPeerPublicKey HyYaml HyAuth HySni HyHopRange HyHopInterval HyTlsMode HyDomain HyAcmeEmail HyCertPath HyKeyPath RatholeToml WstunnelCmd WgObfs ObfsPort V6Iface V6Local V6Remote XrayJson XrayNet DnsDomain DnsResolver DnsMode"
+
+load_safe_config() {
+    local file="$1" line key val
+    Name="" TunnelMode="gre" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
+    Tun_IP="" Tun_Remote_IP_Raw="" Tun_Server_IP="" Tun_Client_IP=""
+    Suggested_MTU="" Ports="" TcpPort="" KeyDir="" GreKey=""
+    PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
+    WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        case " ${_JOJONET_CONF_KEYS} " in *" $key "*) ;; *) return 1 ;; esac
+        if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"
+        elif [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+        case "$val" in *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*$'\r'*) return 1 ;; esac
+        printf -v "$key" '%s' "$val"
+    done < "$file"
+    [[ -n "${Name:-}" ]] || return 1
+    return 0
+}
+
+ACTION="${1:-}"
+CONFIG_FILE="${2:-}"
+[[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]] || { echo "Config missing" >&2; exit 1; }
+load_safe_config "$CONFIG_FILE" || { echo "Bad config" >&2; exit 1; }
+
+RUN_DIR="/run/jojonet"
+PID_DIR="${RUN_DIR}/${Name}"
+GOST_BIN="/usr/local/bin/gost"
+DNSTT_SERVER_BIN="/usr/local/bin/dnstt-server"
+DNSTT_CLIENT_BIN="/usr/local/bin/dnstt-client"
+PINGTUNNEL_BIN="/usr/local/bin/pingtunnel"
+ICMP_ECHO_SAVE="${PID_DIR}/icmp_echo_ignore_all"
+DNS_TAG="jojonet-dnstt-${Name}"
+PIDS=()
+
+log() { echo "[jojonet-stream:${Name}] $*"; }
+
+valid_port() { [[ "${1:-}" =~ ^[0-9]+$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
+
+read_hex() {
+    local v
+    v=$(tr -d '\r\n ' < "$1")
+    [[ "$v" =~ ^[0-9a-fA-F]{16,128}$ ]] || return 1
+    printf '%s' "$v"
+}
+
+read_icmp_key() {
+    local v
+    v=$(tr -d '\r\n ' < "$1")
+    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v >= 1 && 10#$v <= 2147483647 )) || return 1
+    printf '%s' "$v"
+}
+
+loop_port() {
+    local base="$1" sb="${Subnet_Byte:-10}"
+    [[ "$sb" =~ ^[0-9]+$ ]] || sb=10
+    (( sb < 1 )) && sb=10
+    echo $((base + (sb % 400)))
+}
+
+kill_pids() {
+    local p
+    for p in "${PIDS[@]+"${PIDS[@]}"}"; do
+        [[ -n "$p" ]] || continue
+        kill "$p" >/dev/null 2>&1 || true
+        wait "$p" >/dev/null 2>&1 || true
+    done
+    PIDS=()
+}
+
+dns_nat_clear() {
+    local port="${1:-}"
+    command -v iptables >/dev/null 2>&1 || return 0
+    valid_port "$port" || return 0
+    while iptables -w -t nat -C PREROUTING -p udp --dport 53 -m comment --comment "$DNS_TAG" -j REDIRECT --to-ports "$port" >/dev/null 2>&1; do
+        iptables -w -t nat -D PREROUTING -p udp --dport 53 -m comment --comment "$DNS_TAG" -j REDIRECT --to-ports "$port" >/dev/null 2>&1 || break
+    done
+}
+
+dns_nat_add() {
+    local port="$1"
+    command -v iptables >/dev/null 2>&1 || { log "ERROR: iptables required to redirect UDP/53"; return 1; }
+    iptables -w -t nat -C PREROUTING -p udp --dport 53 -m comment --comment "$DNS_TAG" -j REDIRECT --to-ports "$port" >/dev/null 2>&1 && return 0
+    iptables -w -t nat -A PREROUTING -p udp --dport 53 -m comment --comment "$DNS_TAG" -j REDIRECT --to-ports "$port"
+}
+
+icmp_sysctl_restore() {
+    local prev
+    [[ -f "$ICMP_ECHO_SAVE" ]] || return 0
+    prev=$(tr -d '\r\n ' < "$ICMP_ECHO_SAVE" || true)
+    [[ "$prev" =~ ^[01]$ ]] || prev=0
+    sysctl -w net.ipv4.icmp_echo_ignore_all="$prev" >/dev/null 2>&1 || true
+    rm -f "$ICMP_ECHO_SAVE"
+}
+
+icmp_sysctl_apply() {
+    local prev
+    prev=$(sysctl -n net.ipv4.icmp_echo_ignore_all 2>/dev/null || echo 0)
+    [[ "$prev" =~ ^[01]$ ]] || prev=0
+    printf '%s\n' "$prev" > "$ICMP_ECHO_SAVE"
+    sysctl -w net.ipv4.icmp_echo_ignore_all=1 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.icmp_ratelimit=0 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.icmp_msgs_per_sec=10000 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.icmp_msgs_burst=1000 >/dev/null 2>&1 || true
+}
+
+gost_forwards() {
+    local socks="$1" auth="$2" item l t
+    local -a args=() plist=()
+    [[ -x "$GOST_BIN" ]] || { log "ERROR: gost missing"; return 1; }
+    IFS=',' read -ra plist <<< "${Ports:-}"
+    (( ${#plist[@]} > 0 )) || { log "ERROR: no forward ports"; return 1; }
+    for item in "${plist[@]}"; do
+        [[ -n "$item" ]] || continue
+        if [[ "$item" == *:* ]]; then
+            l="${item%%:*}"
+            t="${item##*:}"
+        else
+            l="$item"
+            t="$item"
+        fi
+        valid_port "$l" && valid_port "$t" || { log "ERROR: bad port $item"; return 1; }
+        args+=(-L "tcp://:${l}/127.0.0.1:${t}")
+    done
+    args+=(-F "socks5://jojonet:${auth}@127.0.0.1:${socks}")
+    log "gost ${args[*]}"
+    "$GOST_BIN" "${args[@]}" &
+    PIDS+=($!)
+}
+
+cleanup() {
+    kill_pids
+    if [[ "${TunnelMode}" == "dnstt" && "${Role}" == "kharej" ]]; then
+        dns_nat_clear "${TcpPort:-5300}"
+    fi
+    if [[ "${TunnelMode}" == "icmp" ]]; then
+        icmp_sysctl_restore
+    fi
+}
+
+start_dnstt() {
+    local dns_port socks_port client_port auth domain mode resolve
+    domain="${DnsDomain:-}"
+    mode="${DnsMode:-doh}"
+    resolver="${DnsResolver:-}"
+    dns_port="${TcpPort:-5300}"
+    [[ -n "$domain" ]] || { log "ERROR: DnsDomain missing"; return 1; }
+    valid_port "$dns_port" || { log "ERROR: bad DNS port"; return 1; }
+    [[ -s "$KeyDir/dnstt.priv" && -s "$KeyDir/dnstt.pub" ]] || { log "ERROR: dnstt keys missing"; return 1; }
+    auth=$(read_hex "$KeyDir/dnstt.auth") || { log "ERROR: dnstt.auth missing"; return 1; }
+    socks_port=$(loop_port 14000)
+    client_port=$(loop_port 14400)
+    if [[ "$Role" == "kharej" ]]; then
+        [[ -x "$DNSTT_SERVER_BIN" ]] || { log "ERROR: dnstt-server missing"; return 1; }
+        "$GOST_BIN" -L "socks5://jojonet:${auth}@127.0.0.1:${socks_port}" &
+        PIDS+=($!)
+        sleep 0.3
+        "$DNSTT_SERVER_BIN" -udp ":${dns_port}" -privkey-file "$KeyDir/dnstt.priv" \
+            -fallback 1.1.1.1:53 "$domain" "127.0.0.1:${socks_port}" &
+        PIDS+=($!)
+        if [[ "$dns_port" != "53" ]]; then
+            dns_nat_add "$dns_port" || return 1
+        fi
+        log "dnstt-server UDP ${dns_port} domain=${domain} socks=127.0.0.1:${socks_port}"
+    else
+        [[ -x "$DNSTT_CLIENT_BIN" ]] || { log "ERROR: dnstt-client missing"; return 1; }
+        case "$mode" in
+            doh)
+                [[ -n "$resolver" ]] || resolver="https://cloudflare-dns.com/dns-query"
+                "$DNSTT_CLIENT_BIN" -doh "$resolver" -pubkey-file "$KeyDir/dnstt.pub" \
+                    "$domain" "127.0.0.1:${client_port}" &
+                ;;
+            dot)
+                [[ -n "$resolver" ]] || resolver="1.1.1.1:853"
+                "$DNSTT_CLIENT_BIN" -dot "$resolver" -pubkey-file "$KeyDir/dnstt.pub" \
+                    "$domain" "127.0.0.1:${client_port}" &
+                ;;
+            udp)
+                [[ -n "$resolver" ]] || resolver="1.1.1.1:53"
+                "$DNSTT_CLIENT_BIN" -udp "$resolver" -pubkey-file "$KeyDir/dnstt.pub" \
+                    "$domain" "127.0.0.1:${client_port}" &
+                ;;
+            *)
+                log "ERROR: bad DnsMode $mode"
+                return 1
+                ;;
+        esac
+        PIDS+=($!)
+        sleep 0.4
+        gost_forwards "$client_port" "$auth" || return 1
+        log "dnstt-client ${mode} ${resolver} domain=${domain} local=127.0.0.1:${client_port}"
+    fi
+}
+
+start_icmp() {
+    local key enc socks_port json
+    [[ -x "$PINGTUNNEL_BIN" ]] || { log "ERROR: pingtunnel missing"; return 1; }
+    key=$(read_icmp_key "$KeyDir/pingtunnel.key") || { log "ERROR: pingtunnel.key missing"; return 1; }
+    enc=$(read_hex "$KeyDir/pingtunnel.encrypt") || { log "ERROR: pingtunnel.encrypt missing"; return 1; }
+    socks_port="${TcpPort:-$(loop_port 14800)}"
+    valid_port "$socks_port" || { log "ERROR: bad SOCKS port"; return 1; }
+    json="${PID_DIR}/pingtunnel.json"
+    icmp_sysctl_apply
+    if [[ "$Role" == "kharej" ]]; then
+        printf '{"type":"server","key":%s,"encrypt":"chacha20","encrypt_key":"%s","nolog":1,"noprint":1,"loglevel":"error"}\n' \
+            "$key" "$enc" > "$json"
+        chmod 600 "$json"
+        "$PINGTUNNEL_BIN" -c "$json" &
+        PIDS+=($!)
+        log "pingtunnel server (ChaCha20) ready"
+    else
+        [[ -n "$Remote_IP" ]] || { log "ERROR: Remote_IP missing"; return 1; }
+        printf '{"type":"client","listen":"127.0.0.1:%s","server":"%s","sock5":1,"s5user":"jojonet","s5pass":"%s","key":%s,"encrypt":"chacha20","encrypt_key":"%s","nolog":1,"noprint":1,"loglevel":"error"}\n' \
+            "$socks_port" "$Remote_IP" "$enc" "$key" "$enc" > "$json"
+        chmod 600 "$json"
+        "$PINGTUNNEL_BIN" -c "$json" &
+        PIDS+=($!)
+        sleep 0.4
+        gost_forwards "$socks_port" "$enc" || return 1
+        log "pingtunnel client SOCKS 127.0.0.1:${socks_port} -> ${Remote_IP}"
+    fi
+}
+
+case "$ACTION" in
+    start)
+        install -d -m700 "$RUN_DIR" "$PID_DIR"
+        trap cleanup EXIT INT TERM
+        case "$TunnelMode" in
+            dnstt) start_dnstt || exit 1 ;;
+            icmp) start_icmp || exit 1 ;;
+            *) log "ERROR: unsupported mode $TunnelMode"; exit 1 ;;
+        esac
+        (( ${#PIDS[@]} > 0 )) || { log "ERROR: no child processes"; exit 1; }
+        log "SUCCESS: $TunnelMode $Role up (pids ${PIDS[*]})"
+        wait -n || true
+        log "child exited — stopping"
+        exit 1
+        ;;
+    stop)
+        shopt -s nullglob
+        for f in "${PID_DIR}"/*.pid; do
+            [[ -r "$f" ]] || continue
+            kill "$(cat "$f")" >/dev/null 2>&1 || true
+        done
+        shopt -u nullglob
+        if [[ -n "${KeyDir:-}" ]]; then
+            pkill -f "dnstt-server .* ${KeyDir}/dnstt.priv" >/dev/null 2>&1 || true
+            pkill -f "dnstt-client .* ${KeyDir}/dnstt.pub" >/dev/null 2>&1 || true
+        fi
+        pkill -f "pingtunnel -c ${PID_DIR}/pingtunnel.json" >/dev/null 2>&1 || true
+        if [[ "$TunnelMode" == "dnstt" && "$Role" == "kharej" ]]; then
+            dns_nat_clear "${TcpPort:-5300}"
+        fi
+        icmp_sysctl_restore
+        exit 0
+        ;;
+    *)
+        echo "Invalid action" >&2
+        exit 1
+        ;;
+esac
+EOF
+    then
+        return 1
+    fi
+    chmod +x "$STREAM_RUNNER"
+}
+
+create_stream_service() {
+    local tmp_file
+    tmp_file=$(mktemp /tmp/jojonet_stream_svc.XXXXXX) || return 1
+    if ! cat << 'EOF' > "$tmp_file"
+[Unit]
+Description=JojoNet DNSTT/ICMP tunnel: %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jojonet-stream-%i
+ExecStart=/usr/local/bin/jojonet-run-stream.sh start /etc/jojonet/instances/%i.conf
+ExecStop=/usr/local/bin/jojonet-run-stream.sh stop /etc/jojonet/instances/%i.conf
+TimeoutStartSec=90
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [[ -f "$STREAM_SERVICE" ]] && cmp -s "$tmp_file" "$STREAM_SERVICE"; then
+        rm -f "$tmp_file"
+    else
+        mv -f "$tmp_file" "$STREAM_SERVICE" || { rm -f "$tmp_file"; return 1; }
+        systemctl daemon-reload || return 1
+    fi
+}
+
+stream_process_running() {
+    local name="$1"
+    pgrep -f "jojonet-run-stream.sh start /etc/jojonet/instances/${name}\\.conf" >/dev/null 2>&1 \
+        || systemctl is-active --quiet "jojonet-stream@${name}.service" 2>/dev/null
+}
+
+show_direct_client_card() {
+    local mode="$1" loc_ip="$2" key_dir="$3" domain="${4:-}" dns_mode="${5:-doh}" resolver="${6:-}"
+    local pub="" auth="" key="" enc="" socks=1080 card=""
+    [[ "$STEALTH_MODE" == "1" ]] && return 0
+    echo ""
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}  Direct Kharej — no Iran VPS${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  Users run the client on their own device. This server is the ${CYAN}only${NC} VPS."
+    if [[ "$mode" == "dnstt" ]]; then
+        [[ -s "$key_dir/dnstt.pub" ]] && pub=$(tr -d '\r\n ' < "$key_dir/dnstt.pub")
+        [[ -s "$key_dir/dnstt.auth" ]] && auth=$(tr -d '\r\n ' < "$key_dir/dnstt.auth")
+        [[ -n "$resolver" ]] || resolver="$DEFAULT_DNSTT_DOH"
+        echo -e "  ${CYAN}NS:${NC}     ${domain}.  NS → this IP ${loc_ip}"
+        echo -e "  ${CYAN}Pub:${NC}    ${pub}"
+        echo -e "  ${CYAN}Client (PC/phone with dnstt-client):${NC}"
+        echo -e "    printf '%s\\n' '${pub}' > dnstt.pub"
+        echo -e "    dnstt-client -${dns_mode} ${resolver} -pubkey-file dnstt.pub ${domain} 127.0.0.1:${socks}"
+        echo -e "  ${CYAN}Then SOCKS5${NC}  127.0.0.1:${socks}  user=${GREEN}jojonet${NC}  pass=${GREEN}${auth}${NC}"
+        card="domain=${domain}
+ns=${loc_ip}
+mode=${dns_mode}
+resolver=${resolver}
+pubkey=${pub}
+socks=127.0.0.1:${socks}
+socks_user=jojonet
+socks_pass=${auth}
+"
+    else
+        [[ -s "$key_dir/pingtunnel.key" ]] && key=$(tr -d '\r\n ' < "$key_dir/pingtunnel.key")
+        [[ -s "$key_dir/pingtunnel.encrypt" ]] && enc=$(tr -d '\r\n ' < "$key_dir/pingtunnel.encrypt")
+        echo -e "  ${CYAN}Server:${NC} ${loc_ip}  (ICMP echo + ChaCha20)"
+        echo -e "  ${CYAN}Client:${NC}"
+        echo -e "    pingtunnel -type client -l 127.0.0.1:${socks} -s ${loc_ip} -sock5 1 \\"
+        echo -e "      -s5user jojonet -s5pass ${enc} -key ${key} -encrypt chacha20 -encrypt-key ${enc}"
+        echo -e "  ${CYAN}Then SOCKS5${NC}  127.0.0.1:${socks}  user=${GREEN}jojonet${NC}  pass=${GREEN}${enc}${NC}"
+        card="server=${loc_ip}
+key=${key}
+encrypt_key=${enc}
+socks=127.0.0.1:${socks}
+socks_user=jojonet
+socks_pass=${enc}
+"
+    fi
+    install -d -m700 "$JOJONET_ROOT/direct"
+    printf '%s' "$card" > "$JOJONET_ROOT/direct/${mode}.txt"
+    chmod 600 "$JOJONET_ROOT/direct/${mode}.txt"
+    echo -e "  ${CYAN}Saved:${NC}  $JOJONET_ROOT/direct/${mode}.txt"
+    echo ""
+}
+
+direct_stream_menu() {
+    local c=""
+    clear_screen
+    logo
+    print_banner "Direct Kharej — one foreign server, no Iran tunnel"
+    echo -e "  These methods do ${GREEN}not${NC} need an Iran VPS."
+    echo -e "  Users connect to ${CYAN}this${NC} server (or run a small client on their device)."
+    echo ""
+    menu_line "1) DNSTT server only (DNS tunnel; NS of your domain → this IP)"
+    menu_line "2) ICMP / pingtunnel server only (ChaCha20 over ping)"
+    menu_line "3) Relay on this server (iptables/GOST/HAProxy/Socat/Xray) — same as menu 25"
+    menu_line "0) Back"
+    read -r -p "Choice: " c || return 0
+    case "$c" in
+        1) JOJONET_DIRECT=1 JOJONET_ROLE=kharej quick_add_tunnel_stream dnstt || true ;;
+        2) JOJONET_DIRECT=1 JOJONET_ROLE=kharej quick_add_tunnel_stream icmp || true ;;
+        3) relay_menu || true ;;
+        *) return 0 ;;
+    esac
+}
+
+# ==========================================
+# 3x-ui / X-UI panel (separate from JojoNet tunnels)
+# Official: MHSanaei 3x-ui — not a JojoNet tunnel.
+# ==========================================
+XUI_INSTALL_PATH="/usr/bin/x-ui"
+XUI_HOME="/usr/local/x-ui"
+XUI_SERVICE="x-ui.service"
+XUI_FLAVOR_FILE="/usr/local/x-ui/.jojonet-flavor"
+VPN_CREDS_FILE="/etc/jojonet/vpn-panel.creds"
+XUI_INSTALL_LOG="/var/log/jojonet-xui-install.log"
+
+xui_present() {
+    [[ -x "$XUI_INSTALL_PATH" || -x "$XUI_HOME/x-ui" || -f /etc/systemd/system/x-ui.service ]] \
+        || [[ -f /etc/x-ui/x-ui.db || -d /usr/local/x-ui ]]
+}
+
+xui_running() {
+    systemctl is-active --quiet "$XUI_SERVICE" 2>/dev/null
+}
+
+xui_flavor() {
+    local got=""
+    if [[ -f "$XUI_FLAVOR_FILE" ]]; then
+        tr -d '\r\n' < "$XUI_FLAVOR_FILE"
+        return 0
+    fi
+    xui_present || return 1
+    if [[ -x "$XUI_HOME/x-ui" ]] && grep -a -m1 -qiE '3x-ui|MHSanaei' "$XUI_HOME/x-ui" 2>/dev/null; then
+        got=sanaei
+    elif [[ -x "$XUI_HOME/x-ui.sh" ]] && grep -qiE '3x-ui|MHSanaei' "$XUI_HOME/x-ui.sh" 2>/dev/null; then
+        got=sanaei
+    elif [[ -x "$XUI_INSTALL_PATH" ]] && grep -qiE 'alireza0|/alireza/' "$XUI_INSTALL_PATH" 2>/dev/null; then
+        got=classic
+    else
+        got=unknown
+    fi
+    if [[ "$got" != "unknown" ]]; then
+        xui_set_flavor "$got" 2>/dev/null || true
+    fi
+    printf '%s' "$got"
+}
+
+xui_set_flavor() {
+    install -d -m755 "$XUI_HOME" 2>/dev/null || true
+    printf '%s\n' "$1" > "$XUI_FLAVOR_FILE"
+}
+
+xui_same_or_free() {
+    local want="$1" have=""
+    xui_present || return 0
+    have="$(xui_flavor || true)"
+    [[ -z "$have" || "$have" == "$want" || "$have" == "unknown" ]] && return 0
+    if [[ "$have" == "classic" ]]; then
+        log_error "روی این سرور قبلاً X-UI اصلی نصب شده است. با 3x-ui همزمان نصب نمی‌شود. اول حذف کنید: jojonet --xui-uninstall"
+    else
+        log_error "روی این سرور قبلاً 3x-ui سنایی نصب شده است. با X-UI اصلی همزمان نصب نمی‌شود. اول حذف کنید: jojonet --xui-uninstall"
+    fi
+    return 1
+}
+
+xui_already_msg() {
+    local flavor="${1:-}" run="${2:-0}"
+    if [[ "$flavor" == "classic" ]]; then
+        echo -e "${YELLOW}[!] همین پنل از قبل روی این سرور نصب است: X-UI اصلی${NC}"
+    else
+        echo -e "${YELLOW}[!] همین پنل از قبل روی این سرور نصب است: 3x-ui سنایی${NC}"
+    fi
+    if [[ "$run" == "1" ]]; then
+        echo -e "    وضعیت: روشن است. نصب دوباره انجام نشد."
+    else
+        echo -e "    وضعیت: فایل‌ها هست (سرویس الان خاموش است). نصب دوباره انجام نشد."
+    fi
+}
+
+confirm_panel_install() {
+    local name="$1" a=""
+    if [[ ! -t 0 || "${JOJONET_AUTO:-0}" == "1" ]]; then
+        return 0
+    fi
+    echo -e "${YELLOW}Install ${name} now? Official installer, may take several minutes.${NC}"
+    read -r -p "Type y to continue / برای ادامه y بزنید: " a || return 1
+    [[ "$a" == "y" || "$a" == "Y" || "$a" == "yes" || "$a" == "بله" ]]
+}
+
+xui_fetch_installer() {
+    local dest="$1" url=""
+    for url in \
+        "https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh" \
+        "https://cdn.jsdelivr.net/gh/MHSanaei/3x-ui@main/install.sh" \
+        "https://ghproxy.net/https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh" \
+        "https://mirror.ghproxy.com/https://raw.githubusercontent.com/MHSanaei/3x-ui/main/install.sh"
+    do
+        echo -e "  ${CYAN}try${NC} $url" >&2
+        if xray_fetch "$url" "$dest"; then
+            [[ -s "$dest" ]] || continue
+            head -1 "$dest" | grep -q '^#!/' || continue
+            grep -q 'x-ui' "$dest" || continue
+            return 0
+        fi
+    done
+    return 1
+}
+
+xui_install() {
+    local tmp="" have=""
+    (( EUID == 0 )) || { log_error "X-UI install needs root"; return 1; }
+    command -v systemctl >/dev/null 2>&1 || { log_error "systemd is required for X-UI"; return 1; }
+    xui_same_or_free sanaei || return 1
+    if xui_present; then
+        have="$(xui_flavor || true)"
+        if [[ "$have" == "classic" ]]; then
+            log_error "روی این سرور قبلاً X-UI اصلی نصب شده است. اول حذف کنید: jojonet --xui-uninstall"
+            return 1
+        fi
+        if xui_running; then
+            xui_already_msg sanaei 1
+        else
+            xui_already_msg sanaei 0
+        fi
+        [[ "$have" == "unknown" || -z "$have" ]] && xui_set_flavor sanaei
+        xui_status
+        xui_print_login || true
+        return 0
+    fi
+    confirm_panel_install "3x-ui (Sanaei)" || { echo "Cancelled."; return 1; }
+    echo -e "${CYAN}[*] Installing official MHSanaei 3x-ui. This is separate from JojoNet tunnels.${NC}"
+    echo -e "    Panel credentials are printed by the upstream installer — save them."
+    tmp=$(mktemp /tmp/jojonet-xui-install.XXXXXX) || return 1
+    if ! xui_fetch_installer "$tmp"; then
+        rm -f "$tmp"
+        log_error "Could not download 3x-ui installer (GitHub + mirrors)."
+        return 1
+    fi
+    chmod 700 "$tmp"
+    mkdir -p /var/log
+    if ! XUI_NONINTERACTIVE=1 bash "$tmp" > >(tee "$XUI_INSTALL_LOG") 2>&1; then
+        rm -f "$tmp"
+        log_error "3x-ui installer failed."
+        return 1
+    fi
+    chmod 600 "$XUI_INSTALL_LOG" 2>/dev/null || true
+    rm -f "$tmp"
+    xui_set_flavor sanaei
+    echo -e "${GREEN}[+] 3x-ui install finished.${NC}"
+    xui_status
+    xui_print_login || true
+}
+
+xui_classic_fetch_installer() {
+    local dest="$1" url=""
+    for url in \
+        "https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh" \
+        "https://cdn.jsdelivr.net/gh/alireza0/x-ui@master/install.sh" \
+        "https://ghproxy.net/https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh" \
+        "https://mirror.ghproxy.com/https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh"
+    do
+        echo -e "  ${CYAN}try${NC} $url" >&2
+        if xray_fetch "$url" "$dest"; then
+            [[ -s "$dest" ]] || continue
+            head -1 "$dest" | grep -q '^#!/' || continue
+            grep -q 'x-ui' "$dest" || continue
+            return 0
+        fi
+    done
+    return 1
+}
+
+xui_classic_install() {
+    local tmp="" have=""
+    (( EUID == 0 )) || { log_error "X-UI install needs root"; return 1; }
+    command -v systemctl >/dev/null 2>&1 || { log_error "systemd is required for X-UI"; return 1; }
+    xui_same_or_free classic || return 1
+    if xui_present; then
+        have="$(xui_flavor || true)"
+        if [[ "$have" == "sanaei" ]]; then
+            log_error "روی این سرور قبلاً 3x-ui سنایی نصب شده است. اول حذف کنید: jojonet --xui-uninstall"
+            return 1
+        fi
+        if xui_running; then
+            xui_already_msg classic 1
+        else
+            xui_already_msg classic 0
+        fi
+        [[ "$have" == "unknown" || -z "$have" ]] && xui_set_flavor classic
+        xui_status
+        xui_print_login || true
+        return 0
+    fi
+    confirm_panel_install "X-UI classic (Alireza)" || { echo "Cancelled."; return 1; }
+    echo -e "${CYAN}[*] Installing official alireza0 X-UI (classic). Not 3x-ui. Separate from JojoNet tunnels.${NC}"
+    echo -e "    Panel credentials are printed by the upstream installer — save them."
+    tmp=$(mktemp /tmp/jojonet-xui-classic.XXXXXX) || return 1
+    if ! xui_classic_fetch_installer "$tmp"; then
+        rm -f "$tmp"
+        log_error "Could not download classic X-UI installer (GitHub + mirrors)."
+        return 1
+    fi
+    chmod 700 "$tmp"
+    mkdir -p /var/log
+    if ! XUI_NONINTERACTIVE=1 bash "$tmp" > >(tee "$XUI_INSTALL_LOG") 2>&1; then
+        rm -f "$tmp"
+        log_error "Classic X-UI installer failed."
+        return 1
+    fi
+    chmod 600 "$XUI_INSTALL_LOG" 2>/dev/null || true
+    rm -f "$tmp"
+    xui_set_flavor classic
+    echo -e "${GREEN}[+] Classic X-UI install finished.${NC}"
+    xui_status
+    xui_print_login || true
+}
+
+xui_status() {
+    local flavor=""
+    flavor="$(xui_flavor 2>/dev/null || true)"
+    echo -e "${CYAN}--- X-UI ($flavor) ---${NC}"
+    if systemctl list-unit-files "$XUI_SERVICE" >/dev/null 2>&1; then
+        echo -e "  unit:    $(systemctl is-active "$XUI_SERVICE" 2>/dev/null || echo unknown) / $(systemctl is-enabled "$XUI_SERVICE" 2>/dev/null || echo unknown)"
+    else
+        echo -e "  unit:    ${YELLOW}not installed${NC}"
+    fi
+    if [[ -x "$XUI_INSTALL_PATH" ]]; then
+        echo -e "  cli:     $XUI_INSTALL_PATH"
+        "$XUI_INSTALL_PATH" status 2>/dev/null || true
+    elif [[ -x "$XUI_HOME/x-ui" ]]; then
+        echo -e "  bin:     $XUI_HOME/x-ui"
+    fi
+    ss -lntup 2>/dev/null | awk '/x-ui|xray/{print "  listen:  "$0}' || true
+}
+
+vpn_creds_write() {
+    install -d -m700 /etc/jojonet 2>/dev/null || true
+    printf '%s\n' "$@" > "$VPN_CREDS_FILE"
+    chmod 600 "$VPN_CREDS_FILE" 2>/dev/null || true
+}
+
+vpn_creds_emit() {
+    local kind="$1" label="$2" url="$3" user="$4" pass="$5" extra="${6:-}"
+    echo ""
+    echo "===== JOJONET_VPN_CREDS ====="
+    echo "kind=${kind}"
+    echo "label=${label}"
+    [[ -n "$url" ]] && echo "url=${url}"
+    [[ -n "$user" ]] && echo "username=${user}"
+    [[ -n "$pass" ]] && echo "password=${pass}"
+    [[ -n "$extra" ]] && echo "note=${extra}"
+    echo "===== END_JOJONET_VPN_CREDS ====="
+    echo ""
+    echo "----- مشخصات ورود پنل -----"
+    echo "  پنل:   ${label}"
+    [[ -n "$url" ]] && echo "  آدرس:  ${url}"
+    [[ -n "$user" ]] && echo "  کاربر: ${user}"
+    [[ -n "$pass" ]] && echo "  رمز:   ${pass}"
+    [[ -n "$extra" ]] && echo "  نکته:  ${extra}"
+    echo "  این مشخصات را ذخیره کنید."
+    echo "----------------------------"
+    vpn_creds_write \
+        "kind=${kind}" \
+        "label=${label}" \
+        "url=${url}" \
+        "username=${user}" \
+        "password=${pass}" \
+        "note=${extra}"
+}
+
+xui_settings_raw() {
+    local out=""
+    if [[ -x "$XUI_HOME/x-ui" ]]; then
+        out=$(TERM=dumb timeout 20 "$XUI_HOME/x-ui" setting -show 2>/dev/null || true)
+    fi
+    if [[ -x "$XUI_INSTALL_PATH" ]]; then
+        out+=$'\n'
+        out+=$(TERM=dumb timeout 20 "$XUI_INSTALL_PATH" settings </dev/null 2>/dev/null || true)
+    fi
+    printf '%s' "$out" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g'
+}
+
+xui_setting_field() {
+    local raw="$1" want="$2"
+    printf '%s\n' "$raw" | awk -F: -v want="$want" '
+        BEGIN { IGNORECASE=1 }
+        {
+            key=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            gsub(/\r/, "", key)
+            lk=tolower(key)
+            if ((want=="username" && (lk=="username" || lk=="user")) ||
+                (want=="password" && (lk=="password" || lk=="pass")) ||
+                (want=="port" && lk=="port") ||
+                (want=="path" && (lk=="webbasepath" || lk=="web base path")) ||
+                (want=="listen" && (lk=="listen" || lk=="listenip")) ||
+                (want=="cert" && (lk=="certfile" || lk=="cert" || lk=="webcert")) ||
+                (want=="url" && (lk ~ /access[[:space:]]*url/ || lk=="url"))) {
+                sub(/^[^:]*:[[:space:]]*/, "")
+                gsub(/[[:space:]]+$/, "")
+                if (length($0)) { print; exit }
+            }
+        }'
+}
+
+xui_saved_field() {
+    local key="$1"
+    [[ -f "$VPN_CREDS_FILE" ]] || return 0
+    awk -F= -v k="$key" '$1==k {sub(/^[^=]*=/, ""); print; exit}' "$VPN_CREDS_FILE"
+}
+
+xui_db_username() {
+    local db="/etc/x-ui/x-ui.db"
+    [[ -f "$db" ]] || return 0
+    python3 - "$db" <<'PY' 2>/dev/null || true
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+try:
+    row = con.execute("SELECT username FROM users ORDER BY id LIMIT 1").fetchone()
+    if row and row[0]:
+        print(row[0])
+except Exception:
+    pass
+PY
+}
+
+xui_print_login() {
+    local raw="" text="" user="" pass="" port="" path="" listen="" cert="" ip="" url="" uri="" proto="http" flavor="" label="" note=""
+    xui_present || { echo "X-UI is not installed."; return 1; }
+    raw="$(xui_settings_raw || true)"
+    text="$raw"
+    if [[ -f "$XUI_INSTALL_LOG" ]]; then
+        text+=$'\n'
+        text+=$(cat "$XUI_INSTALL_LOG" 2>/dev/null || true)
+    fi
+    user="$(xui_setting_field "$text" username)"
+    pass="$(xui_setting_field "$text" password)"
+    port="$(xui_setting_field "$raw" port)"
+    path="$(xui_setting_field "$raw" path)"
+    listen="$(xui_setting_field "$raw" listen)"
+    cert="$(xui_setting_field "$raw" cert)"
+    url="$(xui_setting_field "$raw" url)"
+    [[ -z "$url" ]] && url="$(xui_setting_field "$text" url)"
+    [[ -z "$user" ]] && user="$(xui_saved_field username)"
+    [[ -z "$pass" ]] && pass="$(xui_saved_field password)"
+    [[ -z "$user" ]] && user="$(xui_db_username)"
+    if [[ "$pass" == \$2[aby]\$* ]]; then
+        pass=""
+    fi
+    path="${path:-/}"
+    [[ "$path" == /* ]] || path="/${path}"
+    [[ "$path" == "/" ]] || path="${path%/}"
+    if [[ -n "$cert" && "$cert" != "none" && "$cert" != "-" ]]; then
+        proto="https"
+    fi
+    if [[ -z "$url" ]]; then
+        ip="$(pg_public_ip)"
+        if [[ -n "$listen" && "$listen" != "0.0.0.0" && "$listen" != "::" && "$listen" != "*" && -n "$port" ]]; then
+            url="${proto}://${listen}:${port}${path}"
+        elif [[ -n "$ip" && -n "$port" ]]; then
+            url="${proto}://${ip}:${port}${path}"
+        fi
+    fi
+    if [[ -z "$url" && -x "$XUI_HOME/x-ui" ]]; then
+        uri=$(TERM=dumb timeout 10 "$XUI_HOME/x-ui" uri 2>/dev/null | grep -oE 'https?://[^[:space:]]+' | head -1 || true)
+        [[ -n "$uri" ]] && url="$uri"
+    fi
+    [[ -z "$url" ]] && url="$(printf '%s\n' "$raw" | grep -oE 'https?://[^[:space:]]+' | head -1 || true)"
+    flavor="$(xui_flavor 2>/dev/null || true)"
+    if [[ "$flavor" == "classic" ]]; then
+        label="X-UI اصلی"
+    else
+        label="3x-ui سنایی"
+    fi
+    if [[ -z "$pass" ]]; then
+        note="رمز هنگام نصب چاپ می‌شود. اگر نیست: x-ui setting -username USER -password NEW"
+    fi
+    vpn_creds_emit "xui" "$label" "$url" "$user" "$pass" "$note"
+}
+
+pg_print_login() {
+    local ip="" port="8000" url="" key="" note=""
+    pg_present || { echo "PasarGuard is not installed."; return 1; }
+    if [[ -f "$PG_APP_DIR/.env" ]]; then
+        port=$(awk -F= '/^[[:space:]]*UVICORN_PORT=/{gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "$PG_APP_DIR/.env")
+        port="${port:-8000}"
+    fi
+    ip="$(pg_public_ip)"
+    url="http://${ip:-SERVER-IP}:${port}/dashboard/"
+    if command -v pasarguard >/dev/null 2>&1; then
+        key=$(TERM=dumb timeout 20 pasarguard cli generate-temp-key 2>/dev/null | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | awk 'NF{line=$0} END{print line}')
+    fi
+    if [[ -n "$key" ]]; then
+        note="کلید یک‌بارمصرف ورود اول"
+        vpn_creds_emit "pasarguard" "پاسارگارد" "$url" "" "$key" "$note"
+    else
+        note="روی سرور بزن: pasarguard cli generate-temp-key"
+        vpn_creds_emit "pasarguard" "پاسارگارد" "$url" "" "" "$note"
+    fi
+}
+
+vpn_panel_check() {
+    local xf="" xr=0 pr=0
+    echo "===== JOJONET_VPN_CHECK ====="
+    if xui_present; then
+        xf="$(xui_flavor 2>/dev/null || true)"
+        xui_running && xr=1
+        echo "xui=1"
+        echo "xui_flavor=${xf:-unknown}"
+        echo "xui_running=${xr}"
+    else
+        echo "xui=0"
+        echo "xui_flavor="
+        echo "xui_running=0"
+    fi
+    if pg_present; then
+        pg_running && pr=1
+        echo "pasarguard=1"
+        echo "pasarguard_running=${pr}"
+    else
+        echo "pasarguard=0"
+        echo "pasarguard_running=0"
+    fi
+    echo "===== END_JOJONET_VPN_CHECK ====="
+    echo ""
+    echo "----- وضعیت پنل‌های نصب‌شده -----"
+    if xui_present; then
+        if [[ "$xf" == "classic" ]]; then
+            echo -n "  X-UI اصلی: نصب است"
+        else
+            echo -n "  3x-ui سنایی: نصب است"
+        fi
+        if (( xr == 1 )); then
+            echo " (روشن)"
+        else
+            echo " (خاموش)"
+        fi
+    else
+        echo "  3x-ui / X-UI: نصب نیست"
+    fi
+    if pg_present; then
+        if (( pr == 1 )); then
+            echo "  پاسارگارد: نصب است (روشن)"
+        else
+            echo "  پاسارگارد: نصب است (خاموش)"
+        fi
+    else
+        echo "  پاسارگارد: نصب نیست"
+    fi
+    echo "------------------------------"
+}
+
+vpn_panel_creds() {
+    if xui_present; then
+        xui_print_login
+        return 0
+    fi
+    if pg_present; then
+        pg_print_login
+        return 0
+    fi
+    if [[ -f "$VPN_CREDS_FILE" ]]; then
+        echo "===== JOJONET_VPN_CREDS ====="
+        cat "$VPN_CREDS_FILE"
+        echo "===== END_JOJONET_VPN_CREDS ====="
+        return 0
+    fi
+    echo "No VPN panel login found."
+    return 1
+}
+
+xui_uninstall() {
+    (( EUID == 0 )) || { log_error "root required"; return 1; }
+    xui_present || { echo -e "${YELLOW}[!] X-UI is not installed.${NC}"; return 0; }
+    if [[ -x "$XUI_INSTALL_PATH" ]]; then
+        echo uninstall | "$XUI_INSTALL_PATH" uninstall 2>/dev/null || true
+    fi
+    systemctl stop "$XUI_SERVICE" 2>/dev/null || true
+    systemctl disable "$XUI_SERVICE" 2>/dev/null || true
+    rm -f /etc/systemd/system/x-ui.service "$XUI_FLAVOR_FILE" "$VPN_CREDS_FILE"
+    systemctl daemon-reload 2>/dev/null || true
+    echo -e "${GREEN}[+] X-UI service stopped. Remove leftover files under /usr/local/x-ui and /etc/x-ui manually if you want a clean slate.${NC}"
+}
+
+# ==========================================
+# PasarGuard panel (official) — one-click, SQLite, no domain
+# https://github.com/PasarGuard/scripts
+# ==========================================
+PG_APP_DIR="/opt/pasarguard"
+PG_SERVICE_NAME="pasarguard"
+
+pg_present() {
+    [[ -f "$PG_APP_DIR/docker-compose.yml" || -x /usr/local/bin/pasarguard ]] \
+        || command -v pasarguard >/dev/null 2>&1 \
+        || { command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qi pasarguard; }
+}
+
+pg_running() {
+    command -v docker >/dev/null 2>&1 || return 1
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qi pasarguard
+}
+
+pg_fetch_installer() {
+    local dest="$1" url=""
+    for url in \
+        "https://raw.githubusercontent.com/PasarGuard/scripts/main/pasarguard.sh" \
+        "https://cdn.jsdelivr.net/gh/PasarGuard/scripts@main/pasarguard.sh" \
+        "https://ghproxy.net/https://raw.githubusercontent.com/PasarGuard/scripts/main/pasarguard.sh" \
+        "https://mirror.ghproxy.com/https://raw.githubusercontent.com/PasarGuard/scripts/main/pasarguard.sh"
+    do
+        echo -e "  ${CYAN}try${NC} $url" >&2
+        if xray_fetch "$url" "$dest"; then
+            [[ -s "$dest" ]] || continue
+            head -1 "$dest" | grep -q '^#!/' || continue
+            grep -q 'pasarguard' "$dest" || continue
+            return 0
+        fi
+    done
+    return 1
+}
+
+pg_compose() {
+    if [[ -x /usr/local/bin/pasarguard ]]; then
+        pasarguard "$@"
+        return $?
+    fi
+    command -v docker >/dev/null 2>&1 || return 1
+    [[ -f "$PG_APP_DIR/docker-compose.yml" ]] || return 1
+    if docker compose version >/dev/null 2>&1; then
+        docker compose -f "$PG_APP_DIR/docker-compose.yml" -p "$PG_SERVICE_NAME" "$@"
+    else
+        docker-compose -f "$PG_APP_DIR/docker-compose.yml" -p "$PG_SERVICE_NAME" "$@"
+    fi
+}
+
+pg_expose_lan() {
+    local envf="$PG_APP_DIR/.env"
+    [[ -f "$envf" ]] || return 0
+    if grep -qE '^[[:space:]]*UVICORN_HOST=' "$envf"; then
+        sed -i 's/^[[:space:]]*UVICORN_HOST=.*/UVICORN_HOST=0.0.0.0/' "$envf"
+    else
+        printf '\nUVICORN_HOST=0.0.0.0\n' >> "$envf"
+    fi
+    pg_compose up -d >/dev/null 2>&1 || true
+}
+
+pg_public_ip() {
+    auto_detect_network >/dev/null 2>&1 || true
+    printf '%s' "${DETECTED_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+}
+
+pg_install() {
+    local tmp="" ip=""
+    (( EUID == 0 )) || { log_error "PasarGuard install needs root"; return 1; }
+    command -v systemctl >/dev/null 2>&1 || { log_error "systemd is required"; return 1; }
+    if pg_present; then
+        echo -e "${YELLOW}[!] همین پنل از قبل روی این سرور نصب است: پاسارگارد${NC}"
+        if pg_running; then
+            echo -e "    وضعیت: روشن است. نصب دوباره انجام نشد."
+        else
+            echo -e "    وضعیت: فایل‌ها هست (کانتینر الان خاموش است). نصب دوباره انجام نشد."
+        fi
+        pg_status
+        pg_print_login || true
+        return 0
+    fi
+    confirm_panel_install "PasarGuard" || { echo "Cancelled."; return 1; }
+    echo -e "${CYAN}[*] Installing official PasarGuard (SQLite, one-click). Not a JojoNet tunnel.${NC}"
+    echo -e "    Needs Docker. 1GB RAM is tight — prefer 2GB+."
+    tmp=$(mktemp /tmp/jojonet-pg-install.XXXXXX) || return 1
+    if ! pg_fetch_installer "$tmp"; then
+        rm -f "$tmp"
+        log_error "Could not download PasarGuard installer (GitHub + mirrors)."
+        return 1
+    fi
+    chmod 700 "$tmp"
+    # Official script ends by following docker logs (blocks). Skip that for one-click.
+    sed -i 's/^follow_pasarguard_logs$/true/' "$tmp"
+    # Answer "install node?" with no. --no-ssl = no domain prompt.
+    if ! printf 'n\n' | bash "$tmp" install --no-ssl; then
+        rm -f "$tmp"
+        log_error "PasarGuard installer failed."
+        return 1
+    fi
+    rm -f "$tmp"
+    pg_expose_lan
+    echo -e "${GREEN}[+] PasarGuard install finished.${NC}"
+    pg_status
+    pg_print_login || true
+}
+
+pg_status() {
+    local ip="" port="8000"
+    echo -e "${CYAN}--- PasarGuard ---${NC}"
+    if ! pg_present; then
+        echo -e "  unit:    ${YELLOW}not installed${NC}"
+        return 0
+    fi
+    if [[ -f "$PG_APP_DIR/.env" ]]; then
+        port=$(awk -F= '/^[[:space:]]*UVICORN_PORT=/{gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "$PG_APP_DIR/.env")
+        port="${port:-8000}"
+    fi
+    ip=$(pg_public_ip)
+    echo -e "  dir:     $PG_APP_DIR"
+    if command -v docker >/dev/null 2>&1; then
+        docker ps --filter "name=pasarguard" --format '  docker:  {{.Names}} {{.Status}}' 2>/dev/null || true
+    fi
+    [[ -n "$ip" ]] && echo -e "  url:     ${GREEN}http://${ip}:${port}/dashboard/${NC}"
+    echo -e "  first login: jojonet --vpn-panel-creds"
+    ss -lntup 2>/dev/null | awk -v p=":$port" '$0 ~ p {print "  listen:  "$0}' || true
+}
+
+pg_uninstall() {
+    (( EUID == 0 )) || { log_error "root required"; return 1; }
+    pg_present || { echo -e "${YELLOW}[!] PasarGuard is not installed.${NC}"; return 0; }
+    pg_compose down >/dev/null 2>&1 || true
+    if ! xui_present; then
+        rm -f "$VPN_CREDS_FILE"
+    fi
+    echo -e "${GREEN}[+] PasarGuard containers stopped. Files under $PG_APP_DIR kept.${NC}"
+}
+
+panels_menu() {
+    local c=""
+    clear_screen
+    logo
+    print_banner "VPN panels — one-click install (separate from tunnels)"
+    echo -e "  ${GREEN}3x-ui سنایی${NC}  ·  ${GREEN}X-UI اصلی${NC} (علیرضا)  ·  ${GREEN}پاسارگارد${NC}"
+    echo -e "  3x-ui and classic X-UI cannot run together (same service)."
+    echo ""
+    xui_status
+    echo ""
+    pg_status
+    echo ""
+    menu_line "1) Install 3x-ui Sanaei     (one click)"
+    menu_line "2) Install X-UI classic     (Alireza, one click)"
+    menu_line "3) Install PasarGuard       (one click, SQLite)"
+    menu_line "4) X-UI status"
+    menu_line "5) PasarGuard status"
+    menu_line "6) Restart X-UI"
+    menu_line "7) Restart PasarGuard"
+    menu_line "8) Uninstall X-UI"
+    menu_line "9) Stop PasarGuard"
+    menu_line "10) Show panel login"
+    menu_line "11) Check installed panels"
+    menu_line "0) Back"
+    read -r -p "Choice: " c || return 0
+    case "$c" in
+        1) xui_install || true; press_enter ;;
+        2) xui_classic_install || true; press_enter ;;
+        3) pg_install || true; press_enter ;;
+        4) xui_status; press_enter ;;
+        5) pg_status; press_enter ;;
+        6)
+            systemctl restart "$XUI_SERVICE" 2>/dev/null \
+                && echo -e "${GREEN}[+] x-ui restarted${NC}" \
+                || echo -e "${RED}[!] restart failed (not installed?)${NC}"
+            press_enter
+            ;;
+        7)
+            pg_compose restart >/dev/null 2>&1 \
+                && echo -e "${GREEN}[+] PasarGuard restarted${NC}" \
+                || echo -e "${RED}[!] restart failed (not installed?)${NC}"
+            press_enter
+            ;;
+        8) xui_uninstall || true; press_enter ;;
+        9) pg_uninstall || true; press_enter ;;
+        10) vpn_panel_creds || true; press_enter ;;
+        11) vpn_panel_check || true; press_enter ;;
+        *) return 0 ;;
+    esac
+}
+
+quick_add_tunnel_stream() {
+    local mode="$1" peer_ip="${2:-}"
+    local peer_from_cli=0 use_auto=0 ins_name="" role_conf="" loc_ip="" rem_ip=""
+    local fwd_port="" key_dir="" dns_port="$DEFAULT_DNSTT_DNS_PORT" domain="" resolver="" dns_mode=""
+    local existing="" pair_id="" subnet_byte="" _fp="" _dm="" _rs="" _dp=""
+    local direct=0
+
+    stream_mode "$mode" || { log_error "Unknown stream mode: $mode"; return 1; }
+    [[ -n "$peer_ip" ]] && peer_from_cli=1
+    case "${JOJONET_DIRECT:-0}" in 1|y|Y|yes|YES|true|TRUE|on|ON) direct=1 ;; esac
+
+    set +e
+    clear_screen
+    logo
+    print_banner "$(tunnel_mode_label "$mode")"
+    echo -e "${CYAN}How it works:${NC}"
+    if [[ "$mode" == "dnstt" ]]; then
+        echo -e "  Kharej = ${GREEN}dnstt-server${NC} on UDP/53 (NS of your subdomain must point here)"
+        echo -e "  Iran   = ${GREEN}dnstt-client${NC} via DoH/DoT/UDP resolver (looks like DNS)"
+        echo -e "  Noise_NK encryption + SOCKS auth. Public ports on Iran → 127.0.0.1 on Kharej."
+        echo -e "  ${YELLOW}Required:${NC} a subdomain whose NS A record is the Kharej public IP."
+        echo -e "  Example:  t.example.com NS ns.t.example.com  +  ns.t.example.com A <KHAREJ_IP>"
+        echo -e "  Then JOJONET_DNSTT_DOMAIN=t.example.com"
+    else
+        echo -e "  Kharej = ${GREEN}pingtunnel server${NC} (ICMP echo, ChaCha20)"
+        echo -e "  Iran   = ${GREEN}pingtunnel client${NC} (SOCKS over ping) + port forwards"
+        echo -e "  Use when TCP/UDP/DNS are filtered but ping still works."
+        echo -e "  ${YELLOW}Not the same as${NC} --wg-icmp (that wraps WireGuard in udp2raw)."
+        echo -e "  While this tunnel is up, the kernel will not answer ordinary ping on this host."
+    fi
+    echo ""
+
+    if [[ "$mode" == "dnstt" ]]; then
+        install_dnstt_binaries || { sleep 2; set -e; return 1; }
+        install_gost_binary || { sleep 2; set -e; return 1; }
+        install -d -m700 "$DNSTT_CONFIG_DIR"
+    else
+        install_pingtunnel_binary || { sleep 2; set -e; return 1; }
+        install_gost_binary || { sleep 2; set -e; return 1; }
+        install -d -m700 "$ICMP_CONFIG_DIR"
+    fi
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+
+    if (( direct == 0 )) && [[ -z "$peer_ip" ]]; then
+        echo -e "  ${CYAN}Peer IP empty${NC} = direct Kharej (no Iran VPS; users run the client themselves)."
+        read -r -p "Peer server IP (empty = one Kharej only): " peer_ip
+        peer_ip="${peer_ip// /}"
+        if [[ -z "$peer_ip" ]]; then
+            direct=1
+            export JOJONET_DIRECT=1
+        fi
+    fi
+    if (( direct == 1 )); then
+        export JOJONET_ROLE=kharej JOJONET_DIRECT=1
+        [[ -n "$peer_ip" ]] || peer_ip="$loc_ip"
+        echo -e "${GREEN}[*] Direct Kharej:${NC} this is the only VPS. Clients run on user devices."
+    fi
+    peer_ip="${peer_ip// /}"
+    if ! validate_ipv4 "$peer_ip"; then
+        echo -e "${RED}[!] Invalid peer IP.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    rem_ip="$peer_ip"
+    if [[ "$rem_ip" == "$loc_ip" ]]; then
+        direct=1
+        export JOJONET_ROLE=kharej JOJONET_DIRECT=1
+    fi
+
+    if existing=$(find_tunnel_for_peer "$rem_ip" "$mode"); then
+        echo -e "${YELLOW}[!] $(tunnel_mode_label "$mode") to $rem_ip exists [$existing]. Restarting...${NC}"
+        local _rrc=0
+        restart_tunnel "$existing" || _rrc=$?
+        sleep 2; set -e; return "$_rrc"
+    fi
+
+    if (( direct == 1 )); then
+        role_conf="kharej"
+    elif ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Role required. Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2; set -e; return 1
+    fi
+    if (( direct == 1 )); then
+        echo -e "${GREEN}[*] Role:${NC} kharej (direct / no Iran VPS)"
+    else
+        echo -e "${GREEN}[*] Role:${NC} $role_conf"
+    fi
+
+    if [[ "$(count_tunnels_of_mode "$mode")" != "0" ]]; then
+        echo -e "${RED}[!] Only one $(tunnel_mode_label "$mode") tunnel is allowed on this server.${NC}"
+        if [[ "$mode" == "dnstt" ]]; then
+            echo -e "    UDP/53 can only serve one DNSTT domain."
+        else
+            echo -e "    Raw ICMP echo can only be owned by one pingtunnel process."
+        fi
+        sleep 3; set -e; return 1
+    fi
+
+    if jojonet_use_auto_defaults "$peer_from_cli"; then
+        use_auto=1
+    fi
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "$mode") || { set -e; return 1; }
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+
+    if [[ "$mode" == "dnstt" ]]; then
+        domain="${JOJONET_DNSTT_DOMAIN:-}"
+        dns_mode=$(printf '%s' "${JOJONET_DNSTT_MODE:-$DEFAULT_DNSTT_MODE}" | tr '[:upper:]' '[:lower:]')
+        resolver="${JOJONET_DNSTT_RESOLVER:-}"
+        dns_port="${JOJONET_DNSTT_DNS_PORT:-$DEFAULT_DNSTT_DNS_PORT}"
+        fwd_port="${JOJONET_FWD_PORTS:-$DEFAULT_DNSTT_FWD}"
+        if (( use_auto == 0 )); then
+            read -r -p "DNSTT domain (NS must point at Kharej) [$domain]: " _dm
+            domain="${_dm:-$domain}"
+            read -r -p "Resolver mode doh/dot/udp [$dns_mode]: " _dm
+            dns_mode=$(printf '%s' "${_dm:-$dns_mode}" | tr '[:upper:]' '[:lower:]')
+            read -r -p "Resolver URL/host [$resolver]: " _rs
+            resolver="${_rs:-$resolver}"
+            read -r -p "Kharej DNS UDP listen port [$dns_port]: " _dp
+            dns_port="${_dp:-$dns_port}"
+            read -r -p "Kharej service ports, e.g. 443 or 8443:443 [$fwd_port]: " _fp
+            fwd_port="${_fp:-$fwd_port}"
+        fi
+        domain="${domain%.}"
+        domain="${domain,,}"
+        if [[ -z "$domain" ]] || ! valid_dns_name "$domain"; then
+            echo -e "${RED}[!] DNSTT domain required (FQDN). Set JOJONET_DNSTT_DOMAIN=t.example.com${NC}"
+            sleep 2; set -e; return 1
+        fi
+        valid_dnstt_mode "$dns_mode" || { echo -e "${RED}[!] Resolver mode must be doh, dot or udp.${NC}"; sleep 2; set -e; return 1; }
+        if [[ -z "$resolver" ]]; then
+            case "$dns_mode" in
+                doh) resolver="$DEFAULT_DNSTT_DOH" ;;
+                dot) resolver="$DEFAULT_DNSTT_DOT" ;;
+                udp) resolver="$DEFAULT_DNSTT_UDP" ;;
+            esac
+        fi
+        if ! valid_dnstt_resolver "$dns_mode" "$resolver"; then
+            echo -e "${RED}[!] Invalid resolver for mode $dns_mode: $resolver${NC}"
+            sleep 2; set -e; return 1
+        fi
+        if ! validate_single_port "$dns_port"; then
+            echo -e "${RED}[!] Invalid DNS listen port.${NC}"
+            sleep 2; set -e; return 1
+        fi
+        dns_port=$((10#$dns_port))
+        fwd_port=$(xray_normalize_ports "$fwd_port") || { sleep 2; set -e; return 1; }
+        if [[ "$role_conf" == "iran" ]]; then
+            fwd_port=$(xray_plan_iran_ports "$fwd_port") || { sleep 2; set -e; return 1; }
+        fi
+    else
+        dns_port=$(stream_loop_port 14800 "$subnet_byte")
+        fwd_port="${JOJONET_FWD_PORTS:-$DEFAULT_DNSTT_FWD}"
+        if (( use_auto == 0 )); then
+            read -r -p "Kharej service ports, e.g. 443 or 8443:443 [$fwd_port]: " _fp
+            fwd_port="${_fp:-$fwd_port}"
+        fi
+        fwd_port=$(xray_normalize_ports "$fwd_port") || { sleep 2; set -e; return 1; }
+        if [[ "$role_conf" == "iran" ]]; then
+            fwd_port=$(xray_plan_iran_ports "$fwd_port") || { sleep 2; set -e; return 1; }
+        fi
+    fi
+
+    pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+    if [[ "$mode" == "dnstt" ]]; then
+        key_dir=$(ensure_dnstt_keys "$pair_id" "$rem_ip") || { set -e; return 1; }
+    else
+        key_dir=$(ensure_icmp_keys "$pair_id" "$rem_ip") || { set -e; return 1; }
+    fi
+
+    echo -e "\n${CYAN}--- $(tunnel_mode_label "$mode") plan ---${NC}"
+    echo -e "  Name:      $ins_name"
+    echo -e "  Role:      $role_conf"
+    if (( direct == 1 )); then
+        echo -e "  Mode:      ${GREEN}direct Kharej (no Iran VPS)${NC}"
+        echo -e "  Server:    $loc_ip"
+    else
+        echo -e "  Peer:      $rem_ip"
+    fi
+    echo -e "  Forward:   $fwd_port"
+    if [[ "$mode" == "dnstt" ]]; then
+        echo -e "  Domain:    $domain"
+        echo -e "  Resolver:  $dns_mode $resolver"
+        echo -e "  DNS UDP:   $dns_port (Kharej; public 53 redirected if not 53)"
+        echo -e "  Keys:      $key_dir/dnstt.priv + dnstt.pub + dnstt.auth"
+        if [[ "$role_conf" == "kharej" ]]; then
+            echo -e "  ${YELLOW}DNS records (parent zone of ${domain}):${NC}"
+            echo -e "    ${domain}.  NS  ns.${domain}."
+            echo -e "    ns.${domain}.  A   ${loc_ip}"
+        fi
+    else
+        echo -e "  Carrier:   ICMP echo + ChaCha20 (pingtunnel ${PINGTUNNEL_VERSION})"
+        echo -e "  Keys:      $key_dir/pingtunnel.key + pingtunnel.encrypt"
+    fi
+    if (( direct == 1 )); then
+        hint "No Iran VPS. After start, run the printed client command on user devices."
+        hint "Kharej services must listen on 127.0.0.1 (or all) for the target ports"
+    elif [[ "$role_conf" == "iran" ]]; then
+        hint "Now run on Kharej: sudo jojonet $(tunnel_cli_flag "$mode") $loc_ip"
+    else
+        hint "Kharej services must listen on 127.0.0.1 (or all) for the target ports"
+        hint "Now run on Iran: sudo jojonet $(tunnel_cli_flag "$mode") $loc_ip"
+    fi
+    echo ""
+
+    if DnsDomain="$domain" DnsResolver="$resolver" DnsMode="$dns_mode" \
+        deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "" "" "0" "$fwd_port" "$mode" "$dns_port" "$key_dir" "" "" "tcp"; then
+        echo -e "${GREEN}[+] $(tunnel_mode_label "$mode") [$ins_name] is up.${NC}"
+        if (( direct == 1 )); then
+            show_direct_client_card "$mode" "$loc_ip" "$key_dir" "$domain" "$dns_mode" "$resolver"
+        fi
         sleep 2
         set -e
         return 0
@@ -8759,6 +10545,7 @@ for conf in "$INSTANCES_DIR"/*.conf; do
         wstunnel|ws) svc="jojonet-wstunnel@${name}.service" ;;
         dokodemo|xray_reverse) svc="jojonet-xray@${name}.service" ;;
         sit|gre6|ipip6) svc="jojonet-v6@${name}.service" ;;
+        dnstt|icmp) svc="jojonet-stream@${name}.service" ;;
         *)         svc="jojonet@${name}.service" ;;
     esac
     echo "[jojonet-boot] Ensuring $svc"
@@ -8828,6 +10615,7 @@ tunnel_service_unit() {
         wstunnel|ws) echo "jojonet-wstunnel@${name}.service" ;;
         dokodemo|xray_reverse) echo "jojonet-xray@${name}.service" ;;
         sit|gre6|ipip6) echo "jojonet-v6@${name}.service" ;;
+        dnstt|icmp) echo "jojonet-stream@${name}.service" ;;
         *)          echo "jojonet@${name}.service" ;;
     esac
 }
@@ -8960,6 +10748,9 @@ stop_tunnel_runtime() {
     pkill -f -- "tun-(server|client).*-device ${re}( |\$)" >/dev/null 2>&1 || true
     pkill -f -- "paqet run -c.*/${re}\\.yaml( |\$)" >/dev/null 2>&1 || true
     pkill -f -- "xray run -c ${XRAY_CONFIG_DIR}/${re}\\.json( |\$)" >/dev/null 2>&1 || true
+    if [[ -r "$conf" ]] && grep -qE '^TunnelMode="(dnstt|icmp)"' "$conf" 2>/dev/null; then
+        [[ -x "$STREAM_RUNNER" ]] && "$STREAM_RUNNER" stop "$conf" >/dev/null 2>&1 || true
+    fi
     if [[ -r "$conf" ]] && grep -qE '^TunnelMode="(sit|gre6|ipip6)"' "$conf" 2>/dev/null; then
         [[ -x "$V6_RUNNER" ]] && "$V6_RUNNER" stop "$conf" >/dev/null 2>&1 || true
         local v6if=""
@@ -8998,7 +10789,7 @@ tunnel_peer_setup_cmd() {
         hysteria2)   printf 'sudo jojonet --hy2 %s' "$loc_ip" ;;
         rathole)     printf 'sudo jojonet --rathole %s' "$loc_ip" ;;
         wstunnel|ws) printf 'sudo jojonet --wstunnel %s' "$loc_ip" ;;
-        dokodemo|xray_reverse|sit|gre6|ipip6)
+        dokodemo|xray_reverse|sit|gre6|ipip6|dnstt|icmp)
                      printf 'sudo jojonet %s %s' "$(tunnel_cli_flag "$mode")" "$loc_ip" ;;
         *)           printf 'sudo jojonet %s' "$loc_ip" ;;
     esac
@@ -9054,7 +10845,7 @@ change_tunnel_peer_ip() {
     echo -e "  This server:  ${Local_IP:-?}  ($(tunnel_role_label "$role"))"
     echo -e "  Current peer: ${old_peer}  (${peer_label})"
 
-    [[ -n "$new_peer" ]] || read -r -p "New ${peer_label} IP: " new_peer
+    [[ -n "$new_peer" ]] || read -r -p "New ${peer_label} IP: " new_pee
     new_peer="${new_peer// /}"
     if [[ -z "$new_peer" ]] || ! validate_ipv4 "$new_peer"; then
         echo -e "${RED}[!] Invalid IP.${NC}"
@@ -9220,6 +11011,25 @@ change_tunnel_peer_ip() {
             }
             tun_ip="" tun_remote="" tun_server="" tun_client=""
             ;;
+        dnstt)
+            tcp_port="${TcpPort:-$DEFAULT_DNSTT_DNS_PORT}"
+            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+            export DnsDomain="${DnsDomain:-}" DnsResolver="${DnsResolver:-}" DnsMode="${DnsMode:-}"
+            key_dir=$(ensure_dnstt_keys "$pair_id" "$rem_ip") || {
+                echo -e "${RED}[!] DNSTT key setup failed.${NC}"
+                sleep 2; set -e; return 1
+            }
+            tun_ip="" tun_remote="" tun_server="" tun_client=""
+            ;;
+        icmp)
+            pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+            key_dir=$(ensure_icmp_keys "$pair_id" "$rem_ip") || {
+                echo -e "${RED}[!] ICMP key setup failed.${NC}"
+                sleep 2; set -e; return 1
+            }
+            tcp_port="${TcpPort:-$(stream_loop_port 14800 "$subnet_byte")}"
+            tun_ip="" tun_remote="" tun_server="" tun_client=""
+            ;;
         sit|gre6|ipip6)
             if v6_other=$(v6_tunnel_for_peer "$rem_ip") && [[ "${v6_other%% *}" != "$tunnel_name" ]]; then
                 echo -e "${RED}[!] $rem_ip already has an IPv6 tunnel [${v6_other%% *}] — only one per peer.${NC}"
@@ -9295,6 +11105,7 @@ change_tunnel_peer_ip() {
 }
 
 ensure_boot_persistence() {
+    local quiet="${1:-0}"
     shopt -s nullglob
     local files=("$INSTANCES_DIR"/*.conf)
     shopt -u nullglob
@@ -9316,7 +11127,7 @@ ensure_boot_persistence() {
         fi
     done
     echo -e "${GREEN}[+] Boot persistence OK.${NC} Enabled: $enabled | Started: $started"
-    sleep 2
+    [[ "$quiet" == "1" ]] || sleep 2
 }
 
 # ==========================================
@@ -9398,6 +11209,7 @@ teardown_tunnel_runtime() {
     rm -f "$PAQET_CONFIG_DIR/${name}.yaml" "$HY2_CONFIG_DIR/${name}.yaml" \
         "$RATHOLE_CONFIG_DIR/${name}.toml" "$WSTUNNEL_CONFIG_DIR/${name}.cmd.sh" \
         "$XRAY_CONFIG_DIR/${name}.json" 2>/dev/null || true
+    rm -rf "/run/jojonet/${name}" "$ICMP_CONFIG_DIR/${name}.json" "$DNSTT_CONFIG_DIR/${name}.json" 2>/dev/null || true
     ip link show "$name" >/dev/null 2>&1 && ip link delete "$name" >/dev/null 2>&1 || true
     nft delete table ip "jojonet_$name" >/dev/null 2>&1 || true
     return 0
@@ -9609,7 +11421,7 @@ manage_tunnels() {
         local Name="" TunnelMode="" Role="" Local_IP="" Remote_IP="" Subnet_Byte=""
         local Tun_IP="" Tun_Remote_IP_Raw="" Suggested_MTU="" Ports="" TcpPort=""
         local PaqetYaml="" ForwardProto="" VxlanVni="" VxlanPort=""
-        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet=""
+        local WgPrivateKey="" WgPublicKey="" WgPeerPublicKey="" HyYaml="" HyAuth="" HySni="" HyHopRange="" HyHopInterval="" HyTlsMode="" HyDomain="" HyAcmeEmail="" HyCertPath="" HyKeyPath="" RatholeToml="" WstunnelCmd="" WgObfs="" ObfsPort="" V6Iface="" V6Local="" V6Remote="" XrayJson="" XrayNet="" DnsDomain="" DnsResolver="" DnsMode=""
         local Tun_Server_IP="" Tun_Client_IP="" KeyDir="" GreKey=""
         local file iran_ip kharej_ip
 
@@ -9733,7 +11545,7 @@ manage_tunnels() {
             5)
                 local chg_name="" chg_peer=""
                 read -r -p "Tunnel name to change peer: " chg_name
-                read -r -p "New peer IP (Kharej on Iran / Iran on Kharej): " chg_peer
+                read -r -p "New peer IP (Kharej on Iran / Iran on Kharej): " chg_pee
                 change_tunnel_peer_ip "$chg_name" "$chg_peer" || true
                 ;;
             6)
@@ -10605,6 +12417,10 @@ main_menu() {
         menu_line "25) Relays — single server (iptables/GOST/HAProxy/Socat/Xray)"
         menu_line "26) Server tools (DNS / ping test / OS update)"
         menu_line "27) License / اشتراک ماهانه (وضعیت و فعال‌سازی)"
+        menu_line "28) DNSTT — DNS tunnel (DoH/DoT/UDP, NS on Kharej)"
+        menu_line "29) ICMP — pingtunnel (ChaCha20 over ping; not WireGuard/udp2raw)"
+        menu_line "30) Direct Kharej — DNSTT/ICMP/relay on one foreign server (no Iran VPS)"
+        menu_line "31) VPN panels — 3x-ui Sanaei / X-UI classic / PasarGuard"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -10700,6 +12516,10 @@ main_menu() {
                 [[ -n "${_lk:-}" ]] && license_activate "$_lk"
                 press_enter
                 ;;
+            28) quick_add_tunnel_stream dnstt || true ;;
+            29) quick_add_tunnel_stream icmp || true ;;
+            30) direct_stream_menu || true ;;
+            31) panels_menu || true ;;
             0) clear_screen; opsec_scrub_history; exit 0 ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
         esac
@@ -10726,6 +12546,8 @@ create_xray_runner_script >/dev/null 2>&1 || true
 create_xray_service >/dev/null 2>&1 || true
 create_v6_runner_script >/dev/null 2>&1 || true
 create_v6_service >/dev/null 2>&1 || true
+create_stream_runner_script >/dev/null 2>&1 || true
+create_stream_service >/dev/null 2>&1 || true
 create_relay_runner_script >/dev/null 2>&1 || true
 create_relay_service >/dev/null 2>&1 || true
 if [[ -x "$U2R_BIN" ]]; then
@@ -10791,8 +12613,24 @@ if [[ "${1:-}" == "--import-config" && -n "${2:-}" ]]; then
     import_all_configs "$2" && exit 0
     exit $?
 fi
+if [[ "${1:-}" == "--enable-boot" ]]; then
+    ensure_boot_persistence 1
+    exit 0
+fi
 if [[ "${1:-}" == "--list-tunnels" || "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then
-    if [[ "${2:-}" == "--detail" || "${2:-}" == "-d" ]]; then
+    shift
+    _lt_detail=0
+    _lt_json=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --detail|-d) _lt_detail=1; shift ;;
+            --json) _lt_json=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    if (( _lt_json )); then
+        list_all_tunnels_json
+    elif (( _lt_detail )); then
         list_all_tunnels 1
     else
         list_all_tunnels 0
@@ -10858,6 +12696,75 @@ if [[ "${1:-}" == "--gre6" && -n "${2:-}" ]]; then
 fi
 if [[ "${1:-}" == "--ipip6" && -n "${2:-}" ]]; then
     quick_add_tunnel_v6 ipip6 "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--xui-install" ]]; then
+    xui_install && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--xui-classic-install" ]]; then
+    xui_classic_install && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--xui-status" ]]; then
+    xui_status
+    exit 0
+fi
+if [[ "${1:-}" == "--xui-uninstall" ]]; then
+    xui_uninstall && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--pasarguard-install" ]]; then
+    pg_install && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--pasarguard-status" ]]; then
+    pg_status
+    exit 0
+fi
+if [[ "${1:-}" == "--pasarguard-uninstall" ]]; then
+    pg_uninstall && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--vpn-panel-creds" ]]; then
+    vpn_panel_creds && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--vpn-panel-check" ]]; then
+    vpn_panel_check
+    exit 0
+fi
+if [[ "${1:-}" == "--direct" ]]; then
+    export JOJONET_DIRECT=1 JOJONET_ROLE=kharej
+    case "${2:-}" in
+        dnstt|--dnstt)
+            quick_add_tunnel_stream dnstt "${3:-}" && exit 0
+            exit $?
+            ;;
+        icmp|--icmp)
+            quick_add_tunnel_stream icmp "${3:-}" && exit 0
+            exit $?
+            ;;
+        *)
+            echo "Usage: sudo jojonet --direct dnstt|icmp" >&2
+            exit 1
+            ;;
+    esac
+fi
+if [[ "${1:-}" == "--dnstt" ]]; then
+    if [[ -n "${2:-}" ]]; then
+        quick_add_tunnel_stream dnstt "$2" && exit 0
+    else
+        JOJONET_DIRECT=1 JOJONET_ROLE=kharej quick_add_tunnel_stream dnstt && exit 0
+    fi
+    exit $?
+fi
+if [[ "${1:-}" == "--icmp" ]]; then
+    if [[ -n "${2:-}" ]]; then
+        quick_add_tunnel_stream icmp "$2" && exit 0
+    else
+        JOJONET_DIRECT=1 JOJONET_ROLE=kharej quick_add_tunnel_stream icmp && exit 0
+    fi
     exit $?
 fi
 if [[ "${1:-}" == "--relay" && -n "${2:-}" && -n "${3:-}" && -n "${4:-}" ]]; then

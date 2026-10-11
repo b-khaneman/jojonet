@@ -1,13 +1,102 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.23
+- **Live tunnels on servers**: panel tab scans each host via `jojonet --list-tunnels --json`, matches panel DB or marks orphans, full delete, and reboot persistence (`--enable-boot`) per server or all.
+- **Fix**: boot restore script starts DNSTT/ICMP with `jojonet-stream@NAME` (was wrongly `jojonet@`).
+- CLI: `sudo jojonet --enable-boot` and `sudo jojonet --list-tunnels --json`.
+- README install path is one command (`install.sh`); zip/`setup.sh` moved to optional/advanced.
+
+## 1.6.0 / panel 1.3.22
+- Topbar brand cleaned up: single panel version, Telegram @B_KHANEMAN, animated title.
+
+## 1.6.0 / panel 1.3.21
+- Content width slightly reduced; side terminals a bit larger for better balance.
+
+## 1.6.0 / panel 1.3.20
+- Main tab bar is centered.
+
+## 1.6.0 / panel 1.3.19
+- Larger, bolder UI type on the wider layout without breaking cards or grids.
+
+## 1.6.0 / panel 1.3.18
+- Day theme: terminal server dropdown IPs are readable. Side terminals stick under the topbar.
+
+## 1.6.0 / panel 1.3.17
+- Wider page content, cleaner topbar/tabs alignment, denser type scale, and tighter responsive breakpoints.
+
+## 1.6.0 / panel 1.3.16
+- VPN panels tab layout fixed: three install cards in one even row, clearer server field spacing.
+
+## 1.6.0 / panel 1.3.15
+- Side terminals sit under the header/tabs, have a close button, and no longer cover the top bar.
+
+## 1.6.0 / panel 1.3.14
+- Job report modal (test / install / deploy) is sectioned: summary cards, numbered steps, and readable grouped log cards.
+
+## 1.6.0 / panel 1.3.13
+- Page zoom is the original 100%. Side terminals overlay the page and no longer shrink the cards.
+
+## 1.6.0 / panel 1.3.12
+- Default page zoom is 67% again so the original card layout stays intact.
+
+## 1.6.0 / panel 1.3.11
+- Default page zoom is 100% again (the 67% shrink is gone).
+
+## 1.6.0 / panel 1.3.10
+- Owner can hide the main-page terminals for everyone, or turn them off for one customer.
+
+## 1.6.0 / panel 1.3.9
+- Two hacker-style SSH terminals on the left and right of the main page, plus default UI zoom of 67%.
+
+## 1.6.0 / panel 1.3.8
+- Jobs / install monitor restyled as a dark ops console (terminal chrome, live HUD, phosphor log feed).
+
+## 1.6.0 / panel 1.3.7
+- Owner header no longer shows the «مالک پنل» label under the username.
+
+## 1.6.0 / panel 1.3.6
+- Panel text uses Vazirmatn Medium/Bold and stronger muted contrast so labels and descriptions stay readable.
+
+## 1.6.0 / panel 1.3.5
+- Default theme is **شب**. Day theme uses an icy-white page, clearer contrast, and larger Vazirmatn type. Choice is stored as `jojonet-theme-2`.
+
+## 1.6.0 / panel 1.3.4
+- **Fix**: existing panel DBs still had a global unique `relays.name`. Two customers could not reuse the same relay name. Migration rebuilds `relays` and keeps uniqueness per owner.
+
+## 1.6.0 / panel 1.3.3
+- New **اوتباند** tab: after a tunnel is up, shows which server should get the X-UI / 3x-ui Freedom outbound and the exact Send Through / tag values (copy buttons). Tunnel cards have a shortcut.
+
+## 1.6.0 / panel 1.3.2
+- Tunnel form no longer offers the «سرور خارج / ایران‌اکسس» direction; new tunnels go ایران → خارج. Direct DNSTT/ICMP (checkbox) is unchanged.
+
+## 1.6.0 / panel 1.3.1
+- **Theme picker**: keep the current navy theme, plus selectable **روز** (white page / black text) and **شب** (black page / white text). Choice is saved in the browser.
+
+## 1.6.0 / panel 1.3.0
+- **Web panel 1.3.0**: multi-tenant accounts. Existing `admin` stays the owner. Owner creates customers with subscription days, server/tunnel/relay quotas, and VPN/relay/OS-update flags. Each customer sees only their own resources; owner sees all with an owner badge. License key `JN1` is no longer required to run `jojonet` (`--activate` / `--license` remain as no-op-safe flags). `private.pem` is not shipped in the customer zip.
+
 ## 1.6.0
+- **DNSTT** (`--dnstt`): DNS tunnel with official bamsoftware dnstt (`v1.20260501.0`), Noise_NK, DoH/DoT/UDP on Iran, `dnstt-server` on Kharej UDP/53 (or 5300 + iptables REDIRECT). SOCKS auth from `dnstt.auth`. One DNSTT per server. Domain NS must point at Kharej (`JOJONET_DNSTT_DOMAIN`). Menu 28. Unit `jojonet-stream@NAME`.
+- **ICMP / pingtunnel** (`--icmp`): standalone ICMP echo tunnel (pingtunnel **2.10**, sha256-pinned, ChaCha20). Distinct from `--wg-icmp` (udp2raw + WireGuard). One ICMP tunnel per host (raw socket). Kernel `icmp_echo_ignore_all=1` while running, restored on stop. Menu 29.
 - **Monthly license**: JojoNet runs only with a signed `JN1` subscription key (`--activate` / `--license`). Buy on the web shop with crypto (USDT / BTC / TON / TRX); the seller confirms the TXID and the shop issues a 30-day key. Shop: `license-shop/install-shop.sh`. Set `JOJONET_SHOP_URL` before shipping.
 - **Xray Dokodemo-door** (`--dokodemo` / `--doko`) and **Xray Reverse** (`--xray-reverse`): VLESS over tcp/ws/grpc, shared `xray.uuid`, unit `jojonet-xray@NAME`. Dokodemo: Iran dials Kharej. Reverse: Kharej dials the Iran portal — for Iran-access servers. Env: `JOJONET_XRAY_NET`, `JOJONET_XRAY_CTRL_PORT`, `JOJONET_FWD_PORTS`. Menu 22 / 23.
 - **IPv6 tunnels**: 6to4 SIT (`--6to4` / `--sit`, ULA `fd6a:…::1/::2`), GRE6 (`--gre6`, overlay `172.22`), IPIP6 (`--ipip6`, overlay `172.23`). One v6 overlay per peer. Unit `jojonet-v6@NAME`. Menu 24.
 - **Single-server relays** (hiddify-relay style): iptables DNAT, GOST, HAProxy (TCP only), Socat, Xray dokodemo with traffic stats. CLI `--relay ENGINE DEST PORTS [tcp|udp|both] [NAME]`, `--relay-list`, `--relay-remove`, `--relay-stats`. Units `jojonet-relay@` / `jojonet-relay-nat@`. Menu 25.
 - **Server tools**: set DNS, ping test, OS package update. Menu 26 / `--dns` / `--ping-test` / `--update-server`.
-- **Web panel 1.2.0**: Xray and v6 modes (one v6 tunnel per Iran/Kharej pair), Relays tab, DNS / ping / OS-update buttons on each server card.
-- Uninstall stops xray/v6/relay units and can remove the `xray` and `gost` binaries.
+- **Direct Kharej (no Iran VPS)**: DNSTT and ICMP can run on a single foreign server (`--direct dnstt|icmp`, omit peer IP, menu 30). Users run `dnstt-client` / `pingtunnel` on their own device; client card is saved to `/etc/jojonet/direct/`. Relays can be built on Iran **or** Kharej. Panel 1.2.1: checkbox «فقط سرور خارج» and relays on any server.
+- **3x-ui / X-UI (separate section)**: official MHSanaei 3x-ui installer (GitHub + mirrors, `XUI_NONINTERACTIVE=1`). Menu 31, `jojonet --xui-install|--xui-status|--xui-uninstall`, `sudo bash setup.sh xui`. Not a JojoNet tunnel.
+- **PasarGuard (one-click)**: official installer (SQLite, `--no-ssl`), GitHub + mirrors. Menu 31, `jojonet --pasarguard-install|--pasarguard-status`, `sudo bash setup.sh pasarguard`.
+- **X-UI classic (Alireza)**: official `alireza0/x-ui` next to 3x-ui Sanaei. `--xui-classic-install`, `setup.sh xui-classic`. They share `x-ui.service` and cannot run together.
+- **Web panel 1.2.4**: tab «پنل‌ها» asks for confirm, then shows a live install monitor. Cards: 3x-ui سنایی، X-UI اصلی، پاسارگارد.
+- **VPN panel login**: after one-click install, JojoNet prints URL / username / password (or PasarGuard temp key). CLI `jojonet --vpn-panel-creds`, menu 31 item 10, saved at `/etc/jojonet/vpn-panel.creds`. Web panel 1.2.5 shows a dedicated credentials card with copy buttons.
+- **Web panel 1.2.6**: install/job monitor turns raw logs into a Persian step-by-step report (noise hidden; technical dump behind «جزئیات فنی»).
+- **VPN panel already-installed check**: before install, JojoNet detects 3x-ui / X-UI classic / PasarGuard (even if the service is stopped). Same panel is not reinstalled; a Persian message is shown. Conflicting X-UI flavors are refused. CLI `jojonet --vpn-panel-check`, menu 31 item 11. Web panel 1.2.7 asks first and can show existing login.
+- **Fix**: `--list-tunnels` with zero tunnels no longer trips the ERR trap. TUN/TCP and Rathole auto-install `unzip`. LocalTun download uses GitHub mirrors + pinned amd64 sha256. VXLAN `srcport` is a MIN/MAX pair (Ubuntu 26 iproute2). Menu `press_enter` typos restored.
+- **Fix**: WireGuard on Ubuntu 24+/26 — AppArmor `wg` profile only allows keys under `/etc/wireguard/`; runner copies the private key there before `wg set`.
+- **Web panel 1.2.2**: choose whether users connect on Iran (tunnel ایران → خارج) or Kharej (خارج → ایران / ایران‌اکسس). Listen/DNAT follows that side.
+- **Web panel 1.2.1**: Direct DNSTT/ICMP (one Kharej only) and relays on Iran or Kharej.
+- **Web panel 1.2.0**: Xray and v6 modes (one v6 tunnel per Iran/Kharej pair), Relays tab, DNS / ping / OS-update buttons on each server card. DNSTT and ICMP modes (one of each per host).
+- Uninstall stops xray/v6/relay/stream units and can remove the `xray`, `gost`, `dnstt-server`, `dnstt-client` and `pingtunnel` binaries.
 
 ## 1.5.9
 - **New WireGuard over ICMP** (`--wg-icmp`) and **WireGuard over FakeTCP** (`--wg-faketcp`): WireGuard is carried by udp2raw 20230206.0 (sha256-pinned) inside ICMP echo or fake TCP segments, AES-128-CBC + HMAC-SHA1 with a shared `udp2raw.key`. Overlays `10.67.X.0/30` / `10.68.X.0/30`, MTU 1200, menu item 21.

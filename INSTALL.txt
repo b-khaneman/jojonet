@@ -13,13 +13,22 @@ Script only (no panel):
   unzip -o JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/setup.sh script
 
 Persian walkthrough: آموزش-نصب-و-راه-اندازی.txt (next to the zip)
+Do not include license-shop/secrets/private.pem in the customer zip.
 
-INSTALL from GitHub (script only)
----------------------------------
+INSTALL from GitHub (script — one command)
+------------------------------------------
 curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/install.sh | sudo bash
-sudo jojonet --version
+
+If GitHub is filtered:
+  curl -fsSL https://cdn.jsdelivr.net/gh/b-khaneman/jojonet@main/install.sh | sudo bash
+
+Then:
+  sudo jojonet
+  sudo jojonet --version
 
 RULE: Foreign server FIRST, then Iran.
+
+Zip / setup.sh is optional (offline). Prefer the one-liner above when online.
 
 
 [ GRE ]

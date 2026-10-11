@@ -48,6 +48,17 @@ def test_valid_ipv4(value, ok):
     assert valid_ipv4(value) is ok
 
 
+def test_valid_dnstt_fields():
+    from app.validators import valid_dnstt_domain, valid_dnstt_resolver
+
+    assert valid_dnstt_domain("t.example.com")
+    assert not valid_dnstt_domain("localhost") and not valid_dnstt_domain("a.b")
+    assert valid_dnstt_resolver("doh", "https://cloudflare-dns.com/dns-query")
+    assert not valid_dnstt_resolver("doh", "http://cloudflare-dns.com/dns-query")
+    assert valid_dnstt_resolver("dot", "1.1.1.1:853") and valid_dnstt_resolver("udp", "1.1.1.1:53")
+    assert not valid_dnstt_resolver("udp", "example.com")
+
+
 def test_valid_ipv6_and_xray_ports():
     from app.validators import valid_ipv6, valid_xray_ports, valid_relay_name, valid_relay_target
 
@@ -89,6 +100,23 @@ def test_parse_and_split_confs():
     assert orch.Orchestrator.find_conf(confs, "1.2.3.4", "gre") is None
     assert orch.Orchestrator.find_conf(confs, "1.2.3.4", "hysteria2")["Name"] == "a"
     assert split_confs("no headers here") == []
+
+
+def test_parse_live_tunnels_json():
+    raw = """
+some banner
+[
+  {"name":"dt12","mode":"dnstt","role":"kharej","local_ip":"1.2.3.4","remote_ip":"5.6.7.8","status":"UP","boot":true,"unit":"jojonet-stream@dt12.service"},
+  {"name":"bad name","mode":"gre","role":"iran","local_ip":"","remote_ip":"","status":"DOWN","boot":false,"unit":"x"},
+  {"name":"gre9","mode":"gre","role":"iran","local_ip":"10.0.0.1","remote_ip":"10.0.0.2","status":"DOWN","boot":"enabled","unit":"jojonet@gre9.service"}
+]
+"""
+    items = orch.parse_live_tunnels(raw)
+    assert len(items) == 2
+    assert items[0]["name"] == "dt12" and items[0]["boot"] is True and items[0]["mode"] == "dnstt"
+    assert items[1]["name"] == "gre9" and items[1]["boot"] is True
+    assert orch.parse_live_tunnels("") == []
+    assert orch.parse_live_tunnels("not json") == []
 
 
 def test_bundle_version_and_tar():
@@ -228,3 +256,46 @@ def test_key_scripts_in_real_bash(tmp_path):
                           input=blob, capture_output=True)
     assert imp2.returncode != 0
     assert list((tmp_path / "tmp").iterdir()) == []
+
+
+def test_parse_vpn_creds():
+    raw = (
+        "[سرور خارج] other noise\n"
+        "[سرور خارج] ===== JOJONET_VPN_CREDS =====\n"
+        "[سرور خارج] kind=xui\n"
+        "[سرور خارج] label=3x-ui سنایی\n"
+        "[سرور خارج] url=http://1.2.3.4:2053/\n"
+        "[سرور خارج] username=admin\n"
+        "[سرور خارج] password=Secret99\n"
+        "[سرور خارج] ===== END_JOJONET_VPN_CREDS =====\n"
+    )
+    creds = orch.parse_vpn_creds(raw)
+    assert creds["url"] == "http://1.2.3.4:2053/"
+    assert creds["username"] == "admin"
+    assert creds["password"] == "Secret99"
+    assert creds["label"] == "3x-ui سنایی"
+    assert orch.parse_vpn_creds("no creds here") == {}
+
+
+def test_parse_vpn_check_and_already():
+    raw = (
+        "[srv] ===== JOJONET_VPN_CHECK =====\n"
+        "[srv] xui=1\n"
+        "[srv] xui_flavor=sanaei\n"
+        "[srv] xui_running=1\n"
+        "[srv] pasarguard=0\n"
+        "[srv] pasarguard_running=0\n"
+        "[srv] ===== END_JOJONET_VPN_CHECK =====\n"
+    )
+    info = orch.parse_vpn_check(raw)
+    assert info["xui"] == "1" and info["xui_flavor"] == "sanaei"
+    assert orch.vpn_panel_already("xui", info)
+    assert not orch.vpn_panel_already("pasarguard", info)
+    assert orch.vpn_panel_conflict("xui_classic", info)
+    assert not orch.vpn_panel_conflict("xui", info)
+    unknown = dict(info, xui_flavor="unknown")
+    assert orch.vpn_panel_already("xui", unknown)
+    assert not orch.vpn_panel_already("xui_classic", unknown)
+    classic = dict(info, xui_flavor="classic")
+    assert orch.vpn_panel_already("xui_classic", classic)
+    assert orch.vpn_panel_conflict("xui", classic)

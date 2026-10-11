@@ -20,11 +20,13 @@ for conf in /etc/jojonet/instances/*.conf; do
                 "jojonet-paqet@${name}.service" "jojonet-vxlan@${name}.service" \
                 "jojonet-wg@${name}.service" "jojonet-hy2@${name}.service" \
                 "jojonet-rathole@${name}.service" "jojonet-wstunnel@${name}.service" \
-                "jojonet-xray@${name}.service" "jojonet-v6@${name}.service"; do
+                "jojonet-xray@${name}.service" "jojonet-v6@${name}.service" \
+                "jojonet-stream@${name}.service"; do
         systemctl stop "$unit" 2>/dev/null || true
         systemctl disable "$unit" 2>/dev/null || true
     done
     [[ -x /usr/local/bin/jojonet-run-u2r.sh ]] && /usr/local/bin/jojonet-run-u2r.sh stop "$name" >/dev/null 2>&1 || true
+    [[ -x /usr/local/bin/jojonet-run-stream.sh ]] && /usr/local/bin/jojonet-run-stream.sh stop "$conf" >/dev/null 2>&1 || true
     ip link delete "$name" 2>/dev/null || true
     nft delete table ip "jojonet_$name" 2>/dev/null || true
 done
@@ -64,6 +66,7 @@ rm -f /etc/systemd/system/jojonet@.service \
       /etc/systemd/system/jojonet-u2r@.service \
       /etc/systemd/system/jojonet-xray@.service \
       /etc/systemd/system/jojonet-v6@.service \
+      /etc/systemd/system/jojonet-stream@.service \
       /etc/systemd/system/jojonet-relay@.service \
       /etc/systemd/system/jojonet-relay-nat@.service \
       /etc/systemd/system/jojonet-spoof.service \
@@ -80,6 +83,7 @@ rm -f /usr/local/bin/jojonet-run-instance.sh \
       /usr/local/bin/jojonet-run-u2r.sh \
       /usr/local/bin/jojonet-run-xray.sh \
       /usr/local/bin/jojonet-run-v6.sh \
+      /usr/local/bin/jojonet-run-stream.sh \
       /usr/local/bin/jojonet-run-relay.sh \
       /usr/local/bin/jojonet-boot-restore.sh \
       /usr/local/bin/jojonet \
@@ -97,13 +101,14 @@ else
     warn "Kept /etc/jojonet"
 fi
 
-read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel/spoof/udp2raw/xray/gost binaries and managed QS runtime? [y/N]: " c3
+read -r -p "Remove downloaded tun/paqet/hysteria/rathole/wstunnel/spoof/udp2raw/xray/gost/dnstt/pingtunnel binaries and managed QS runtime? [y/N]: " c3
 c3=$(echo "$c3" | tr '[:upper:]' '[:lower:]')
 if [[ "$c3" == "y" ]]; then
     rm -f /usr/local/bin/tun-server /usr/local/bin/tun-client \
           /usr/local/bin/paqet /usr/local/bin/hysteria /usr/local/bin/rathole \
           /usr/local/bin/wstunnel /usr/local/bin/spoof /usr/local/bin/udp2raw \
-          /usr/local/bin/xray /usr/local/bin/gost
+          /usr/local/bin/xray /usr/local/bin/gost \
+          /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client /usr/local/bin/pingtunnel
     rm -rf /opt/jojonet/qs-tunnel
 fi
 

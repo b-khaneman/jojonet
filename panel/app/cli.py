@@ -38,7 +38,10 @@ def cmd_set_admin(args: argparse.Namespace) -> int:
             db.update("admins", row["id"], {"username": username, "pw_hash": pw_hash})
             db.execute("DELETE FROM sessions")
         else:
-            db.insert("admins", {"username": username, "pw_hash": pw_hash, "created_at": utcnow()})
+            db.insert("admins", {
+                "username": username, "pw_hash": pw_hash, "created_at": utcnow(),
+                "role": "owner", "enabled": 1,
+            })
     finally:
         db.close()
     if args.random:
