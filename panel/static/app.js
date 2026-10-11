@@ -1,6 +1,12 @@
 'use strict';
 
 (function () {
+  const BASE = String((document.documentElement && document.documentElement.dataset.base) || '').replace(/\/$/, '');
+  function withBase(path) {
+    if (typeof path !== 'string' || path.charAt(0) !== '/') return path;
+    if (BASE && (path === BASE || path.indexOf(BASE + '/') === 0)) return path;
+    return BASE + path;
+  }
   const NET_ERR = 'ارتباط با سرور برقرار نشد. اتصال شبکه را بررسی کنید.';
   const SESSION_EXPIRED = 'نشست شما منقضی شده است. لطفاً دوباره وارد شوید.';
   const POLL_MS = 5000;
@@ -253,7 +259,7 @@
 
     let res;
     try {
-      res = await fetch(path, opts);
+      res = await fetch(withBase(path), opts);
     } catch (e) {
       throw new ApiError(NET_ERR, 0);
     }
@@ -543,6 +549,8 @@
     const userEl = $('#hdr-user');
     const quotaEl = $('#hdr-quota');
     if (userEl) userEl.textContent = me.username || '';
+    const entryEl = $('#hdr-entry');
+    if (entryEl) entryEl.textContent = me.base_path || '';
     if (!quotaEl) return;
     if (me.role === 'owner') {
       quotaEl.hidden = true;
@@ -2507,7 +2515,7 @@
     }
     let es;
     try {
-      es = new EventSource(`/api/jobs/${enc(jv.id)}/stream`);
+      es = new EventSource(withBase(`/api/jobs/${enc(jv.id)}/stream`));
     } catch (err) {
       startJobPoll(jv);
       return;
@@ -2905,7 +2913,7 @@
         await this.bootSeq();
         this.fit();
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        const url = `${proto}://${location.host}/ws/term?server_id=${enc(id)}&cols=${term.cols}&rows=${term.rows}`;
+        const url = `${proto}://${location.host}${withBase(`/ws/term?server_id=${enc(id)}&cols=${term.cols}&rows=${term.rows}`)}`;
         const ws = new WebSocket(url);
         this.ws = ws;
         this.setState('در حال اتصال', false);

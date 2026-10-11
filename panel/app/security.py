@@ -94,16 +94,34 @@ class Vault:
             raise ValueError("vault key mismatch - cannot decrypt stored secret") from exc
 
 
-def login_allowed(db, ip: str) -> bool:
+def login_user_key(username: str) -> str:
+    digest = hashlib.sha256(username.strip().lower().encode()).hexdigest()
+    return "u:" + digest[:40]
+
+
+def _failure_count(db, key: str, cutoff: float) -> int:
+    row = db.one("SELECT COUNT(*) AS n FROM login_failures WHERE ip=? AND at>=?", (key, cutoff))
+    return int((row or {"n": 0})["n"])
+
+
+def login_allowed(db, ip: str, username: str = "") -> bool:
     cutoff = time.time() - LOGIN_WINDOW
     db.execute("DELETE FROM login_failures WHERE at < ?", (cutoff,))
-    row = db.one("SELECT COUNT(*) AS n FROM login_failures WHERE ip=? AND at>=?", (ip, cutoff))
-    return (row or {"n": 0})["n"] < LOGIN_MAX_FAILURES
+    if _failure_count(db, ip, cutoff) >= LOGIN_MAX_FAILURES:
+        return False
+    if username and _failure_count(db, login_user_key(username), cutoff) >= LOGIN_MAX_FAILURES:
+        return False
+    return True
 
 
-def record_login_failure(db, ip: str) -> None:
-    db.execute("INSERT INTO login_failures (ip, at) VALUES (?, ?)", (ip, time.time()))
+def record_login_failure(db, ip: str, username: str = "") -> None:
+    now = time.time()
+    db.execute("INSERT INTO login_failures (ip, at) VALUES (?, ?)", (ip, now))
+    if username:
+        db.execute("INSERT INTO login_failures (ip, at) VALUES (?, ?)", (login_user_key(username), now))
 
 
-def clear_login_failures(db, ip: str) -> None:
+def clear_login_failures(db, ip: str, username: str = "") -> None:
     db.execute("DELETE FROM login_failures WHERE ip=?", (ip,))
+    if username:
+        db.execute("DELETE FROM login_failures WHERE ip=?", (login_user_key(username),))

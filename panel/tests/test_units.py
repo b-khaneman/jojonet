@@ -18,6 +18,19 @@ from app.validators import ip_keydir, split_confs, valid_iface, valid_ipv4, vali
 REPO = Path(__file__).resolve().parents[2]
 
 
+def test_secret_panel_path(tmp_path):
+    from app.config import normalize_base_path, resolve_base_path
+
+    assert normalize_base_path("jnsecretpath1234") == "/jnsecretpath1234"
+    for bad in ("/", "/short", "/has/extra-segment-here", "/../jnsecretpath1234", ""):
+        with pytest.raises(ValueError):
+            normalize_base_path(bad)
+    first = resolve_base_path(tmp_path, "")
+    assert first.startswith("/") and len(first) >= 17
+    assert resolve_base_path(tmp_path, "") == first
+    assert resolve_base_path(tmp_path, "/jnsecretpath1234") == "/jnsecretpath1234"
+
+
 def test_password_hash_roundtrip():
     h = hash_password("s3cret-password")
     assert h.startswith("scrypt$")

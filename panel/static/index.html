@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl" data-theme="night">
+<html lang="fa" dir="rtl" data-theme="night" data-base="__BASE__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,8 +7,8 @@
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <title>پنل جوجونت</title>
-<link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=__V__">
-<link rel="stylesheet" href="/static/style.css?v=__V__">
+<link rel="icon" type="image/svg+xml" href="__BASE__/static/logo.svg?v=__V__">
+<link rel="stylesheet" href="__BASE__/static/style.css?v=__V__">
 <script>
 (function () {
   var t = '';
@@ -18,10 +18,10 @@
   document.documentElement.style.colorScheme = t === 'day' ? 'light' : 'dark';
 })();
 </script>
-<link rel="stylesheet" href="/static/vendor/xterm.css?v=__V__">
-<script src="/static/vendor/xterm.min.js?v=__V__" defer></script>
-<script src="/static/vendor/xterm-addon-fit.js?v=__V__" defer></script>
-<script src="/static/app.js?v=__V__" defer></script>
+<link rel="stylesheet" href="__BASE__/static/vendor/xterm.css?v=__V__">
+<script src="__BASE__/static/vendor/xterm.min.js?v=__V__" defer></script>
+<script src="__BASE__/static/vendor/xterm-addon-fit.js?v=__V__" defer></script>
+<script src="__BASE__/static/app.js?v=__V__" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">پرش به محتوای اصلی</a>
@@ -42,7 +42,7 @@
     <button type="button" class="theme-btn" role="radio" data-theme-set="night" aria-checked="true">شب</button>
   </div>
   <form id="login-form" class="login-card" novalidate>
-    <img class="login-logo" src="/static/logo.svg?v=__V__" alt="" width="64" height="64">
+    <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
     <h1 class="login-title">پنل جوجونت</h1>
     <p class="muted">برای ادامه وارد حساب خود شوید.</p>
     <div id="login-error" class="form-error" role="alert" hidden></div>
@@ -79,11 +79,12 @@
   <div class="app-core">
   <header class="topbar">
     <div class="brand">
-      <img src="/static/logo.svg?v=__V__" alt="" width="40" height="40">
+      <img src="__BASE__/static/logo.svg?v=__V__" alt="" width="40" height="40">
       <div class="brand-text">
         <h1 class="brand-title" aria-label="پنل جوجونت"><span class="brand-title-text">پنل جوجونت</span></h1>
         <p class="brand-meta">
           <span id="hdr-versions" class="versions"></span>
+          <span id="hdr-entry" class="versions" dir="ltr" title="مسیر ورود؛ IP خالی پنل را باز نمی‌کند"></span>
           <a class="brand-tg" href="https://t.me/B_KHANEMAN" target="_blank" rel="noopener noreferrer" dir="ltr" title="پشتیبانی تلگرام">@B_KHANEMAN</a>
         </p>
       </div>

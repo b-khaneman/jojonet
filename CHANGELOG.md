@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.24
+- Panel is not served on the bare IP. A secret path (`JOJONET_PANEL_PATH`, or a random path saved in `web.path`) is required; anything else is an empty 404.
+- Login lockout also counts per username. Request bodies over 1 MB are rejected. Extra browser isolation headers; public health no longer returns the version.
+- Side terminals exchanged places: the left terminal opens on the right edge, and the right terminal on the left edge.
+
 ## 1.6.0 / panel 1.3.23
 - **Live tunnels on servers**: panel tab scans each host via `jojonet --list-tunnels --json`, matches panel DB or marks orphans, full delete, and reboot persistence (`--enable-boot`) per server or all.
 - **Fix**: boot restore script starts DNSTT/ICMP with `jojonet-stream@NAME` (was wrongly `jojonet@`).

@@ -44,6 +44,8 @@ unzip JojoNet-v1.6.0-full.zip -d jojonet && cd jojonet && sudo bash setup.sh pan
 
 برای نصب هم‌زمان اسکریپت و پنل: `sudo bash setup.sh all` (یا بدون آرگومان برای نمایش منو).
 
+ورود فقط با مسیر مخفی است (`JOJONET_PANEL_PATH`). باز کردن IP و پورت بدون آن مسیر صفحهٔ خالی ۴۰۴ می‌دهد. بعد از نصب آدرس کامل را با `sudo jojonet-panel url` بگیرید.
+
 ### نصب یک‌خطی با curl
 
 </div>

@@ -12,6 +12,8 @@ sys.path.insert(0, str(PANEL_DIR))
 
 from app.config import Settings  # noqa: E402
 
+PANEL_BASE = "/jnsecretpath1234"
+
 
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
@@ -26,6 +28,7 @@ def settings(tmp_path: Path) -> Settings:
         key="",
         secure_cookies=False,
         trusted_proxy=False,
+        base_path=PANEL_BASE,
     )
 
 
@@ -36,12 +39,55 @@ def app(settings: Settings):
     return create_app(settings)
 
 
+class PrefixedClient:
+    """Tests keep calling /api/...; the secret path is added here."""
+
+    def __init__(self, inner, prefix: str):
+        self._inner = inner
+        self.prefix = prefix
+        self.raw = inner
+
+    def _u(self, url: str) -> str:
+        if not isinstance(url, str) or not url.startswith("/"):
+            return url
+        if url == self.prefix or url.startswith(self.prefix + "/"):
+            return url
+        return self.prefix + url
+
+    def get(self, url, **kw):
+        return self._inner.get(self._u(url), **kw)
+
+    def post(self, url, **kw):
+        return self._inner.post(self._u(url), **kw)
+
+    def put(self, url, **kw):
+        return self._inner.put(self._u(url), **kw)
+
+    def patch(self, url, **kw):
+        return self._inner.patch(self._u(url), **kw)
+
+    def delete(self, url, **kw):
+        return self._inner.delete(self._u(url), **kw)
+
+    def request(self, method, url, **kw):
+        return self._inner.request(method, self._u(url), **kw)
+
+    def stream(self, method, url, **kw):
+        return self._inner.stream(method, self._u(url), **kw)
+
+    def websocket_connect(self, url, **kw):
+        return self._inner.websocket_connect(self._u(url), **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 @pytest.fixture()
 def client(app):
     from fastapi.testclient import TestClient
 
     with TestClient(app) as c:
-        yield c
+        yield PrefixedClient(c, app.state.settings.base_path)
 
 
 @pytest.fixture()

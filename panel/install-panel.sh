@@ -655,6 +655,19 @@ set_env_default() {
     fi
 }
 
+ensure_panel_path() {
+    local cur seg
+    cur="$(env_value JOJONET_PANEL_PATH)"
+    cur="${cur%/}"
+    if [[ "$cur" =~ ^/[A-Za-z0-9][A-Za-z0-9_-]{15,63}$ ]]; then
+        PANEL_WEB_PATH="$cur"
+        return 0
+    fi
+    seg="$(openssl rand -hex 12)"
+    set_env_var JOJONET_PANEL_PATH "/$seg"
+    PANEL_WEB_PATH="/$seg"
+}
+
 write_env() {
     step "Writing $ENV_FILE"
     if [[ ! -f "$ENV_FILE" ]]; then
@@ -683,6 +696,7 @@ EOF
         set_env_default JOJONET_PANEL_SECURE_COOKIES 1
         info "Kept existing $ENV_FILE (port $PORT, host $HOST)"
     fi
+    ensure_panel_path
     if [[ -n "$DOMAIN" ]]; then
         set_env_var JOJONET_PANEL_DOMAIN "$DOMAIN"
     else
@@ -845,7 +859,18 @@ cmd_url() {
         esac
         if [[ "$addr" == *:* && "$addr" != \[* ]]; then addr="[$addr]"; fi
     fi
-    if [[ "$port" == 443 ]]; then printf 'https://%s/\n' "$addr"; else printf 'https://%s:%s/\n' "$addr" "$port"; fi
+    local webpath data
+    webpath="$(env_value JOJONET_PANEL_PATH)"
+    webpath="${webpath%/}"
+    if [[ -z "$webpath" ]]; then
+        data="$(env_value JOJONET_PANEL_DATA)"
+        data="${data:-/var/lib/jojonet-panel}"
+        if [[ -f "$data/web.path" ]]; then
+            webpath="$(tr -d '[:space:]' < "$data/web.path")"
+            webpath="${webpath%/}"
+        fi
+    fi
+    if [[ "$port" == 443 ]]; then printf 'https://%s%s/\n' "$addr" "$webpath"; else printf 'https://%s:%s%s/\n' "$addr" "$port" "$webpath"; fi
 }
 
 cmd_logs() {
@@ -1001,7 +1026,13 @@ panel_url() {
         esac
         if [[ "$addr" == *:* && "$addr" != \[* ]]; then addr="[$addr]"; fi
     fi
-    if ((PORT == 443)); then printf 'https://%s/' "$addr"; else printf 'https://%s:%s/' "$addr" "$PORT"; fi
+    local webpath="${PANEL_WEB_PATH:-}"
+    webpath="${webpath%/}"
+    if [[ -z "$webpath" ]]; then
+        webpath="$(env_value JOJONET_PANEL_PATH)"
+        webpath="${webpath%/}"
+    fi
+    if ((PORT == 443)); then printf 'https://%s%s/' "$addr" "$webpath"; else printf 'https://%s:%s%s/' "$addr" "$PORT" "$webpath"; fi
 }
 
 cert_is_self_signed() {
@@ -1018,6 +1049,8 @@ print_summary() {
     printf '%s  JojoNet Panel is running  |  پنل JojoNet نصب و اجرا شد%s\n' "$BOLD" "$NC"
     printf '%s%s%s\n' "$GREEN" "$line" "$NC"
     printf '  URL / آدرس:   %s%s%s\n' "$CYAN" "$url" "$NC"
+    printf '  Bare IP does not open the panel — use this full path.\n'
+    printf '  ورود با IP خالی کار نمی‌کند؛ فقط همین آدرس (با مسیر مخفی) را باز کنید.\n'
     if ((FIRST_INSTALL)); then
         printf '\n%s╔%s╗%s\n' "$YELLOW" "$line" "$NC"
         if [[ -n "$ADMIN_USER" && -n "$ADMIN_PASS" ]]; then

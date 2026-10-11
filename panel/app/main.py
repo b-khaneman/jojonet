@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
@@ -78,6 +79,8 @@ from .validators import (
 )
 
 COOKIE = "jn_session"
+MAX_BODY_BYTES = 1_048_576
+log = logging.getLogger("jojonet_panel")
 STATIC_ASSETS = ("index.html", "app.js", "style.css", "logo.svg")
 # SSE must not be buffered by the compressor; responses carrying the CSRF token stay uncompressed (BREACH).
 GZIP_SKIP_PATHS = ("/api/me", "/api/login")
@@ -94,6 +97,62 @@ class SelectiveGZip:
             await self.gzip(scope, receive, send)
         else:
             await self.app(scope, receive, send)
+
+
+class SecretPathGate:
+    """Drop every request that is not under the secret panel path. Bare IP returns an empty 404."""
+
+    def __init__(self, app: ASGIApp, base_path: str) -> None:
+        self.app = app
+        self.base = base_path
+
+    def _allowed(self, path: str) -> bool:
+        base = self.base
+        if len(path) < len(base):
+            return False
+        head = path[: len(base)]
+        if not hmac.compare_digest(head.encode(), base.encode()):
+            return False
+        return len(path) == len(base) or path[len(base)] == "/"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path") or "/"
+        raw = path.lower()
+        if ".." in path or "\\" in path or "%2e" in raw or "%2f" in raw or not self._allowed(path):
+            await self._deny(scope, send)
+            return
+        rest = path[len(self.base) :] or "/"
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        forwarded = dict(scope)
+        forwarded["path"] = rest
+        raw_path = scope.get("raw_path") or b""
+        base_bytes = self.base.encode("ascii")
+        if raw_path.startswith(base_bytes):
+            forwarded["raw_path"] = raw_path[len(base_bytes) :] or b"/"
+        await self.app(forwarded, receive, send)
+
+    async def _deny(self, scope: Scope, send: Send) -> None:
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        await send({
+            "type": "http.response.start",
+            "status": 404,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"content-length", b"0"),
+                (b"cache-control", b"no-store"),
+                (b"x-content-type-options", b"nosniff"),
+                (b"x-frame-options", b"DENY"),
+                (b"referrer-policy", b"no-referrer"),
+                (b"x-robots-tag", b"noindex, nofollow"),
+            ],
+        })
+        await send({"type": "http.response.body", "body": b""})
 
 
 class VersionedStaticFiles(StaticFiles):
@@ -509,6 +568,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        log.warning("panel entry path %s (bare IP does not open the panel)", settings.base_path)
         yield
         await app.state.jobs.shutdown()
         app.state.db.close()
@@ -551,17 +611,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refresh_assets()
         return assets["version"]
 
+    def cookie_path() -> str:
+        return settings.base_path + "/"
+
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
-        response = await call_next(request)
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            raw_len = request.headers.get("content-length", "")
+            if raw_len.isdigit() and int(raw_len) > MAX_BODY_BYTES:
+                response = Response(status_code=413)
+            else:
+                response = await call_next(request)
+        else:
+            response = await call_next(request)
         response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        if "server" in response.headers:
+            del response.headers["server"]
         if settings.secure_cookies:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -811,6 +886,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "allow_term": bool(sess.get("allow_term", 1)),
             "terms_enabled": terms_globally_on(),
             "can_term": term_allowed(sess),
+            "base_path": settings.base_path,
         }
 
     def tunnel_busy(row: dict[str, Any]) -> None:
@@ -823,26 +899,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refresh_assets()
         if assets["html"] is None:
             raise HTTPException(500, "فایل‌های رابط کاربری پیدا نشد")
-        return HTMLResponse(assets["html"], headers={"Cache-Control": "no-store"})
+        html = assets["html"].replace("__BASE__", settings.base_path)
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return {"ok": True, "version": PANEL_VERSION}
+        return {"ok": True}
 
     @app.post("/api/login")
     async def login(data: LoginIn, request: Request, response: Response) -> dict[str, Any]:
         ip = client_ip(request)
-        if not login_allowed(db, ip):
+        if not login_allowed(db, ip, data.username):
             raise HTTPException(429, "تلاش‌های ناموفق زیاد بود؛ 5 دقیقه دیگر دوباره امتحان کنید")
         admin = db.one("SELECT * FROM admins WHERE username=?", (data.username,))
         ok = await asyncio.to_thread(verify_password, data.password, admin["pw_hash"] if admin else DUMMY_HASH)
         if not admin or not ok:
-            record_login_failure(db, ip)
+            record_login_failure(db, ip, data.username)
             raise HTTPException(401, "نام کاربری یا رمز عبور اشتباه است")
         blocked = account_block_reason(admin)
         if blocked:
             raise HTTPException(403, blocked)
-        clear_login_failures(db, ip)
+        clear_login_failures(db, ip, data.username)
         token, csrf = new_token(), new_token()
         now = datetime.now(timezone.utc).replace(microsecond=0)
         db.execute("DELETE FROM sessions WHERE expires_at < ?", (now.isoformat(),))
@@ -855,14 +932,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         })
         response.set_cookie(
             COOKIE, token, max_age=settings.session_hours * 3600, httponly=True,
-            secure=settings.secure_cookies, samesite="strict", path="/",
+            secure=settings.secure_cookies, samesite="strict", path=cookie_path(),
         )
         return {"ok": True, "csrf": csrf}
 
     @app.post("/api/logout")
     async def logout(response: Response, sess: dict = Depends(require_auth)) -> dict[str, Any]:
         db.execute("DELETE FROM sessions WHERE token_hash=?", (sess["token_hash"],))
-        response.delete_cookie(COOKIE, path="/")
+        response.delete_cookie(COOKIE, path=cookie_path())
         return {"ok": True}
 
     @app.get("/api/me")
@@ -1577,4 +1654,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.mount("/static", VersionedStaticFiles(directory=str(settings.static_dir), check_dir=False, version=asset_version), name="static")
     app.add_middleware(SelectiveGZip)
+    app.add_middleware(SecretPathGate, base_path=settings.base_path)
     return app

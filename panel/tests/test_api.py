@@ -20,6 +20,19 @@ def wait_job(client, job_id, timeout=10.0):
     raise AssertionError("job did not finish")
 
 
+def test_bare_ip_does_not_open_panel(client):
+    bare = client.raw.get("/")
+    assert bare.status_code == 404 and bare.content == b""
+    assert "پنل" not in bare.text and "jojonet" not in bare.text.lower()
+    assert client.raw.get("/api/health").status_code == 404
+    assert client.raw.get("/api/login").status_code == 404
+    assert client.raw.get(client.prefix + "/../").status_code == 404
+    page = client.get("/")
+    assert page.status_code == 200 and "__BASE__" not in page.text
+    assert f"{client.prefix}/static/app.js?v=" in page.text
+    assert f'data-base="{client.prefix}"' in page.text
+
+
 def test_health_and_headers(client):
     r = client.get("/api/health")
     assert r.status_code == 200 and r.json()["ok"] is True
@@ -86,6 +99,7 @@ def test_login_logout_and_csrf(client, admin):
     assert r.status_code == 200
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie
+    assert f"path={client.prefix}/" in cookie
     csrf = r.json()["csrf"]
     me = client.get("/api/me").json()
     assert me["username"] == "admin" and me["csrf"] == csrf and me["jojonet_version"] == "1.6.0"
