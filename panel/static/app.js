@@ -2309,13 +2309,13 @@
       const copy = h('button', { type: 'button', class: 'btn btn-sm btn-ghost' }, 'کپی');
       copy.addEventListener('click', () => copyVpnField(value));
       rows.push(h('div', { class: 'vpn-creds-row' },
-        h('span', { class: 'vpn-creds-k' }, title),
+        h('span', { class: 'vpn-creds-k' }, `${title} :`),
         valEl,
         copy));
     };
-    add('آدرس', creds.url, /^https?:\/\//.test(creds.url || '') ? creds.url : '');
-    add('کاربر', creds.username);
-    add(creds.kind === 'pasarguard' ? 'کلید موقت' : 'رمز', creds.password);
+    add('آدرس پنل', creds.url, /^https?:\/\//.test(creds.url || '') ? creds.url : '');
+    add('نام کاربری', creds.username);
+    add(creds.kind === 'pasarguard' ? 'کلید موقت' : 'رمز عبور', creds.password);
     const fields = $('#vpn-creds-fields');
     if (fields) fields.replaceChildren(...rows);
     const note = $('#vpn-creds-note');

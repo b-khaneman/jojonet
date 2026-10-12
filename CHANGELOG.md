@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.41
+- VPN panel login labels are bold, accent-colored, and end with a colon so address, username, and password stand out.
+
 ## 1.6.0 / panel 1.3.40
 - The owner can edit each guide article in the panel, including font family, size, color, and step text, and can reset it to the default.
 

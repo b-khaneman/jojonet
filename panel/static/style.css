@@ -1410,19 +1410,24 @@ textarea::placeholder {
 
 .vpn-creds-row {
   display: grid;
-  grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+  grid-template-columns: 7.5rem minmax(0, 1fr) auto;
   align-items: center;
   gap: .55rem;
 }
 
 .vpn-creds-k {
-  color: var(--muted);
-  font-size: .9rem;
+  color: var(--accent);
+  font-size: .92rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+  white-space: nowrap;
 }
 
 .vpn-creds-value,
 .vpn-creds-value a {
+  color: var(--text);
   font-family: inherit;
+  font-weight: 500;
   font-variant-numeric: lining-nums tabular-nums;
   overflow-wrap: anywhere;
   word-break: break-word;
