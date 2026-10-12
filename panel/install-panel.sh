@@ -31,6 +31,8 @@ readonly DEFAULT_PORT="2053"
 readonly DEFAULT_PANEL_PATH="/jojonet-panel-entry"
 readonly APPLY_UNIT="/etc/systemd/system/jojonet-panel-apply.service"
 readonly APPLY_PATH_UNIT="/etc/systemd/system/jojonet-panel-apply.path"
+readonly SSL_UNIT="/etc/systemd/system/jojonet-panel-ssl.service"
+readonly SSL_PATH_UNIT="/etc/systemd/system/jojonet-panel-ssl.path"
 readonly DEFAULT_HOST="0.0.0.0"
 readonly ACME_HOOK="/etc/letsencrypt/renewal-hooks/deploy/jojonet-panel.sh"
 readonly REPO_SLUG="b-khaneman/jojonet"
@@ -449,6 +451,9 @@ copy_files() {
     if [[ -f "$PANEL_SRC/apply-listen" ]]; then
         install -m 0755 "$PANEL_SRC/apply-listen" "$INSTALL_DIR/apply-listen"
     fi
+    if [[ -f "$PANEL_SRC/apply-ssl" ]]; then
+        install -m 0755 "$PANEL_SRC/apply-ssl" "$INSTALL_DIR/apply-ssl"
+    fi
 
     install -d -m 0755 "$BUNDLE_DIR"
     local f
@@ -859,6 +864,29 @@ WantedBy=multi-user.target
 EOF
     chmod 0644 "$APPLY_UNIT" "$APPLY_PATH_UNIT"
     log "Wrote $APPLY_PATH_UNIT"
+    cat >"$SSL_UNIT" <<EOF
+[Unit]
+Description=Issue a Let's Encrypt certificate for JojoNet Panel
+After=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=300
+ExecStart=$INSTALL_DIR/apply-ssl
+EOF
+    cat >"$SSL_PATH_UNIT" <<EOF
+[Unit]
+Description=Watch JojoNet Panel TLS requests
+
+[Path]
+PathChanged=$DATA_DIR/ssl.request
+Unit=jojonet-panel-ssl.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 0644 "$SSL_UNIT" "$SSL_PATH_UNIT"
+    log "Wrote $SSL_PATH_UNIT"
 }
 
 write_wrapper() {
@@ -1193,6 +1221,10 @@ start_service() {
     if [[ -f "$APPLY_PATH_UNIT" && -x "$INSTALL_DIR/apply-listen" ]]; then
         systemctl enable jojonet-panel-apply.path >/dev/null 2>&1 || warn "could not enable listen watcher"
         systemctl restart jojonet-panel-apply.path >/dev/null 2>&1 || true
+    fi
+    if [[ -f "$SSL_PATH_UNIT" && -x "$INSTALL_DIR/apply-ssl" ]]; then
+        systemctl enable jojonet-panel-ssl.path >/dev/null 2>&1 || warn "could not enable the TLS watcher"
+        systemctl restart jojonet-panel-ssl.path >/dev/null 2>&1 || true
     fi
     if ! systemctl restart jojonet-panel.socket; then
         journalctl -u jojonet-panel.socket -n 40 --no-pager >&2 || true

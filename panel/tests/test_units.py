@@ -348,6 +348,65 @@ def test_installer_socket_activation_and_rollback():
     apply = (REPO / "panel" / "apply-listen").read_text(encoding="utf-8")
     assert "jojonet-panel.socket" in apply
     assert "1 <= port <= 65535" in apply
+    assert "jojonet-panel-ssl.path" in text
+    assert "apply-ssl" in text
+    ssl = (REPO / "panel" / "apply-ssl").read_text(encoding="utf-8")
+    assert "certbot certonly" in ssl
+    assert "flock -n 9" in ssl
+
+
+def test_ssl_domain_view_and_certificate(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    from app.tlsinfo import build_ssl_view, https_url, normalize_domain, normalize_email, write_ssl_request
+
+    assert normalize_domain(" HTTPS://Panel.Example.com/path ") == "panel.example.com"
+    for bad in ("1.2.3.4", "localhost", "not a domain", "panel"):
+        try:
+            normalize_domain(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(bad)
+    assert normalize_email("") == ""
+    assert normalize_email("owner@example.com") == "owner@example.com"
+    assert https_url("panel.example.com", "/jojonet-panel-entry", 443) == "https://panel.example.com/jojonet-panel-entry/"
+    assert https_url("panel.example.com", "/jojonet-panel-entry", 2053).endswith(":2053/jojonet-panel-entry/")
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "panel.example.com")])
+    issuer = x509.Name([x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Let's Encrypt")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(now)
+        .not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("panel.example.com")]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = tmp_path / "cert.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    view = build_ssl_view(tmp_path, str(cert_path), "/jojonet-panel-entry", 443)
+    assert view["state"] == "ok"
+    assert view["url"] == "https://panel.example.com/jojonet-panel-entry/"
+    assert view["issuer"] == "Let's Encrypt"
+    assert view["self_signed"] is False
+
+    data = tmp_path / "data"
+    body = write_ssl_request(data, "panel.example.com", "", "/jojonet-panel-entry", 443)
+    running = build_ssl_view(data, "", "/jojonet-panel-entry", 443)
+    assert running["state"] == "running" and running["domain"] == "panel.example.com"
+    assert body["domain"] == "panel.example.com"
+    assert (data / "ssl.request").is_file()
 
 
 def test_checksums_match_lf_sources():

@@ -588,7 +588,10 @@
     const outboundBtn = $('#tabbtn-outbounds');
     if (outboundBtn) outboundBtn.hidden = !can('allow_vpn');
     if (state.tab === 'users' && !owner) switchTab('servers');
-    if (owner) loadListen();
+    if (owner) {
+      loadListen();
+      loadSsl();
+    }
     if (state.tab === 'relays' && !can('allow_relay')) switchTab('servers');
     if ((state.tab === 'panels' || state.tab === 'outbounds') && !can('allow_vpn')) switchTab('servers');
     paintHeader();
@@ -3193,6 +3196,7 @@
     state.me = null;
     state.info = null;
     stopPolling();
+    stopSslPoll();
     closeAllModals();
     state.sessionJobs.clear();
     state.notified.clear();
@@ -3296,7 +3300,10 @@
       if (!liveState.data && !liveState.loading) loadLiveTunnels();
     }
     if (state.loggedIn && name === 'outbounds') load('tunnels', true);
-    if (state.loggedIn && name === 'users' && isOwner()) load('users', true);
+    if (state.loggedIn && name === 'users' && isOwner()) {
+      load('users', true);
+      loadSsl();
+    }
   }
 
   function readTheme() {
@@ -3666,6 +3673,120 @@
     }
   }
 
+  let sslTimer = null;
+
+  function stopSslPoll() {
+    if (sslTimer) {
+      clearTimeout(sslTimer);
+      sslTimer = null;
+    }
+  }
+
+  function scheduleSslPoll() {
+    stopSslPoll();
+    sslTimer = setTimeout(loadSsl, 2000);
+  }
+
+  async function copySsl(text) {
+    const value = String(text || '');
+    try {
+      await navigator.clipboard.writeText(value);
+      toast('کپی شد.', 'success');
+    } catch (err) {
+      toast('کپی نشد؛ متن را دستی انتخاب کنید.', 'error');
+    }
+  }
+
+  function sslSlip(row, kicker) {
+    const lines = ['آدرس ورود پنل', row.url];
+    if (row.not_after) lines.push('معتبر تا ' + fmtTime(row.not_after));
+    if (row.issuer) lines.push(row.issuer);
+    return h('div', { class: 'ssl-slip' },
+      h('div', { class: 'ssl-slip-top' },
+        h('span', { class: 'ssl-mark' }, 'SSL'),
+        h('div', {},
+          h('p', { class: 'ssl-kicker' }, kicker || 'آدرس امن پنل'),
+          h('p', { class: 'ssl-domain', dir: 'ltr' }, row.domain || ''))),
+      h('div', { class: 'ssl-urlrow' },
+        h('code', { class: 'ssl-url', dir: 'ltr' }, row.url),
+        h('button', { type: 'button', class: 'btn btn-primary', onclick: () => copySsl(lines.join('\n')) }, 'کپی')),
+      h('p', { class: 'ssl-meta' },
+        h('span', {}, 'صادرکننده ', h('b', {}, row.issuer || "Let's Encrypt")),
+        row.not_after ? h('span', {}, 'معتبر تا ', h('b', {}, fmtTime(row.not_after))) : null));
+  }
+
+  function paintSsl(row) {
+    const out = $('#ssl-out');
+    const btn = $('#ssl-submit');
+    const domainEl = $('#ssl-domain');
+    if (!out) return;
+    if (btn) {
+      btn.disabled = row.state === 'running';
+      btn.textContent = row.state === 'running' ? 'در حال دریافت…' : 'فعال‌سازی SSL';
+    }
+    if (domainEl && !domainEl.value && row.domain) domainEl.value = row.domain;
+    const parts = [];
+    if (row.state === 'running') {
+      parts.push(h('div', { class: 'ssl-slip is-busy', role: 'status' },
+        h('p', { class: 'ssl-kicker' }, 'در حال دریافت گواهی'),
+        h('p', { class: 'ssl-domain', dir: 'ltr' }, row.domain || ''),
+        h('p', { class: 'ssl-wait' }, 'رکورد دامنه بررسی می‌شود و گواهی نصب می‌شود. این صفحه را نبندید.'),
+        h('span', { class: 'ssl-bar', 'aria-hidden': 'true' })));
+    }
+    if (row.state === 'error' && row.error) {
+      parts.push(h('div', { class: 'ssl-slip is-bad' },
+        h('p', { class: 'ssl-kicker' }, 'گواهی صادر نشد'),
+        h('pre', { class: 'ssl-error' }, row.error),
+        h('div', { class: 'ssl-urlrow' },
+          h('button', { type: 'button', class: 'btn', onclick: () => copySsl(row.error) }, 'کپی متن'))));
+    }
+    if (row.url && row.state !== 'running') parts.push(sslSlip(row, row.state === 'error' ? 'گواهی فعلی' : 'آدرس امن پنل'));
+    else if (row.url && row.state === 'running') parts.push(sslSlip(row, 'گواهی فعلی'));
+    out.replaceChildren(...parts);
+  }
+
+  async function loadSsl() {
+    if (!isOwner() || !$('#ssl-out')) return;
+    try {
+      const row = await api('GET', '/api/ssl');
+      paintSsl(row);
+      if (row.state === 'running') scheduleSslPoll();
+      else stopSslPoll();
+    } catch (err) {
+      if (!err.status && sslTimer) scheduleSslPoll();
+    }
+  }
+
+  function bindSsl() {
+    const form = $('#ssl-form');
+    if (!form) return;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!isOwner()) return;
+      const box = $('#ssl-error');
+      if (box) box.hidden = true;
+      const domainEl = $('#ssl-domain');
+      const emailEl = $('#ssl-email');
+      const btn = $('#ssl-submit');
+      if (btn) btn.disabled = true;
+      try {
+        const row = await api('POST', '/api/ssl', {
+          domain: domainEl ? domainEl.value.trim() : '',
+          email: emailEl ? emailEl.value.trim() : '',
+        });
+        paintSsl(row);
+        if (row.state === 'running') {
+          toast('درخواست گواهی ثبت شد.', 'success');
+          scheduleSslPoll();
+        }
+      } catch (err) {
+        if (box) { box.hidden = false; box.textContent = err.message || NET_ERR; }
+        else toast(err.message || NET_ERR, 'error');
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
   function bindListen() {
     const form = $('#listen-form');
     const pathEl = $('#listen-path');
@@ -3717,6 +3838,7 @@
     bindTheme();
     bindHxTerms();
     bindListen();
+    bindSsl();
     bindAccountMenu();
     const termPolicy = $('#set-terms-enabled');
     if (termPolicy) {

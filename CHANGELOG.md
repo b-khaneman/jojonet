@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.37
+- The owner can issue a Let's Encrypt certificate from the panel by entering a domain. The secure panel address is shown in a copyable card.
+
 ## 1.6.0 / panel 1.3.36
 - The first page is an account overview: remaining subscription time, service health, and usage limits, for both the owner and customers.
 

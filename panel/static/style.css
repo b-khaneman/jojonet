@@ -4008,3 +4008,108 @@ html[data-theme="night"] .code-edit-input:focus {
   .ov-meters { grid-template-columns: 1fr; }
   .ov-panel-head { align-items: flex-start; flex-direction: column; }
 }
+
+.ssl-out { display: grid; gap: .8rem; margin-top: 1rem; }
+.ssl-out:empty { display: none; }
+
+.ssl-slip {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(420px 160px at 100% 0%, color-mix(in srgb, var(--ok) 18%, transparent), transparent 70%),
+    var(--surface-2);
+  padding: 1.05rem 1.1rem 1rem;
+}
+
+.ssl-slip.is-bad {
+  background:
+    radial-gradient(420px 160px at 100% 0%, color-mix(in srgb, var(--err) 16%, transparent), transparent 70%),
+    var(--surface-2);
+}
+
+.ssl-slip.is-busy {
+  background:
+    radial-gradient(420px 160px at 100% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 70%),
+    var(--surface-2);
+}
+
+.ssl-slip-top { display: flex; gap: .8rem; align-items: center; }
+
+.ssl-mark {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--ok);
+  font-weight: 700;
+  letter-spacing: .04em;
+  font-size: .78rem;
+}
+
+.ssl-kicker { margin: 0; color: var(--muted); font-size: .78rem; font-weight: 500; }
+.ssl-domain {
+  margin: .15rem 0 0;
+  font-size: clamp(1.25rem, 2vw, 1.7rem);
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.ssl-urlrow { display: flex; gap: .55rem; align-items: stretch; margin-top: .85rem; flex-wrap: wrap; }
+
+.ssl-url {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  padding: .75rem .85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: .92rem;
+  direction: ltr;
+  text-align: left;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.ssl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem 1rem;
+  margin: .75rem 0 0;
+  color: var(--muted);
+  font-size: .86rem;
+}
+
+.ssl-meta b { color: var(--text); font-weight: 500; }
+.ssl-wait { margin: .45rem 0 0; color: var(--muted); }
+
+.ssl-error {
+  margin: .55rem 0 0;
+  white-space: pre-wrap;
+  font-family: var(--font);
+  font-size: .9rem;
+  line-height: 1.7;
+}
+
+.ssl-bar {
+  display: block;
+  height: 3px;
+  margin-top: .85rem;
+  border-radius: 99px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 40% 100%;
+  animation: ssl-scan 1.2s ease-in-out infinite;
+}
+
+@keyframes ssl-scan {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ssl-bar { animation: none; }
+}

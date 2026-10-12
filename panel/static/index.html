@@ -512,6 +512,27 @@
           </div>
         </form>
       </div>
+      <div class="card create-card" id="ssl-card">
+        <h3 class="card-title">گواهی SSL</h3>
+        <p class="muted">دامنه را وارد کنید. رکورد A باید مستقیم به IP همین سرور برسد و پروکسی خاموش باشد. با یک کلیک گواهی Let’s Encrypt گرفته می‌شود و آدرس امن پنل برای کپی این پایین می‌آید.</p>
+        <form id="ssl-form" class="form" novalidate>
+          <div id="ssl-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="ssl-domain">دامنه</label>
+              <input id="ssl-domain" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="253" placeholder="panel.example.com">
+            </div>
+            <div class="field">
+              <label for="ssl-email">ایمیل <span class="muted">(اختیاری)</span></label>
+              <input id="ssl-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="you@example.com">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="ssl-submit" class="btn btn-primary" type="submit">فعال‌سازی SSL</button>
+          </div>
+        </form>
+        <div id="ssl-out" class="ssl-out" aria-live="polite"></div>
+      </div>
       <div class="card create-card" id="term-policy-card">
         <h3 class="card-title">ترمینال صفحه اصلی</h3>
         <p class="muted">ترمینال چپ و راست را برای همه ببندید، یا برای هر مشتری جداگانه خاموش کنید.</p>

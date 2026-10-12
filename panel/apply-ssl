@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# Issue a Let's Encrypt certificate for the domain saved from the admin UI.
+# Installed as root and started by jojonet-panel-ssl.path — the panel user cannot bind port 80.
+set -Eeuo pipefail
+
+DATA_DIR="/var/lib/jojonet-panel"
+REQ="$DATA_DIR/ssl.request"
+STATUS="$DATA_DIR/ssl.status.json"
+ENV_FILE="/etc/jojonet-panel/panel.env"
+TLS_DIR="/etc/jojonet-panel/tls"
+HOOK="/etc/letsencrypt/renewal-hooks/deploy/jojonet-panel.sh"
+SOCKET="/etc/systemd/system/jojonet-panel.socket"
+LOCK="/run/jojonet-panel-ssl.lock"
+OWNER="jojonet-panel"
+
+exec 9>"$LOCK"
+flock -n 9 || exit 0
+[[ -f "$REQ" ]] || exit 0
+# Let the save request finish before certbot, and before a restart.
+sleep 1
+
+released=0
+restore_panel() {
+    if ((released)); then
+        systemctl start jojonet-panel.socket >/dev/null 2>&1 || true
+        systemctl start jojonet-panel.service >/dev/null 2>&1 || true
+        released=0
+    fi
+}
+trap restore_panel EXIT
+
+publish() {
+    # $1 state  $2 url  $3 issuer  $4 not_after  $5 error
+    SSL_STATE="$1" SSL_URL="$2" SSL_ISSUER="$3" SSL_NOT_AFTER="$4" SSL_ERROR="$5" \
+        python3 - "$STATUS" "$OWNER" "${rid:-}" "${domain:-}" <<'PY'
+import json, os, pwd, sys
+path, owner, rid, domain = sys.argv[1:]
+payload = {
+    "id": rid,
+    "state": os.environ.get("SSL_STATE") or "error",
+    "domain": domain,
+    "url": os.environ.get("SSL_URL") or "",
+    "issuer": os.environ.get("SSL_ISSUER") or "",
+    "not_after": os.environ.get("SSL_NOT_AFTER") or "",
+    "error": os.environ.get("SSL_ERROR") or "",
+    "created_at": "",
+}
+tmp = path + ".tmp"
+open(tmp, "w", encoding="utf-8").write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+os.chmod(tmp, 0o600)
+try:
+    pw = pwd.getpwnam(owner)
+    os.chown(tmp, pw.pw_uid, pw.pw_gid)
+except KeyError:
+    pass
+os.replace(tmp, path)
+PY
+}
+
+fail() {
+    publish "error" "" "" "" "$1"
+    exit 0
+}
+
+parsed="$(python3 - "$REQ" <<'PY'
+import json, re, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+domain = str(data.get("domain") or "").strip().lower().rstrip(".")
+if not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
+    raise SystemExit(2)
+email = str(data.get("email") or "")
+if email and not re.fullmatch(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,63}", email):
+    raise SystemExit(2)
+path = str(data.get("path") or "").strip() or "/jojonet-panel-entry"
+if not path.startswith("/"):
+    path = "/" + path
+port = int(data.get("port") or 443)
+if not 1 <= port <= 65535:
+    raise SystemExit(2)
+print(domain)
+print(email)
+print(path)
+print(port)
+print(str(data.get("id") or ""))
+PY
+)" || fail "درخواست گواهی قابل خواندن نیست."
+
+domain="$(printf '%s\n' "$parsed" | sed -n '1p')"
+email="$(printf '%s\n' "$parsed" | sed -n '2p')"
+panel_path="$(printf '%s\n' "$parsed" | sed -n '3p')"
+port="$(printf '%s\n' "$parsed" | sed -n '4p')"
+rid="$(printf '%s\n' "$parsed" | sed -n '5p')"
+
+if [[ -f "$ENV_FILE" ]]; then
+    env_port="$(sed -n 's/^JOJONET_PANEL_PORT=//p' "$ENV_FILE" | head -n 1)"
+    if [[ "$env_port" =~ ^[0-9]+$ ]]; then port="$env_port"; fi
+fi
+if [[ -f "$DATA_DIR/web.path" ]]; then
+    saved="$(tr -d '[:space:]' < "$DATA_DIR/web.path")"
+    if [[ "$saved" =~ ^/[A-Za-z0-9][A-Za-z0-9_-]{15,63}$ ]]; then panel_path="$saved"; fi
+fi
+
+resolved="$(getent ahosts "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:.]+$' | sort -u | head -n 4 || true)"
+if [[ -z "$resolved" ]]; then
+    fail "دامنه ${domain} هنوز به هیچ آدرسی اشاره نمی‌کند. رکورد A را به IP این سرور بدهید و چند دقیقه بعد دوباره تلاش کنید."
+fi
+
+holder="$(ss -Htlnp 'sport = :80' 2>/dev/null | head -n 1 || true)"
+if [[ -n "$holder" && "$port" == "80" ]]; then
+    systemctl stop jojonet-panel.service >/dev/null 2>&1 || true
+    systemctl stop jojonet-panel.socket >/dev/null 2>&1 || true
+    released=1
+    sleep 1
+    holder="$(ss -Htlnp 'sport = :80' 2>/dev/null | head -n 1 || true)"
+fi
+if [[ -n "$holder" ]]; then
+    fail "پورت ۸۰ اشغال است. دریافت گواهی فقط وقتی ممکن است که این پورت برای چند لحظه آزاد باشد."
+fi
+
+if ! command -v certbot >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get install -y -qq --no-install-recommends certbot >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q certbot >/dev/null 2>&1 || true
+    fi
+fi
+command -v certbot >/dev/null 2>&1 || fail "ابزار certbot نصب نشد."
+
+if command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null || true)" == *"Status: active"* ]]; then
+    ufw allow 80/tcp comment jojonet-panel-acme >/dev/null 2>&1 || true
+fi
+
+install -d -m 0755 "$(dirname "$HOOK")"
+cat >"$HOOK.tmp" <<'EOF'
+#!/bin/sh
+set -eu
+domain=""
+if [ -r /etc/jojonet-panel/panel.env ]; then
+    domain=$(sed -n 's/^JOJONET_PANEL_DOMAIN=//p' /etc/jojonet-panel/panel.env | tail -n 1)
+fi
+[ -n "$domain" ] || exit 0
+live="/etc/letsencrypt/live/$domain"
+if [ -n "${RENEWED_LINEAGE:-}" ] && [ "$RENEWED_LINEAGE" != "$live" ]; then
+    exit 0
+fi
+[ -s "$live/fullchain.pem" ] && [ -s "$live/privkey.pem" ] || exit 1
+install -d -m 0750 /etc/jojonet-panel/tls
+install -o root -g root -m 0644 "$live/fullchain.pem" /etc/jojonet-panel/tls/cert.pem.new
+install -o root -g jojonet-panel -m 0640 "$live/privkey.pem" /etc/jojonet-panel/tls/key.pem.new
+mv -f /etc/jojonet-panel/tls/key.pem.new /etc/jojonet-panel/tls/key.pem
+mv -f /etc/jojonet-panel/tls/cert.pem.new /etc/jojonet-panel/tls/cert.pem
+if [ -z "${JOJONET_PANEL_HOOK_NO_RESTART:-}" ]; then
+    systemctl try-restart jojonet-panel.service || true
+fi
+EOF
+chmod 0755 "$HOOK.tmp"
+mv -f -- "$HOOK.tmp" "$HOOK"
+
+logf="$(mktemp)"
+set +e
+if [[ -n "$email" ]]; then
+    certbot certonly --standalone --preferred-challenges http --non-interactive --agree-tos \
+        --keep-until-expiring --key-type ecdsa --cert-name "$domain" -d "$domain" -m "$email" \
+        </dev/null >"$logf" 2>&1
+else
+    certbot certonly --standalone --preferred-challenges http --non-interactive --agree-tos \
+        --keep-until-expiring --key-type ecdsa --cert-name "$domain" -d "$domain" \
+        --register-unsafely-without-email \
+        </dev/null >"$logf" 2>&1
+fi
+code=$?
+set -e
+if ((code)); then
+    detail="$(tail -n 8 "$logf" | tr -d '\r' | tail -c 500 || true)"
+    rm -f -- "$logf"
+    fail "دریافت گواهی انجام نشد. رکورد A باید مستقیم به IP این سرور برسد و پروکسی خاموش باشد. پورت ۸۰ هم باید آزاد باشد.
+${detail}"
+fi
+rm -f -- "$logf"
+
+live="/etc/letsencrypt/live/$domain"
+[[ -s "$live/fullchain.pem" && -s "$live/privkey.pem" ]] || fail "فایل گواهی بعد از صدور پیدا نشد."
+install -d -m 0750 /etc/jojonet-panel/tls
+install -o root -g root -m 0644 "$live/fullchain.pem" "$TLS_DIR/cert.pem.new"
+install -o root -g "$OWNER" -m 0640 "$live/privkey.pem" "$TLS_DIR/key.pem.new"
+mv -f -- "$TLS_DIR/key.pem.new" "$TLS_DIR/key.pem"
+mv -f -- "$TLS_DIR/cert.pem.new" "$TLS_DIR/cert.pem"
+
+python3 - "$ENV_FILE" "$domain" "$email" <<'PY'
+import os, sys
+path, domain, email = sys.argv[1:]
+lines = open(path, encoding="utf-8").read().splitlines() if os.path.exists(path) else []
+
+def put(key, value, rows):
+    found = False
+    out = []
+    for row in rows:
+        if row.startswith(key + "="):
+            out.append(f"{key}={value}")
+            found = True
+        else:
+            out.append(row)
+    if not found:
+        out.append(f"{key}={value}")
+    return out
+
+lines = put("JOJONET_PANEL_DOMAIN", domain, lines)
+if email:
+    lines = put("JOJONET_PANEL_ACME_EMAIL", email, lines)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+os.chmod(path, 0o640)
+PY
+
+if [[ "$port" == "80" ]]; then
+    port=443
+    python3 - "$ENV_FILE" "$DATA_DIR/listen.json" "$port" "$OWNER" <<'PY'
+import json, os, pwd, sys
+env, listen, port, owner = sys.argv[1:]
+port = int(port)
+lines = open(env, encoding="utf-8").read().splitlines() if os.path.exists(env) else []
+found = False
+out = []
+for row in lines:
+    if row.startswith("JOJONET_PANEL_PORT="):
+        out.append(f"JOJONET_PANEL_PORT={port}")
+        found = True
+    else:
+        out.append(row)
+if not found:
+    out.append(f"JOJONET_PANEL_PORT={port}")
+open(env, "w", encoding="utf-8").write("\n".join(out) + "\n")
+os.chmod(env, 0o640)
+if os.path.exists(listen):
+    data = json.load(open(listen, encoding="utf-8"))
+    tmp = listen + ".tmp"
+    open(tmp, "w", encoding="utf-8").write(json.dumps({"path": data.get("path"), "port": port}, separators=(",", ":")) + "\n")
+    os.chmod(tmp, 0o600)
+    try:
+        pw = pwd.getpwnam(owner)
+        os.chown(tmp, pw.pw_uid, pw.pw_gid)
+    except KeyError:
+        pass
+    os.replace(tmp, listen)
+PY
+    if command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null || true)" == *"Status: active"* ]]; then
+        ufw allow 443/tcp comment jojonet-panel >/dev/null 2>&1 || true
+    fi
+fi
+
+stream="0.0.0.0:${port}"
+if [[ -f "$ENV_FILE" ]]; then
+    host="$(sed -n 's/^JOJONET_PANEL_HOST=//p' "$ENV_FILE" | head -n 1)"
+    case "$host" in
+        ""|0.0.0.0) stream="0.0.0.0:${port}" ;;
+        ::|"[::]") stream="[::]:${port}" ;;
+        *:*) stream="[${host}]:${port}" ;;
+        *) stream="${host}:${port}" ;;
+    esac
+fi
+if [[ -f "$SOCKET" ]] && grep -q '^ListenStream=' "$SOCKET"; then
+    current="$(sed -n 's/^ListenStream=//p' "$SOCKET" | head -n 1)"
+    if [[ "$current" != "$stream" ]]; then
+        sed -i "s|^ListenStream=.*|ListenStream=${stream}|" "$SOCKET"
+        systemctl daemon-reload
+        systemctl restart jojonet-panel.socket
+        released=0
+    fi
+fi
+
+meta="$(python3 - "$TLS_DIR/cert.pem" "$domain" "$panel_path" "$port" <<'PY'
+import re, subprocess, sys
+from datetime import datetime, timezone
+cert, domain, path, port = sys.argv[1:]
+port = int(port)
+text = subprocess.check_output(["openssl", "x509", "-in", cert, "-noout", "-enddate", "-issuer"], text=True)
+end = issuer = ""
+for line in text.splitlines():
+    if line.startswith("notAfter="):
+        end = line.split("=", 1)[1].strip()
+    elif line.startswith("issuer="):
+        issuer = line.split("=", 1)[1].strip()
+found = re.search(r"\bO\s*=\s*([^/,]+)", issuer)
+org = found.group(1).strip() if found else "Let's Encrypt"
+stamp = datetime.strptime(" ".join(end.replace(" GMT", "").split()), "%b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc)
+base = "/" + path.strip().strip("/")
+if base == "/":
+    base = ""
+url = f"https://{domain}{base}/" if port == 443 else f"https://{domain}:{port}{base}/"
+print(url)
+print(org)
+print(stamp.replace(microsecond=0).isoformat())
+PY
+)" || fail "گواهی نصب شد ولی خواندن مشخصات آن ممکن نشد."
+
+url="$(printf '%s\n' "$meta" | sed -n '1p')"
+org="$(printf '%s\n' "$meta" | sed -n '2p')"
+not_after="$(printf '%s\n' "$meta" | sed -n '3p')"
+publish "ok" "$url" "$org" "$not_after" ""
+
+released=0
+systemctl restart jojonet-panel.service

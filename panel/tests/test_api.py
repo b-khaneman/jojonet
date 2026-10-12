@@ -562,6 +562,23 @@ def test_vpn_panel_validation(client, auth, monkeypatch):
     assert r.status_code == 200 and wait_job(client, r.json()["job_id"])["status"] == "ok"
 
 
+def test_owner_requests_panel_certificate(client, admin, settings):
+    assert client.get("/api/ssl").status_code == 401
+    logged = client.post("/api/login", json={"username": admin[0], "password": admin[1]})
+    assert logged.status_code == 200, logged.text
+    auth = {"X-CSRF-Token": logged.json()["csrf"]}
+    bad = client.post("/api/ssl", json={"domain": "localhost"}, headers=auth)
+    assert bad.status_code == 422
+    ok = client.post("/api/ssl", json={"domain": "https://panel.example.com/x", "email": ""}, headers=auth)
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["state"] == "running" and body["domain"] == "panel.example.com"
+    saved = (settings.data_dir / "ssl.request").read_text(encoding="utf-8")
+    assert "panel.example.com" in saved
+    again = client.post("/api/ssl", json={"domain": "panel.example.com"}, headers=auth)
+    assert again.status_code == 409
+
+
 def test_cli_set_admin_and_has_admin(settings, monkeypatch, capsys):
     from app import cli
 

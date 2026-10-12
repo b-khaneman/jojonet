@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import PANEL_VERSION
 from .config import PanelEntry, Settings, load_settings, normalize_base_path, write_listen
+from .tlsinfo import build_ssl_view, normalize_domain, normalize_email, write_ssl_request
 from .db import Database, utcnow
 from .jobs import JobManager
 from .orchestrator import (
@@ -569,6 +570,11 @@ class ListenIn(BaseModel):
     port: int = Field(ge=1, le=65535)
 
 
+class SslIn(BaseModel):
+    domain: str = Field(min_length=1, max_length=253)
+    email: str | None = Field(default=None, max_length=254)
+
+
 class UserPasswordIn(BaseModel):
     password: str | None = Field(default=None, max_length=256)
 
@@ -1066,6 +1072,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.entry.path = path
             app.state.entry.port = data.port
         return listen_out(request)
+
+    def ssl_view() -> dict[str, Any]:
+        return build_ssl_view(settings.data_dir, settings.cert, app.state.entry.path, app.state.entry.port)
+
+    @app.get("/api/ssl")
+    async def get_ssl(_: dict = Depends(require_owner)) -> dict[str, Any]:
+        return ssl_view()
+
+    @app.post("/api/ssl")
+    async def post_ssl(data: SslIn, _: dict = Depends(require_owner)) -> dict[str, Any]:
+        try:
+            domain = normalize_domain(data.domain)
+            email = normalize_email(data.email)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        if ssl_view().get("state") == "running":
+            raise HTTPException(409, "یک درخواست SSL هنوز در جریان است")
+        try:
+            write_ssl_request(settings.data_dir, domain, email, app.state.entry.path, app.state.entry.port)
+        except OSError as exc:
+            raise HTTPException(500, "ذخیرهٔ درخواست گواهی ممکن نشد") from exc
+        return ssl_view()
 
     @app.get("/api/users")
     async def list_users(_: dict = Depends(require_owner)) -> list[dict[str, Any]]:
