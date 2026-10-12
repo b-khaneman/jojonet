@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.26
+- Installer keeps an admin-chosen port across updates. `--port` still overrides it. Docs show the fixed entry path. Saving the same address no longer reloads the panel.
+
 ## 1.6.0 / panel 1.3.25
 - Panel entry path is fixed at `/jojonet-panel-entry` (old random paths are replaced). The owner can change the path and the port from the مدیریت tab; the service restarts onto the new address.
 

@@ -179,6 +179,15 @@ load_existing() {
     OLD_PORT="$(env_value JOJONET_PANEL_PORT "$ENV_FILE")"
     old_host="$(env_value JOJONET_PANEL_HOST "$ENV_FILE")"
     if [[ -z "$PORT" ]]; then PORT="${OLD_PORT:-$DEFAULT_PORT}"; fi
+    if ((PORT_EXPLICIT == 0)); then
+        local data listen_port
+        data="$(env_value JOJONET_PANEL_DATA "$ENV_FILE")"
+        data="${data:-/var/lib/jojonet-panel}"
+        if [[ -f "$data/listen.json" ]]; then
+            listen_port="$(sed -n 's/.*"port":\([0-9][0-9]*\).*/\1/p' "$data/listen.json" | head -n 1)"
+            if [[ "$listen_port" =~ ^[0-9]+$ ]]; then PORT="$listen_port"; fi
+        fi
+    fi
     if [[ -z "$HOST" ]]; then HOST="${old_host:-$DEFAULT_HOST}"; fi
     if ((NO_DOMAIN)); then
         DOMAIN=""
@@ -681,6 +690,19 @@ ensure_panel_path() {
     printf '%s\n' "$PANEL_WEB_PATH" >"$DATA_DIR/web.path"
     chown "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR/web.path"
     chmod 0600 "$DATA_DIR/web.path"
+    # An explicit --port must win over a port previously saved from the admin UI.
+    if ((PORT_EXPLICIT)) && [[ -f "$DATA_DIR/listen.json" ]]; then
+        systemctl stop jojonet-panel-apply.path >/dev/null 2>&1 || true
+        python3 - "$DATA_DIR/listen.json" "$PORT" <<'PY'
+import json, sys
+target, port = sys.argv[1], int(sys.argv[2])
+data = json.load(open(target, encoding="utf-8"))
+data["port"] = port
+open(target, "w", encoding="utf-8").write(json.dumps({"path": data.get("path"), "port": port}, separators=(",", ":")) + "\n")
+PY
+        chown "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR/listen.json" || true
+        chmod 0600 "$DATA_DIR/listen.json" || true
+    fi
 }
 
 write_env() {

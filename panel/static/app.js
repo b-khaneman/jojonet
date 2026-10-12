@@ -3030,9 +3030,9 @@
 
   function bindListen() {
     const form = $('#listen-form');
-    if (!form) return;
     const pathEl = $('#listen-path');
     const portEl = $('#listen-port');
+    if (!form || !pathEl || !portEl) return;
     const preview = () => {
       const url = $('#listen-url');
       if (url && pathEl && portEl) url.textContent = listenAddress(pathEl.value, portEl.value);
@@ -3049,11 +3049,17 @@
       if (btn) btn.disabled = true;
       try {
         const row = await api('PUT', '/api/listen', { path: pathEl.value.trim(), port: Number(portEl.value) });
+        const same = state.me && row.path === state.me.base_path && Number(row.port) === Number(state.me.panel_port);
         if (state.me) {
           state.me.base_path = row.path;
           state.me.panel_port = row.port;
         }
         paintHeader();
+        if (same) {
+          toast('همین آدرس الان فعال است.', 'success');
+          if (btn) btn.disabled = false;
+          return;
+        }
         toast('آدرس ذخیره شد. چند ثانیه دیگر پنل روی آدرس جدید بالا می‌آید.', 'success');
         setTimeout(() => { location.href = row.url || nextUrl; }, 4000);
       } catch (err) {

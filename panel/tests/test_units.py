@@ -37,6 +37,8 @@ def test_secret_panel_path(tmp_path):
     assert resolve_base_path(chosen, "/jnsecretpath1234") == "/custompath1234567"
     write_listen(tmp_path, "jojonet-panel-entry", 2053)
     assert (tmp_path / "listen.json").read_text(encoding="utf-8").strip() == '{"path":"/jojonet-panel-entry","port":2053}'
+    from app.config import saved_listen_port
+    assert saved_listen_port(tmp_path) == 2053
 
 
 def test_password_hash_roundtrip():
