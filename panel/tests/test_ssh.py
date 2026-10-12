@@ -41,22 +41,40 @@ class Remote:
             return 3, b"boom\n"
         return 127, b"unknown\n"
 
+    def _unwrap_bash(self, cmd: str) -> str | None:
+        marker = "bash --noprofile --norc -c "
+        if marker in cmd:
+            parts = shlex.split(cmd)
+            idx = parts.index("-c")
+            return parts[idx + 1]
+        if cmd.startswith("bash -c "):
+            return shlex.split(cmd)[2]
+        return None
+
     async def handle(self, process: asyncssh.SSHServerProcess) -> None:
         cmd = process.command or ""
         stdin = await process.stdin.read()
         rc, out = 0, b""
-        if cmd == "id -u":
+        is_sudo = cmd.startswith("sudo ")
+        inner = None if is_sudo else self._unwrap_bash(cmd)
+        if not is_sudo and (inner == "id -u" or cmd == "id -u"):
             out = b"0\n" if self.root else b"1000\n"
-        elif cmd == "umask 077; mktemp /tmp/jnin.XXXXXXXX":
+        elif not is_sudo and (inner == "umask 077; mktemp /tmp/jnin.XXXXXXXX" or cmd == "umask 077; mktemp /tmp/jnin.XXXXXXXX"):
             name = f"/tmp/jnin.{len(self.files):08d}"
             self.files[name] = b""
             out = (name + "\n").encode()
-        elif cmd.startswith("cat > "):
-            self.files[shlex.split(cmd)[2]] = stdin
-        elif cmd == "hang":
+        elif not is_sudo and ((inner and inner.startswith("cat > ")) or cmd.startswith("cat > ")):
+            target = shlex.split(inner or cmd)[2]
+            self.files[target] = stdin
+        elif not is_sudo and (inner == "hang" or cmd == "hang"):
             await asyncio.sleep(30)
-        elif cmd.startswith("sudo -S -p '' -k bash -c ") or cmd.startswith("bash -c ") or cmd.startswith("sudo -n bash -c "):
+        elif is_sudo or "bash --noprofile --norc -c " in cmd or cmd.startswith("bash -c ") or cmd.startswith("HISTFILE="):
             parts = shlex.split(cmd)
+            if "HISTFILE=/dev/null" not in cmd and not cmd.startswith("bash -c "):
+                rc, out = 127, b"missing hist wrap\n"
+                process.stdout.write(out)
+                process.exit(rc)
+                return
             idx = parts.index("-c")
             script, extra = parts[idx + 1], parts[idx + 2:]
             if parts[0] == "sudo" and parts[1] == "-S":
@@ -70,6 +88,11 @@ class Remote:
                 rc, out = 1, b"sudo: a password is required\n"
                 process.stdout.write(out)
                 process.exit(rc)
+                return
+            # Ignore post-command history scrub (long timeout path).
+            if "sed -i" in script and "jojonet" in script:
+                process.stdout.write(b"")
+                process.exit(0)
                 return
             prefix = 'exec 0<"$0"; rm -f -- "$0"; '
             if script.startswith(prefix):

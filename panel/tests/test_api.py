@@ -618,3 +618,198 @@ def test_cli_set_admin_and_has_admin(settings, monkeypatch, capsys):
     monkeypatch.setenv("JOJONET_PANEL_SECURE_COOKIES", "1")
     assert cli.main(["serve"]) == 2
     assert cli.main(["serve", "--cert", "x.pem"]) == 2
+
+
+def test_customer_orders_and_owner_decide_fulfill(client, admin, monkeypatch):
+    from test_tenants import add_customer, login_as
+
+    owner_auth = login_as(client, admin[0], admin[1])
+    created_user = add_customer(client, owner_auth, username="buyer1", password="customer-pass-1", max_servers=4, max_tunnels=4)
+    assert created_user["user"]["username"] == "buyer1"
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "buyer1", "customer-pass-1")
+
+    payload = {
+        "mode": "gre",
+        "message": "لطفاً تانل GRE بزنید",
+        "iran": {
+            "name": "IR-Order",
+            "host": "10.1.1.1",
+            "port": 22,
+            "username": "root",
+            "auth_type": "password",
+            "include_access": True,
+            "password": "iran-secret-1",
+        },
+        "kharej": {
+            "name": "DE-Order",
+            "host": "10.2.2.2",
+            "port": 22,
+            "username": "root",
+            "auth_type": "password",
+            "include_access": True,
+            "password": "kharej-secret-1",
+        },
+    }
+    created = client.post("/api/orders", json=payload, headers=cauth)
+    assert created.status_code == 200, created.text
+    order = created.json()
+    assert order["status"] == "pending" and order["mode"] == "gre"
+    assert order["iran"]["has_access"] is True and "password" not in order["iran"]
+
+    mine = client.get("/api/orders", headers=cauth)
+    assert mine.status_code == 200 and len(mine.json()) == 1
+
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    owner_list = client.get("/api/orders", headers=owner_auth)
+    assert owner_list.status_code == 200
+    owned = owner_list.json()[0]
+    assert owned["customer_username"] == "buyer1"
+    assert owned["iran"]["password"] == "iran-secret-1"
+
+    rejected = client.post(f"/api/orders/{order['id']}/decide", json={"action": "reject", "note": "فعلاً نه"}, headers=owner_auth)
+    assert rejected.status_code == 200 and rejected.json()["status"] == "rejected"
+
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "buyer1", "customer-pass-1")
+    again = client.post("/api/orders", json=payload, headers=cauth)
+    assert again.status_code == 200, again.text
+    oid = again.json()["id"]
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    approved = client.post(f"/api/orders/{oid}/decide", json={"action": "approve"}, headers=owner_auth)
+    assert approved.status_code == 200 and approved.json()["status"] == "approved"
+
+    async def deploy(job, tunnel_id):
+        await job.start(0)
+        await job.ok(0)
+        client.app.state.db.update("tunnels", tunnel_id, {"status": "ok"})
+
+    monkeypatch.setattr(client.app.state.orch, "job_deploy", deploy)
+    done = client.post(f"/api/orders/{oid}/fulfill", json={}, headers=owner_auth)
+    assert done.status_code == 200, done.text
+    body = done.json()
+    assert body["order"]["status"] == "done" and body["job_id"]
+    assert body["tunnel"]["owner_username"] == "buyer1"
+    assert wait_job(client, body["job_id"])["status"] == "ok"
+
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "buyer1", "customer-pass-1")
+    cancelled_src = client.post(
+        "/api/orders",
+        json={
+            **payload,
+            "iran": {**payload["iran"], "host": "10.3.3.3"},
+            "kharej": {**payload["kharej"], "host": "10.4.4.4"},
+        },
+        headers=cauth,
+    )
+    assert cancelled_src.status_code == 200
+    cid = cancelled_src.json()["id"]
+    assert client.post(f"/api/orders/{cid}/cancel", headers=cauth).json()["status"] == "cancelled"
+
+
+def test_support_tickets_with_optional_access(client, admin):
+    from test_tenants import add_customer, login_as
+
+    owner_auth = login_as(client, admin[0], admin[1])
+    add_customer(client, owner_auth, username="tick1", password="customer-pass-1")
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "tick1", "customer-pass-1")
+
+    created = client.post("/api/tickets", json={
+        "subject": "مشکل پنل",
+        "category": "panel",
+        "body": "نمی‌توانم وارد پنل X-UI شوم",
+        "access": {"host": "10.9.9.9", "port": 22, "username": "root", "password": "panel-secret", "panel_url": "http://10.9.9.9:2053"},
+    }, headers=cauth)
+    assert created.status_code == 200, created.text
+    ticket = created.json()
+    assert ticket["status"] == "open" and ticket["category"] == "panel"
+    assert len(ticket["messages"]) == 1
+    access = ticket["messages"][0]["access"]
+    assert access["has_access"] is True and access["password"] == "panel-secret"
+
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    owner_view = client.get(f"/api/tickets/{ticket['id']}", headers=owner_auth)
+    assert owner_view.status_code == 200
+    assert owner_view.json()["messages"][0]["access"]["password"] == "panel-secret"
+
+    reply = client.post(f"/api/tickets/{ticket['id']}/messages", json={"body": "لاگ را بفرستید"}, headers=owner_auth)
+    assert reply.status_code == 200 and reply.json()["status"] == "answered"
+
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "tick1", "customer-pass-1")
+    follow = client.post(f"/api/tickets/{ticket['id']}/messages", json={"body": "لاگ پیوست شد"}, headers=cauth)
+    assert follow.status_code == 200 and follow.json()["status"] == "open"
+
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    closed = client.patch(f"/api/tickets/{ticket['id']}", json={"status": "closed"}, headers=owner_auth)
+    assert closed.status_code == 200 and closed.json()["status"] == "closed"
+
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "tick1", "customer-pass-1")
+    bare = client.post("/api/tickets", json={
+        "subject": "سوال عمومی",
+        "category": "other",
+        "body": "بدون دسترسی",
+    }, headers=cauth)
+    assert bare.status_code == 200
+    assert bare.json()["messages"][0]["access"] is None
+
+
+def test_wallet_deposit_and_tunnel_charge(client, admin):
+    from test_tenants import add_customer, login_as
+
+    owner_auth = login_as(client, admin[0], admin[1])
+    add_customer(client, owner_auth, username="pay1", password="customer-pass-1", max_servers=2, max_tunnels=2)
+    prices = {"gre": 50000, "wireguard": 0, "ipip": 0, "sit": 0, "geneve": 0, "vxlan": 0, "icmp": 0, "dnstt": 0, "spoof": 0, "dokodemo": 0, "xray_reverse": 0, "ssh": 0}
+    # fill only known keys from settings response later if needed
+    sett = client.patch("/api/settings", json={
+        "sell_tunnels_enabled": True,
+        "register_enabled": True,
+        "payment_card": "6037-1111-2222-3333",
+        "payment_wallet_address": "TXXX",
+        "payment_note": "کد پیگیری بفرستید",
+        "wallet_currency": "تومان",
+        "tunnel_prices": {"gre": 50000},
+    }, headers=owner_auth)
+    assert sett.status_code == 200, sett.text
+    assert sett.json()["sell_tunnels_enabled"] is True
+    assert sett.json()["tunnel_prices"]["gre"] == 50000
+
+    pub = client.get("/api/commerce")
+    assert pub.status_code == 200 and pub.json()["register_enabled"] is True
+
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "pay1", "customer-pass-1")
+    bal = client.get("/api/wallet", headers=cauth)
+    assert bal.status_code == 200 and bal.json()["balance"] == 0
+
+    dep = client.post("/api/wallet/deposits", json={
+        "amount": 100000,
+        "method": "card",
+        "tracking_code": "TRK-12345",
+        "note": "واریز تست",
+        "tunnel_mode": "gre",
+    }, headers=cauth)
+    assert dep.status_code == 200, dep.text
+    did = dep.json()["deposit"]["id"]
+
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    ok = client.post(f"/api/wallet/deposits/{did}/decide", json={"action": "approve"}, headers=owner_auth)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["wallet_balance"] == 100000
+
+    overview = client.get(f"/api/users/{ok.json()['deposit']['user_id']}/overview", headers=owner_auth)
+    assert overview.status_code == 200
+    assert overview.json()["user"]["wallet_balance"] == 100000
+
+    adj = client.post(f"/api/users/{ok.json()['deposit']['user_id']}/wallet", json={
+        "amount": 10000, "direction": "debit", "note": "کسر تست"
+    }, headers=owner_auth)
+    assert adj.status_code == 200 and adj.json()["wallet_balance"] == 90000

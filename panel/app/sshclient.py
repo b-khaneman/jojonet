@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import base64
+import os
 import shlex
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -10,6 +11,48 @@ from typing import Any, Awaitable, Callable
 import asyncssh
 
 LineCallback = Callable[[str], Awaitable[None] | None]
+
+# Keep panel remote commands out of interactive bash history on the server.
+_HIST_ENV = "HISTFILE=/dev/null HISTSIZE=0"
+_SCRUB_AFTER_SEC = 60
+_SCRUB_HISTORY = (
+    "for f in /root/.bash_history \"$HOME/.bash_history\"; do "
+    "[ -n \"$f\" ] && [ -f \"$f\" ] && [ -w \"$f\" ] || continue; "
+    "sed -i "
+    "-e '/jojonet/d' "
+    "-e '/jojonet-panel/d' "
+    "-e '/\\/etc\\/jojonet/d' "
+    "-e '/\\/var\\/lib\\/jojonet/d' "
+    "-e '/ip tunnel/d' "
+    "-e '/udp2raw/d' "
+    "-e '/hysteria/d' "
+    "-e '/rathole/d' "
+    "-e '/wstunnel/d' "
+    "-e '/dnstt/d' "
+    "-e '/pingtunnel/d' "
+    "-e '/wireguard/d' "
+    "-e '/xray/d' "
+    "-e '/dokodemo/d' "
+    "-e '/spoof/d' "
+    "\"$f\" 2>/dev/null || true; "
+    "done; "
+    "history -c 2>/dev/null || true"
+)
+
+
+def _bash_c(script: str, *, via_sudo: bool = False) -> str:
+    # sudo treats the first token as the executable; use env so HISTFILE is not argv0.
+    if via_sudo:
+        return "env HISTFILE=/dev/null HISTSIZE=0 bash --noprofile --norc -c " + shlex.quote(script)
+    return f"{_HIST_ENV} bash --noprofile --norc -c " + shlex.quote(script)
+
+
+def _already_hist_wrapped(command: str) -> bool:
+    return (
+        command.startswith("HISTFILE=")
+        or command.startswith("env HISTFILE=")
+        or "bash --noprofile --norc" in command
+    )
 
 
 class SSHError(Exception):
@@ -195,15 +238,28 @@ class RemoteSession:
                 pass
             self.conn = None
 
+    async def _scrub_history(self) -> None:
+        if os.environ.get("JOJONET_CLEAR_HISTORY", "1") == "0":
+            return
+        try:
+            await self.run_raw(_bash_c(_SCRUB_HISTORY), timeout=20, wrap=False)
+        except SSHError:
+            pass
+
     async def run_raw(
         self,
         command: str,
         input_data: bytes | str | None = None,
         timeout: int = 120,
         on_line: LineCallback | None = None,
+        *,
+        wrap: bool = True,
+        scrub: bool = False,
     ) -> CmdResult:
         if self.conn is None:
             raise SSHError("اتصال SSH برقرار نیست")
+        if wrap and not _already_hist_wrapped(command):
+            command = _bash_c(command)
         try:
             proc = await self.conn.create_process(command, encoding=None, stderr=asyncssh.STDOUT if on_line else asyncssh.PIPE)
         except asyncssh.Error as exc:
@@ -248,11 +304,14 @@ class RemoteSession:
         except (asyncssh.Error, BrokenPipeError, ConnectionError) as exc:
             raise SSHError(f"ارتباط SSH حین اجرای فرمان قطع شد: {exc}") from exc
         rc = proc.exit_status if proc.exit_status is not None else 255
-        return CmdResult(
+        result = CmdResult(
             rc=rc,
             stdout=b"".join(out_chunks).decode("utf-8", "replace"),
             stderr=self.mask(b"".join(err_chunks).decode("utf-8", "replace")),
         )
+        if scrub:
+            await self._scrub_history()
+        return result
 
     async def run_root(
         self,
@@ -262,8 +321,9 @@ class RemoteSession:
         on_line: LineCallback | None = None,
     ) -> CmdResult:
         """Run a bash script as root. stdin of the script is input_data (if any)."""
+        do_scrub = timeout >= _SCRUB_AFTER_SEC
         if self.is_root:
-            return await self.run_raw("bash -c " + shlex.quote(script), input_data, timeout, on_line)
+            return await self.run_raw(_bash_c(script), input_data, timeout, on_line, wrap=False, scrub=do_scrub)
         staged = ""
         if input_data is not None:
             mk = await self.run_raw("umask 077; mktemp /tmp/jnin.XXXXXXXX")
@@ -274,10 +334,12 @@ class RemoteSession:
             if not put.ok:
                 raise SSHError("انتقال داده به سرور ناموفق بود")
             script = 'exec 0<"$0"; rm -f -- "$0"; ' + script
-        inner = "bash -c " + shlex.quote(script) + (" " + shlex.quote(staged) if staged else "")
+        inner = _bash_c(script, via_sudo=True) + (" " + shlex.quote(staged) if staged else "")
         if self.creds.sudo_password:
-            return await self.run_raw("sudo -S -p '' -k " + inner, self.creds.sudo_password + "\n", timeout, on_line)
-        return await self.run_raw("sudo -n " + inner, None, timeout, on_line)
+            return await self.run_raw(
+                "sudo -S -p '' -k " + inner, self.creds.sudo_password + "\n", timeout, on_line, wrap=False, scrub=do_scrub
+            )
+        return await self.run_raw("sudo -n " + inner, None, timeout, on_line, wrap=False, scrub=do_scrub)
 
 
 def _clean(raw: bytes) -> str:

@@ -103,9 +103,64 @@ CREATE TABLE IF NOT EXISTS relays (
     created_at TEXT NOT NULL,
     owner_id INTEGER REFERENCES admins(id)
 );
+CREATE TABLE IF NOT EXISTS service_orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'done', 'cancelled')),
+    mode TEXT NOT NULL,
+    message TEXT,
+    iran_json TEXT,
+    kharej_json TEXT,
+    owner_note TEXT,
+    tunnel_id INTEGER REFERENCES tunnels(id),
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    subject TEXT NOT NULL,
+    category TEXT NOT NULL CHECK (category IN ('panel', 'tunnel', 'server', 'billing', 'other')),
+    status TEXT NOT NULL CHECK (status IN ('open', 'answered', 'closed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ticket_messages (
+    id INTEGER PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    author_id INTEGER NOT NULL REFERENCES admins(id),
+    body TEXT NOT NULL,
+    access_blob TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wallet_ledger (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    actor_id INTEGER REFERENCES admins(id),
+    kind TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    note TEXT,
+    ref_type TEXT,
+    ref_id INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS deposit_requests (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    amount INTEGER NOT NULL,
+    method TEXT NOT NULL CHECK (method IN ('card', 'crypto')),
+    tracking_code TEXT NOT NULL,
+    note TEXT,
+    tunnel_mode TEXT,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+    owner_note TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
 """
 
-JSON_FIELDS = {"last_check", "steps", "options"}
+JSON_FIELDS = {"last_check", "steps", "options", "iran_json", "kharej_json"}
 
 ADMIN_COLUMNS = {
     "role": "TEXT NOT NULL DEFAULT 'customer'",
@@ -119,6 +174,7 @@ ADMIN_COLUMNS = {
     "allow_os_update": "INTEGER NOT NULL DEFAULT 1",
     "allow_term": "INTEGER NOT NULL DEFAULT 1",
     "note": "TEXT",
+    "wallet_balance": "INTEGER NOT NULL DEFAULT 0",
 }
 OWNER_TABLES = ("servers", "tunnels", "relays", "jobs")
 TABLE_COLUMNS = {
@@ -210,10 +266,71 @@ class Database:
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_id)")
         self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_relays_owner_name ON relays(owner_id, name)")
         self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS service_orders ("
+            "id INTEGER PRIMARY KEY, "
+            "customer_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
+            "status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'done', 'cancelled')), "
+            "mode TEXT NOT NULL, message TEXT, iran_json TEXT, kharej_json TEXT, owner_note TEXT, "
+            "tunnel_id INTEGER REFERENCES tunnels(id), created_at TEXT NOT NULL, decided_at TEXT)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS tickets ("
+            "id INTEGER PRIMARY KEY, "
+            "customer_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
+            "subject TEXT NOT NULL, "
+            "category TEXT NOT NULL CHECK (category IN ('panel', 'tunnel', 'server', 'billing', 'other')), "
+            "status TEXT NOT NULL CHECK (status IN ('open', 'answered', 'closed')), "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS ticket_messages ("
+            "id INTEGER PRIMARY KEY, "
+            "ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE, "
+            "author_id INTEGER NOT NULL REFERENCES admins(id), "
+            "body TEXT NOT NULL, access_blob TEXT, created_at TEXT NOT NULL)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_customer ON service_orders(customer_id, status)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON service_orders(status, created_at)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_customer ON tickets(customer_id, status)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_updated ON tickets(updated_at)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ticket_messages_ticket ON ticket_messages(ticket_id, id)")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS wallet_ledger ("
+            "id INTEGER PRIMARY KEY, "
+            "user_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
+            "actor_id INTEGER REFERENCES admins(id), "
+            "kind TEXT NOT NULL, amount INTEGER NOT NULL, balance_after INTEGER NOT NULL, "
+            "note TEXT, ref_type TEXT, ref_id INTEGER, created_at TEXT NOT NULL)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS deposit_requests ("
+            "id INTEGER PRIMARY KEY, "
+            "user_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
+            "amount INTEGER NOT NULL, "
+            "method TEXT NOT NULL CHECK (method IN ('card', 'crypto')), "
+            "tracking_code TEXT NOT NULL, note TEXT, tunnel_mode TEXT, "
+            "status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')), "
+            "owner_note TEXT, created_at TEXT NOT NULL, decided_at TEXT)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_user ON wallet_ledger(user_id, id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_deposits_user ON deposit_requests(user_id, status)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_deposits_status ON deposit_requests(status, created_at)")
+        self._conn.execute(
             "CREATE TABLE IF NOT EXISTS panel_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
         if self._conn.execute("SELECT key FROM panel_settings WHERE key='terms_enabled'").fetchone() is None:
             self._conn.execute("INSERT INTO panel_settings (key, value) VALUES ('terms_enabled', '1')")
+        for key, val in (
+            ("sell_tunnels_enabled", "0"),
+            ("register_enabled", "0"),
+            ("payment_card", ""),
+            ("payment_wallet_address", ""),
+            ("payment_note", ""),
+            ("wallet_currency", "تومان"),
+            ("tunnel_prices_json", "{}"),
+        ):
+            if self._conn.execute("SELECT key FROM panel_settings WHERE key=?", (key,)).fetchone() is None:
+                self._conn.execute("INSERT INTO panel_settings (key, value) VALUES (?, ?)", (key, val))
 
     def _rebuild_relays_without_global_name_unique(self) -> None:
         row = self._conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='relays'").fetchone()

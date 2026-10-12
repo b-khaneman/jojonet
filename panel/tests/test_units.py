@@ -64,6 +64,18 @@ def test_vault_roundtrip(tmp_path):
         other.decrypt(token)
 
 
+def test_sshclient_histfile_wrap():
+    from app.sshclient import _already_hist_wrapped, _bash_c
+
+    cmd = _bash_c("id -u")
+    assert "HISTFILE=/dev/null" in cmd
+    assert "bash --noprofile --norc" in cmd
+    assert _already_hist_wrapped(cmd)
+    sudo = _bash_c("id -u", via_sudo=True)
+    assert sudo.startswith("env HISTFILE=/dev/null")
+    assert _already_hist_wrapped(sudo)
+
+
 @pytest.mark.parametrize(
     "value,ok",
     [("1.2.3.4", True), ("10.0.0.1", True), ("0.0.0.0", False), ("127.0.0.1", False), ("1.2.3", False),

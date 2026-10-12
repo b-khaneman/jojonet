@@ -12,8 +12,74 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['overview', 'guide', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'users'];
+  const TABS = ['overview', 'guide', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'orders', 'tickets', 'wallet', 'jobs', 'users'];
+  const ORDER_STATUS = {
+    pending: ['warn', 'در انتظار'],
+    approved: ['info', 'تأیید شده'],
+    rejected: ['err', 'رد شده'],
+    done: ['ok', 'انجام شد'],
+    cancelled: ['muted', 'لغو شده'],
+  };
+  const TICKET_STATUS = {
+    open: ['warn', 'باز'],
+    answered: ['info', 'پاسخ‌داده‌شده'],
+    closed: ['muted', 'بسته'],
+  };
+  const TICKET_CAT = {
+    panel: 'پنل',
+    tunnel: 'تانل',
+    server: 'سرور',
+    billing: 'اشتراک',
+    other: 'سایر',
+  };
+  const DEPOSIT_STATUS = {
+    pending: ['warn', 'در انتظار تأیید'],
+    approved: ['ok', 'تأیید شد'],
+    rejected: ['err', 'رد شد'],
+  };
+  const LEDGER_KIND = {
+    deposit: 'واریز',
+    tunnel_charge: 'هزینه تانل',
+    tunnel_refund: 'بازگشت تانل',
+    admin_credit: 'افزایش توسط مالک',
+    admin_debit: 'کاهش توسط مالک',
+  };
+  const walletState = { data: null, loading: false };
   const XRAY_TUNNEL_MODES = new Set(['dokodemo', 'xray_reverse']);
+  const MODE_GROUPS = [
+    { id: 'classic', title: 'لایه ۲ / کلاسیک', ids: ['gre', 'tun_tcp', 'paqet', 'vxlan'] },
+    { id: 'wg', title: 'WireGuard', ids: ['wireguard', 'wg_icmp', 'wg_faketcp'] },
+    { id: 'proxy', title: 'جریان و پروکسی', ids: ['hysteria2', 'rathole', 'wstunnel'] },
+    { id: 'xray', title: 'Xray', ids: ['dokodemo', 'xray_reverse'] },
+    { id: 'v6', title: 'IPv6', ids: ['sit', 'gre6', 'ipip6'] },
+    { id: 'direct', title: 'مستقیم / ضدسانسور', ids: ['dnstt', 'icmp', 'spoof'] },
+  ];
+  const MODE_PROTO = {
+    gre: 'GRE',
+    tun_tcp: 'TCP',
+    paqet: 'KCP',
+    vxlan: 'UDP',
+    wireguard: 'WG',
+    wg_icmp: 'ICMP',
+    wg_faketcp: 'TCP',
+    hysteria2: 'QUIC',
+    rathole: 'TCP',
+    wstunnel: 'WS',
+    dokodemo: 'VLESS',
+    xray_reverse: 'VLESS',
+    sit: 'SIT',
+    gre6: 'GRE6',
+    ipip6: 'IPIP',
+    dnstt: 'DNS',
+    icmp: 'ICMP',
+    spoof: 'SPOOF',
+  };
+  const VPN_KIND_MARK = {
+    xui: '3X',
+    xui_classic: 'XUI',
+    pasarguard: 'PG',
+  };
+  const modePickers = new Map();
 
   const ROLE_LABEL = { iran: 'ایران', kharej: 'خارج' };
   const JOB_STATUS = {
@@ -324,7 +390,7 @@
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
-    if (method !== 'GET' && path !== '/api/login' && state.csrf) headers['X-CSRF-Token'] = state.csrf;
+    if (method !== 'GET' && path !== '/api/login' && path !== '/api/register' && state.csrf) headers['X-CSRF-Token'] = state.csrf;
 
     let res;
     try {
@@ -543,9 +609,12 @@
     servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); refreshMe(); } },
     tunnels: { path: '/api/tunnels', el: '#tunnels-list', render: renderTunnels, after: renderOutbounds },
     relays: { path: '/api/relays', el: '#relays-list', render: renderRelays, after: updateRelayForm },
+    orders: { path: '/api/orders', el: '#orders-list', render: renderOrders },
+    tickets: { path: '/api/tickets', el: '#tickets-list', render: renderTickets },
     jobs: { path: '/api/jobs?limit=50', el: '#jobs-list', render: renderJobs, after: checkSessionJobs },
     users: { path: '/api/users', el: '#users-list', render: renderUsers },
   };
+  const ticketState = { id: null, data: null };
 
   const liveState = { data: null, loading: false, error: null, scannedAt: null };
 
@@ -606,6 +675,18 @@
     if (panelBtn) panelBtn.hidden = !can('allow_vpn');
     const outboundBtn = $('#tabbtn-outbounds');
     if (outboundBtn) outboundBtn.hidden = !can('allow_vpn');
+    const orderCard = $('#order-create-card');
+    if (orderCard) orderCard.hidden = owner;
+    const ordersLead = $('#orders-lead');
+    if (ordersLead) {
+      ordersLead.textContent = owner
+        ? 'سفارش‌های مشتریان را ببینید، تأیید یا رد کنید و بعد از تأیید تانل را انجام دهید.'
+        : 'مشخصات سرورها را بفرستید تا مالک بعد از تأیید، تانل را برایتان بزند.';
+    }
+    const depCard = $('#deposit-card');
+    if (depCard) depCard.hidden = owner;
+    const commerceCard = $('#commerce-card');
+    if (commerceCard) commerceCard.hidden = !owner;
     if (state.tab === 'users' && !owner) switchTab('servers');
     if (owner) {
       loadListen();
@@ -644,13 +725,7 @@
         quotaEl.hidden = true;
         quotaEl.textContent = '';
       } else {
-        const bits = [];
-        if (me.days_left != null) bits.push(`${fmtNum(me.days_left)} روز مانده`);
-        const lim = (me.limits || {});
-        const use = (me.usage || {});
-        bits.push(limitText(use.servers || 0, lim.max_servers, 'سرور'));
-        quotaEl.textContent = bits.join(' · ');
-        quotaEl.hidden = !bits.length;
+        paintWalletChip();
       }
     }
     renderOverview();
@@ -706,6 +781,7 @@
       state.info = info || {};
       setVersions(state.info.panel_version, state.info.jojonet_version);
       updateTunnelForm();
+      fillOrderModeSelect();
       if (lists.tunnels.loaded) renderTunnels();
     } catch (err) {
       if (err.status !== 401) toast(`دریافت اطلاعات پنل ناموفق بود: ${err.message}`, 'error');
@@ -875,6 +951,7 @@
         ovTile('سرورها', servers.length, down ? `${fmtNum(down)} اتصال خطا` : (unchecked ? `${fmtNum(unchecked)} بررسی نشده` : (servers.length ? 'همه در دسترس' : 'هنوز سروری نیست')), serverTone),
         ovTile('تانل‌ها', tunnels.length, tbad ? `${fmtNum(tbad)} ناموفق` : (tbusy ? `${fmtNum(tbusy)} در حال انجام` : (tunnels.length ? `${fmtNum(tok)} سالم` : 'هنوز تانلی نیست')), tunnelTone),
         ovTile('رله‌ها', relays.length, !can('allow_relay') && !isOwner() ? 'دسترسی رله خاموش است' : (rbad ? `${fmtNum(rbad)} ناموفق` : (relays.length ? `${fmtNum(rok)} سالم` : 'هنوز رله‌ای نیست')), relayTone),
+        ovTile('کیف پول', me.wallet_balance || 0, commerce().sell_tunnels_enabled ? currencyLabel() : (isOwner() ? 'مالک بدون کسر' : 'فروش خاموش'), 'ok'),
         ovTile('عملیات', running, running ? 'در حال اجرا' : 'عملیاتی در جریان نیست', running ? 'warn' : 'ok')),
       h('section', { class: 'ov-panel' },
         h('h3', null, 'سقف استفاده'),
@@ -1181,12 +1258,286 @@
     return modes.find((m) => m.id === id) || null;
   }
 
+  function modeProto(id) {
+    return MODE_PROTO[id] || String(id || '').slice(0, 4).toUpperCase() || 'TUN';
+  }
+
   function fillSelect(sel, items, placeholder) {
     const prev = sel.value;
     const opts = [h('option', { value: '' }, placeholder)];
     for (const it of items) opts.push(h('option', { value: String(it.value) }, it.label));
     sel.replaceChildren(...opts);
     sel.value = items.some((it) => String(it.value) === prev) ? prev : '';
+  }
+
+  function groupedModes(modes, query) {
+    const q = String(query || '').trim().toLowerCase();
+    const byId = new Map((modes || []).map((m) => [m.id, m]));
+    const used = new Set();
+    const groups = [];
+    const match = (m) => {
+      if (!q) return true;
+      const proto = modeProto(m.id).toLowerCase();
+      const hay = `${m.id} ${m.label || ''} ${m.desc || ''} ${proto}`.toLowerCase();
+      return hay.includes(q);
+    };
+    for (const g of MODE_GROUPS) {
+      const items = [];
+      for (const id of g.ids) {
+        const m = byId.get(id);
+        if (!m || !match(m)) continue;
+        items.push(m);
+        used.add(id);
+      }
+      if (items.length) groups.push({ id: g.id, title: g.title, items });
+    }
+    const rest = [];
+    for (const m of modes || []) {
+      if (used.has(m.id) || !match(m)) continue;
+      rest.push(m);
+    }
+    if (rest.length) groups.push({ id: 'other', title: 'سایر', items: rest });
+    return groups;
+  }
+
+  function ensureModePicker(selectEl) {
+    if (!selectEl) return null;
+    let mp = modePickers.get(selectEl);
+    if (mp) return mp;
+    const host = document.querySelector(`.mode-picker[data-select="${selectEl.id}"]`);
+    if (!host) return null;
+    const labelId = host.dataset.label || '';
+    const descId = host.dataset.desc || selectEl.getAttribute('aria-describedby') || '';
+    const listId = `${selectEl.id}-list`;
+    const btn = h('button', {
+      type: 'button',
+      class: 'mode-picker-trigger is-placeholder',
+      id: `${selectEl.id}-btn`,
+      'aria-haspopup': 'listbox',
+      'aria-expanded': 'false',
+      'aria-controls': listId,
+    });
+    if (labelId) btn.setAttribute('aria-labelledby', `${labelId} ${btn.id}`);
+    const protoEl = h('span', { class: 'mode-proto', hidden: true }, '');
+    const labelEl = h('span', { class: 'mode-picker-label' }, 'انتخاب نوع تانل…');
+    const chevron = h('span', { class: 'mode-picker-chevron', 'aria-hidden': 'true' });
+    btn.append(protoEl, labelEl, chevron);
+
+    const panel = h('div', { class: 'mode-picker-panel', hidden: true });
+    const search = h('input', {
+      type: 'search',
+      class: 'mode-picker-search',
+      placeholder: 'جستجو نام، پروتکل یا توضیح…',
+      autocomplete: 'off',
+      'aria-label': 'جستجوی نوع تانل',
+    });
+    const list = h('div', {
+      class: 'mode-picker-list',
+      id: listId,
+      role: 'listbox',
+      'aria-label': 'نوع تانل',
+    });
+    panel.append(search, list);
+    host.replaceChildren(btn, panel);
+
+    mp = {
+      select: selectEl,
+      host,
+      btn,
+      protoEl,
+      labelEl,
+      panel,
+      search,
+      list,
+      open: false,
+      active: -1,
+      flat: [],
+      query: '',
+      placeholder: 'انتخاب نوع تانل…',
+    };
+    modePickers.set(selectEl, mp);
+
+    const close = () => {
+      if (!mp.open) return;
+      mp.open = false;
+      mp.panel.hidden = true;
+      mp.btn.setAttribute('aria-expanded', 'false');
+      mp.active = -1;
+    };
+    const open = () => {
+      if (mp.btn.disabled) return;
+      mp.open = true;
+      mp.panel.hidden = false;
+      mp.btn.setAttribute('aria-expanded', 'true');
+      mp.query = '';
+      mp.search.value = '';
+      paintOptions();
+      requestAnimationFrame(() => {
+        try { mp.search.focus(); } catch (_) { /* ignore */ }
+      });
+    };
+    const toggle = () => (mp.open ? close() : open());
+
+    const paintTrigger = () => {
+      const id = mp.select.value;
+      const m = id ? modeInfo(id) : null;
+      const opt = id ? Array.from(mp.select.options).find((o) => o.value === id) : null;
+      if (!m && !opt) {
+        mp.protoEl.hidden = true;
+        mp.protoEl.textContent = '';
+        mp.labelEl.textContent = mp.placeholder;
+        mp.btn.classList.add('is-placeholder');
+        return;
+      }
+      const label = (m && m.label) || (opt && opt.textContent) || id;
+      mp.protoEl.hidden = false;
+      mp.protoEl.textContent = modeProto(id);
+      mp.labelEl.textContent = label;
+      mp.btn.classList.remove('is-placeholder');
+    };
+
+    const setActive = (idx) => {
+      mp.active = idx;
+      const nodes = mp.list.querySelectorAll('.mode-picker-option');
+      nodes.forEach((el, i) => {
+        el.classList.toggle('is-active', i === idx);
+        if (i === idx) {
+          el.setAttribute('aria-selected', el.classList.contains('is-selected') ? 'true' : 'false');
+          try { el.scrollIntoView({ block: 'nearest' }); } catch (_) { /* ignore */ }
+        }
+      });
+    };
+
+    const choose = (id) => {
+      if (mp.select.value !== id) {
+        mp.select.value = id;
+        mp.select.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        paintTrigger();
+      }
+      close();
+      try { mp.btn.focus(); } catch (_) { /* ignore */ }
+    };
+
+    const paintOptions = () => {
+      const modes = (state.info && Array.isArray(state.info.modes)) ? state.info.modes : [];
+      const groups = groupedModes(modes, mp.query);
+      mp.flat = [];
+      const nodes = [];
+      if (!modes.length) {
+        nodes.push(h('p', { class: 'mode-picker-empty' }, 'در حال بارگذاری انواع تانل…'));
+      } else if (!groups.length) {
+        nodes.push(h('p', { class: 'mode-picker-empty' }, 'نتیجه‌ای پیدا نشد.'));
+      } else {
+        for (const g of groups) {
+          const opts = g.items.map((m) => {
+            const idx = mp.flat.length;
+            mp.flat.push(m);
+            const selected = mp.select.value === m.id;
+            const optBtn = h('button', {
+              type: 'button',
+              class: `mode-picker-option${selected ? ' is-selected' : ''}`,
+              role: 'option',
+              id: `${selectEl.id}-opt-${m.id}`,
+              'aria-selected': selected ? 'true' : 'false',
+              dataset: { id: m.id, index: String(idx) },
+            },
+              h('span', { class: 'mode-proto' }, modeProto(m.id)),
+              h('span', { class: 'mode-picker-option-body' },
+                h('span', { class: 'mode-picker-option-title' }, m.label || m.id),
+                m.desc ? h('span', { class: 'mode-picker-option-desc' }, m.desc) : null));
+            optBtn.addEventListener('click', (e) => {
+              e.preventDefault();
+              choose(m.id);
+            });
+            optBtn.addEventListener('mousemove', () => setActive(idx));
+            return optBtn;
+          });
+          nodes.push(h('div', { class: 'mode-picker-group', role: 'group', 'aria-label': g.title },
+            h('p', { class: 'mode-picker-group-title' }, g.title),
+            opts));
+        }
+      }
+      mp.list.replaceChildren(...nodes);
+      if (mp.flat.length) {
+        const cur = mp.flat.findIndex((m) => m.id === mp.select.value);
+        setActive(cur >= 0 ? cur : 0);
+      } else {
+        mp.active = -1;
+      }
+    };
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggle();
+    });
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (!mp.open) open();
+        else if (e.key === 'ArrowDown') setActive(Math.min(mp.flat.length - 1, Math.max(0, mp.active + 1)));
+      } else if (e.key === 'Escape') {
+        close();
+      }
+    });
+    search.addEventListener('input', () => {
+      mp.query = search.value;
+      paintOptions();
+    });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive(Math.min(mp.flat.length - 1, Math.max(0, mp.active + 1)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive(Math.max(0, mp.active - 1));
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        setActive(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        setActive(mp.flat.length - 1);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (mp.active >= 0 && mp.flat[mp.active]) choose(mp.flat[mp.active].id);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+        try { mp.btn.focus(); } catch (_) { /* ignore */ }
+      }
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (!mp.open) return;
+      if (mp.host.contains(e.target)) return;
+      close();
+    });
+    selectEl.addEventListener('change', paintTrigger);
+    selectEl.addEventListener('invalid', (e) => {
+      e.preventDefault();
+      mp.btn.focus();
+      mp.btn.classList.add('is-invalid');
+      if (!mp.open) open();
+    });
+    selectEl.addEventListener('input', () => mp.btn.classList.remove('is-invalid'));
+    selectEl.addEventListener('change', () => mp.btn.classList.remove('is-invalid'));
+
+    mp.refresh = () => {
+      const ph = mp.select.options[0] && !mp.select.options[0].value
+        ? mp.select.options[0].textContent
+        : 'انتخاب نوع تانل…';
+      mp.placeholder = ph || 'انتخاب نوع تانل…';
+      mp.btn.disabled = !!mp.select.disabled;
+      paintTrigger();
+      if (mp.open) paintOptions();
+    };
+    mp.close = close;
+    mp.refresh();
+    return mp;
+  }
+
+  function syncModePicker(selectEl) {
+    const mp = ensureModePicker(selectEl);
+    if (mp) mp.refresh();
   }
 
   function selectedUsers() {
@@ -1238,6 +1589,7 @@
     if (modes) fillSelect(modeSel, modes.map((m) => ({ value: m.id, label: m.label || m.id })), 'انتخاب نوع تانل…');
     else fillSelect(modeSel, [], 'در حال بارگذاری…');
     modeSel.disabled = !modes;
+    syncModePicker(modeSel);
 
     const servers = lists.servers.data;
     const opt = (s) => ({ value: s.id, label: `${s.name} (${s.host})` });
@@ -1254,6 +1606,8 @@
     const direct = canDirect && $('#tf-direct') && $('#tf-direct').checked;
     $('#tf-submit').disabled = !modes || !kharej.length || (!direct && !iran.length);
     updateModeDesc();
+    updateModePriceHint();
+    fillDepositModes();
   }
 
   /* Returns the spoof options object, or a Persian error message. */
@@ -1406,6 +1760,12 @@
     btn.textContent = 'در حال ارسال…';
     try {
       const r = await api('POST', '/api/tunnels', payload);
+      if (r && r.charged) {
+        if (state.me) state.me.wallet_balance = r.wallet_balance;
+        toast(`هزینه تانل (${fmtMoney(r.charged)}) از کیف پول کم شد.`, 'info');
+        paintWalletChip();
+        loadWallet(true);
+      }
       startedJob(r, 'ساخت تانل آغاز شد.');
       load('tunnels');
     } catch (err) {
@@ -2276,6 +2636,8 @@
     }
   }
 
+  const VPN_SAFE_NOTE = 'این مشخصات را جای امن نگه دارید؛ دوباره از نصب‌کننده گرفته نمی‌شود مگر در لاگ.';
+
   function hideVpnCreds() {
     const box = $('#vpn-creds');
     if (!box) return;
@@ -2284,11 +2646,58 @@
     if (fields) fields.replaceChildren();
     const note = $('#vpn-creds-note');
     if (note) {
-      note.hidden = true;
-      note.textContent = '';
+      note.hidden = false;
+      note.textContent = VPN_SAFE_NOTE;
     }
     const label = $('#vpn-creds-label');
     if (label) label.textContent = '';
+    const server = $('#vpn-creds-server');
+    if (server) {
+      server.hidden = true;
+      server.textContent = '';
+    }
+    const mark = $('#vpn-creds-mark');
+    if (mark) mark.textContent = 'VPN';
+    const copyAll = $('#vpn-creds-copy-all');
+    if (copyAll) copyAll.onclick = null;
+  }
+
+  function vpnSlipRow(title, value, opts) {
+    const o = opts || {};
+    const actions = [];
+    let revealed = !!o.reveal;
+    const valueEl = o.href
+      ? h('a', { href: o.href, target: '_blank', rel: 'noopener noreferrer', dir: 'ltr', class: 'vpn-slip-value' }, value)
+      : h('code', { dir: 'ltr', class: 'vpn-slip-value' }, o.masked && !revealed ? '••••••••••••' : value);
+    const box = h('div', { class: 'vpn-slip-valuebox' }, valueEl);
+    if (o.masked) {
+      const toggle = h('button', {
+        type: 'button',
+        class: 'btn btn-sm btn-ghost',
+        'aria-label': 'نمایش یا پنهان کردن رمز',
+      }, 'نمایش');
+      toggle.addEventListener('click', () => {
+        revealed = !revealed;
+        valueEl.textContent = revealed ? value : '••••••••••••';
+        toggle.textContent = revealed ? 'پنهان' : 'نمایش';
+      });
+      actions.push(toggle);
+    }
+    if (o.href) {
+      actions.push(h('a', {
+        class: 'btn btn-sm btn-ghost',
+        href: o.href,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      }, 'باز کردن'));
+    }
+    const copy = h('button', { type: 'button', class: 'btn btn-sm' }, 'کپی');
+    copy.addEventListener('click', () => copyVpnField(value));
+    actions.push(copy);
+    return h('div', { class: 'vpn-slip-row' },
+      h('span', { class: 'vpn-slip-k' }, `${title} :`),
+      box,
+      h('div', { class: 'vpn-slip-actions' }, ...actions));
   }
 
   function renderVpnCreds(creds) {
@@ -2298,37 +2707,60 @@
       box.hidden = true;
       return;
     }
+    const title = creds.label || 'پنل VPN';
     const labelEl = $('#vpn-creds-label');
-    if (labelEl) labelEl.textContent = creds.label || 'پنل VPN';
-    const rows = [];
-    const add = (title, value, href) => {
-      if (!value) return;
-      const valEl = href
-        ? h('a', { href, target: '_blank', rel: 'noopener noreferrer', dir: 'ltr', class: 'vpn-creds-value' }, value)
-        : h('span', { dir: 'ltr', class: 'vpn-creds-value' }, value);
-      const copy = h('button', { type: 'button', class: 'btn btn-sm btn-ghost' }, 'کپی');
-      copy.addEventListener('click', () => copyVpnField(value));
-      rows.push(h('div', { class: 'vpn-creds-row' },
-        h('span', { class: 'vpn-creds-k' }, `${title} :`),
-        valEl,
-        copy));
-    };
-    add('آدرس پنل', creds.url, /^https?:\/\//.test(creds.url || '') ? creds.url : '');
-    add('نام کاربری', creds.username);
-    add(creds.kind === 'pasarguard' ? 'کلید موقت' : 'رمز عبور', creds.password);
-    const fields = $('#vpn-creds-fields');
-    if (fields) fields.replaceChildren(...rows);
-    const note = $('#vpn-creds-note');
-    if (note) {
-      if (creds.note) {
-        note.hidden = false;
-        note.textContent = creds.note;
+    if (labelEl) labelEl.textContent = title;
+    const mark = $('#vpn-creds-mark');
+    if (mark) mark.textContent = VPN_KIND_MARK[creds.kind] || 'VPN';
+    const serverLine = (state.vpnCredsCtx && state.vpnCredsCtx.server)
+      || (($('#vpn-mon-sub') && $('#vpn-mon-sub').textContent) || '').trim();
+    const serverEl = $('#vpn-creds-server');
+    if (serverEl) {
+      if (serverLine) {
+        serverEl.hidden = false;
+        serverEl.textContent = serverLine;
       } else {
-        note.hidden = true;
-        note.textContent = '';
+        serverEl.hidden = true;
+        serverEl.textContent = '';
       }
     }
+
+    const passLabel = creds.kind === 'pasarguard' ? 'کلید موقت' : 'رمز عبور';
+    const rows = [];
+    if (creds.url) {
+      rows.push(vpnSlipRow('آدرس پنل', creds.url, {
+        href: /^https?:\/\//.test(creds.url) ? creds.url : '',
+      }));
+    }
+    if (creds.username) rows.push(vpnSlipRow('نام کاربری', creds.username));
+    if (creds.password) rows.push(vpnSlipRow(passLabel, creds.password, { masked: true }));
+
+    const fields = $('#vpn-creds-fields');
+    if (fields) fields.replaceChildren(...rows);
+
+    const note = $('#vpn-creds-note');
+    if (note) {
+      note.hidden = false;
+      note.textContent = creds.note
+        ? `${VPN_SAFE_NOTE} ${creds.note}`
+        : VPN_SAFE_NOTE;
+    }
+
+    const copyLines = [`پنل: ${title}`];
+    if (serverLine) copyLines.push(`سرور: ${serverLine}`);
+    if (creds.url) copyLines.push(`آدرس: ${creds.url}`);
+    if (creds.username) copyLines.push(`کاربر: ${creds.username}`);
+    if (creds.password) copyLines.push(`${passLabel}: ${creds.password}`);
+    const copyAll = $('#vpn-creds-copy-all');
+    if (copyAll) {
+      copyAll.onclick = () => copyVpnField(copyLines.join('\n'));
+    }
+
+    const wasHidden = box.hidden;
     box.hidden = false;
+    if (wasHidden) {
+      try { box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_) { /* ignore */ }
+    }
   }
 
   function refreshVpnCreds(text) {
@@ -2357,6 +2789,7 @@
     box.classList.remove('is-ok', 'is-failed');
     box.classList.add('is-running');
     hideVpnCreds();
+    state.vpnCredsCtx = { server: subtitle || '' };
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     const jv = {
@@ -2607,6 +3040,10 @@
     const days = u.days_left;
     const status = !u.enabled ? ['err', 'غیرفعال'] : (days === 0 ? ['warn', 'منقضی'] : ['ok', 'فعال']);
 
+    const walletBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'کیف پول');
+    if (walletBtn) walletBtn.addEventListener('click', () => openWalletAdjust(u));
+    const overviewBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'وضعیت کامل');
+    if (overviewBtn) overviewBtn.addEventListener('click', () => openUserOverview(u));
     const extendBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'تمدید روز');
     if (extendBtn) extendBtn.addEventListener('click', () => openExtendUser(u));
 
@@ -2684,14 +3121,15 @@
       h('div', { class: 'user-stats' },
         stat('سرور', limitText(usage.servers || 0, u.max_servers, '')),
         stat('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
-        stat('رله', limitText(usage.relays || 0, u.max_relays, ''))),
+        stat('رله', limitText(usage.relays || 0, u.max_relays, '')),
+        owner ? null : stat('کیف پول', fmtNum(u.wallet_balance || 0))),
       h('div', { class: 'user-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
         perm(!!u.allow_vpn, 'VPN'),
         perm(!!u.allow_relay, 'رله'),
         perm(!!u.allow_os_update, 'آپدیت'),
         perm(u.allow_term !== false, 'ترمینال')),
       h('div', { class: 'user-facts' }, facts),
-      h('div', { class: 'card-actions' }, extendBtn, toggleBtn, termBtn, pwBtn, delBtn));
+      h('div', { class: 'card-actions' }, overviewBtn, walletBtn, extendBtn, toggleBtn, termBtn, pwBtn, delBtn));
   }
 
   function openExtendUser(u) {
@@ -2765,6 +3203,867 @@
       if ($('#uf-term')) $('#uf-term').checked = true;
       if (r && r.password) showOnceSecret(`رمز «${username}»`, r.password);
       await load('users');
+    });
+  }
+
+  /* ---------- orders ---------- */
+
+  function fillOrderModeSelect() {
+    const sel = $('#of-mode');
+    if (!sel) return;
+    const modes = (state.info && Array.isArray(state.info.modes)) ? state.info.modes : [];
+    fillSelect(sel, modes.map((m) => ({ value: m.id, label: m.label || m.id })), 'انتخاب نوع تانل…');
+    syncModePicker(sel);
+  }
+
+  function orderServerPayload(prefix) {
+    const include = !!$(`#of-${prefix}-access`).checked;
+    const out = {
+      name: $(`#of-${prefix}-name`).value.trim(),
+      host: $(`#of-${prefix}-host`).value.trim(),
+      port: Number($(`#of-${prefix}-port`).value || 22),
+      username: $(`#of-${prefix}-user`).value.trim() || 'root',
+      auth_type: 'password',
+      include_access: include,
+    };
+    if (include) {
+      out.password = $(`#of-${prefix}-pass`).value || null;
+      out.sudo_password = $(`#of-${prefix}-sudo`).value || null;
+    }
+    return out;
+  }
+
+  function syncOrderAccess(prefix) {
+    const box = $(`#of-${prefix}-access`);
+    const secrets = $(`#of-${prefix}-secrets`);
+    if (!box || !secrets) return;
+    secrets.hidden = !box.checked;
+  }
+
+  function bindOrderAccessToggle(prefix) {
+    const box = $(`#of-${prefix}-access`);
+    if (!box || box.dataset.bound) return;
+    box.dataset.bound = '1';
+    box.addEventListener('change', () => syncOrderAccess(prefix));
+    syncOrderAccess(prefix);
+  }
+
+
+  /* ---------- commerce helpers ---------- */
+
+  function commerce() {
+    return (state.me && state.me.commerce) || (walletState.data && walletState.data.commerce) || {};
+  }
+
+  function currencyLabel() {
+    return commerce().currency || 'تومان';
+  }
+
+  function fmtMoney(n) {
+    const v = Number(n) || 0;
+    return `${fmtNum(v)} ${currencyLabel()}`;
+  }
+
+  function modePrice(mode) {
+    const prices = commerce().tunnel_prices || {};
+    if (!commerce().sell_tunnels_enabled) return 0;
+    try { return Math.max(0, Number(prices[mode]) || 0); } catch (_) { return 0; }
+  }
+
+  function paintWalletChip() {
+    const quotaEl = $('#hdr-quota');
+    if (!quotaEl || !state.me) return;
+    const me = state.me;
+    if (me.role === 'owner') return;
+    const bits = [];
+    if (me.days_left != null) bits.push(`${fmtNum(me.days_left)} روز مانده`);
+    const lim = (me.limits || {});
+    const use = (me.usage || {});
+    bits.push(limitText(use.servers || 0, lim.max_servers, 'سرور'));
+    if (commerce().sell_tunnels_enabled || (me.wallet_balance != null && me.wallet_balance > 0)) {
+      bits.push(`کیف پول ${fmtMoney(me.wallet_balance || 0)}`);
+    }
+    quotaEl.textContent = bits.join(' · ');
+    quotaEl.hidden = !bits.length;
+  }
+
+  function updateModePriceHint() {
+    const el = $('#tf-mode-price');
+    if (!el) return;
+    const mode = $('#tf-mode') && $('#tf-mode').value;
+    const price = mode ? modePrice(mode) : 0;
+    if (!mode || !commerce().sell_tunnels_enabled || isOwner() || price <= 0) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    const bal = (state.me && state.me.wallet_balance) || 0;
+    el.hidden = false;
+    el.textContent = bal >= price
+      ? `هزینه این تانل: ${fmtMoney(price)} — موجودی کافی است.`
+      : `هزینه این تانل: ${fmtMoney(price)} — موجودی کافی نیست (الان ${fmtMoney(bal)}). از کیف پول واریز کنید.`;
+  }
+
+  async function loadWallet(silent) {
+    if (!state.loggedIn) return;
+    if (walletState.loading) return walletState.loading;
+    walletState.loading = (async () => {
+      try {
+        const data = await api('GET', '/api/wallet');
+        if (!state.loggedIn) return;
+        walletState.data = data;
+        if (state.me) {
+          state.me.wallet_balance = data.balance;
+          state.me.commerce = data.commerce || state.me.commerce;
+        }
+        renderWallet();
+        paintWalletChip();
+        updateModePriceHint();
+        if (isOwner()) renderOwnerDeposits(data);
+      } catch (err) {
+        if (err.status === 401) return;
+        if (!silent) toast(err.message || NET_ERR, 'error');
+      } finally {
+        walletState.loading = null;
+      }
+    })();
+    return walletState.loading;
+  }
+
+  function renderWallet() {
+    const data = walletState.data;
+    const amount = $('#wallet-amount');
+    const cur = $('#wallet-currency-label');
+    if (amount) amount.textContent = fmtNum((data && data.balance) || (state.me && state.me.wallet_balance) || 0);
+    if (cur) cur.textContent = currencyLabel();
+    const payInfo = $('#deposit-pay-info');
+    const pay = (data && data.commerce && data.commerce.payment) || commerce().payment || {};
+    if (payInfo) {
+      const bits = [];
+      if (pay.card) bits.push(`کارت: ${pay.card}`);
+      if (pay.wallet_address) bits.push(`ولت: ${pay.wallet_address}`);
+      if (pay.note) bits.push(pay.note);
+      payInfo.textContent = bits.length
+        ? bits.join(' — ')
+        : 'مالک هنوز کارت یا ولت ثبت نکرده است. بعد از ثبت می‌توانید واریز کنید.';
+    }
+    const depCard = $('#deposit-card');
+    if (depCard) depCard.hidden = isOwner();
+    fillDepositModes();
+    const myDep = $('#my-deposits');
+    if (myDep) {
+      const rows = (data && data.deposits) || [];
+      if (!rows.length) myDep.replaceChildren(emptyState('درخواست واریزی ندارید.', 'بعد از واریز، کد پیگیری را اینجا بفرستید.'));
+      else myDep.replaceChildren(h('div', { class: 'cards' }, rows.map(depositCard)));
+    }
+    const led = $('#wallet-ledger');
+    if (led) {
+      const rows = (data && data.ledger) || [];
+      if (!rows.length) led.replaceChildren(emptyState('گردش حسابی نیست.', 'بعد از واریز یا ساخت تانل اینجا دیده می‌شود.'));
+      else led.replaceChildren(h('div', { class: 'list-rows' }, rows.map(ledgerRow)));
+    }
+  }
+
+  function fillDepositModes() {
+    const sel = $('#df-mode');
+    if (!sel) return;
+    const prev = sel.value;
+    const modes = (state.info && Array.isArray(state.info.modes)) ? state.info.modes : [];
+    const opts = [h('option', { value: '' }, '—')];
+    for (const m of modes) {
+      const p = modePrice(m.id);
+      const label = p > 0 ? `${m.label || m.id} (${fmtMoney(p)})` : (m.label || m.id);
+      opts.push(h('option', { value: m.id }, label));
+    }
+    sel.replaceChildren(...opts);
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  }
+
+  function depositCard(d) {
+    const st = DEPOSIT_STATUS[d.status] || ['muted', d.status || '?'];
+    const method = d.method === 'crypto' ? 'ولت / رمزارز' : 'کارت به کارت';
+    const mode = d.tunnel_mode ? (modeInfo(d.tunnel_mode) || {}).label || d.tunnel_mode : null;
+    const actions = [];
+    if (isOwner() && d.status === 'pending') {
+      const okBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'تأیید و شارژ');
+      const noBtn = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'رد');
+      okBtn.addEventListener('click', () => act(okBtn, async () => {
+        await api('POST', `/api/wallet/deposits/${enc(d.id)}/decide`, { action: 'approve' });
+        toast(`واریز #${d.id} تأیید و موجودی شارژ شد.`, 'success');
+        await Promise.all([loadWallet(), isOwner() ? loadOwnerDeposits() : Promise.resolve(), load('users')]);
+        await refreshMe();
+      }));
+      noBtn.addEventListener('click', async () => {
+        const note = window.prompt('دلیل رد (اختیاری):') || '';
+        act(noBtn, async () => {
+          await api('POST', `/api/wallet/deposits/${enc(d.id)}/decide`, { action: 'reject', note });
+          toast(`واریز #${d.id} رد شد.`, 'info');
+          await Promise.all([loadWallet(), loadOwnerDeposits()]);
+        });
+      });
+      actions.push(okBtn, noBtn);
+    }
+    return h('article', { class: `card svc-slip is-${st[0] === 'ok' ? 'ok' : (st[0] === 'err' ? 'bad' : (st[0] === 'warn' ? 'warn' : 'muted'))}` },
+      h('div', { class: 'svc-slip-top' },
+        h('div', null,
+          h('p', { class: 'svc-kicker' }, `واریز #${d.id}`),
+          h('h4', { class: 'svc-title' }, fmtMoney(d.amount)),
+          h('div', { class: 'svc-meta' },
+            h('span', null, 'روش: ', h('b', null, method)),
+            h('span', null, 'کد: ', h('b', { dir: 'ltr' }, d.tracking_code || '—')),
+            isOwner() ? h('span', null, 'مشتری: ', h('b', { dir: 'ltr' }, d.username || '—')) : null,
+            mode ? h('span', null, 'تانل: ', h('b', null, mode)) : null)),
+        badge(st[0], st[1])),
+      d.note ? h('p', { class: 'svc-msg' }, d.note) : null,
+      d.owner_note ? h('p', { class: 'svc-msg' }, `یادداشت مالک: ${d.owner_note}`) : null,
+      h('div', { class: 'svc-meta' }, h('span', null, fmtTime(d.created_at))),
+      actions.length ? h('div', { class: 'svc-actions' }, ...actions) : null);
+  }
+
+  function ledgerRow(r) {
+    const amt = Number(r.amount) || 0;
+    const sign = amt >= 0 ? '+' : '';
+    return h('div', { class: 'ledger-row' },
+      h('div', { class: 'ledger-main' },
+        h('strong', null, LEDGER_KIND[r.kind] || r.kind),
+        r.note ? h('span', { class: 'muted' }, r.note) : null),
+      h('div', { class: 'ledger-side' },
+        h('bdi', { class: amt >= 0 ? 'ledger-plus' : 'ledger-minus', dir: 'ltr' }, `${sign}${fmtNum(amt)}`),
+        h('span', { class: 'muted' }, fmtTime(r.created_at))));
+  }
+
+  async function loadOwnerDeposits() {
+    if (!isOwner()) return;
+    try {
+      const rows = await api('GET', '/api/wallet/deposits');
+      renderOwnerDepositsList(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      if (err.status !== 401) toast(err.message || NET_ERR, 'error');
+    }
+  }
+
+  function renderOwnerDeposits(data) {
+    if (!isOwner()) return;
+    const pending = ((data && data.deposits) || []).filter((d) => d.status === 'pending');
+    if (pending.length) renderOwnerDepositsList(pending);
+    else loadOwnerDeposits();
+  }
+
+  function renderOwnerDepositsList(rows) {
+    const box = $('#owner-deposits');
+    if (!box) return;
+    if (!rows.length) {
+      box.replaceChildren(emptyState('درخواست واریز بازی نیست.', 'وقتی مشتری واریز کند اینجا می‌آید.'));
+      return;
+    }
+    box.replaceChildren(h('div', { class: 'cards' }, rows.map(depositCard)));
+  }
+
+  async function onDepositSubmit(e) {
+    e.preventDefault();
+    const errBox = $('#df-error');
+    hideErr(errBox);
+    const amount = Number($('#df-amount').value);
+    const method = $('#df-method').value;
+    const tracking = ($('#df-track').value || '').trim();
+    const note = ($('#df-note').value || '').trim();
+    const tunnel_mode = ($('#df-mode').value || '').trim() || null;
+    if (!Number.isInteger(amount) || amount < 1000) return showErr(errBox, 'مبلغ باید حداقل ۱۰۰۰ باشد.');
+    if (!tracking || tracking.length < 3) return showErr(errBox, 'کد پیگیری را وارد کنید.');
+    act($('#df-submit'), async () => {
+      await api('POST', '/api/wallet/deposits', { amount, method, tracking_code: tracking, note, tunnel_mode });
+      toast('درخواست واریز ارسال شد. بعد از تأیید مالک موجودی شارژ می‌شود.', 'success');
+      $('#deposit-form').reset();
+      await loadWallet();
+    });
+  }
+
+  function fillPriceGrid(prices) {
+    const box = $('#price-grid');
+    if (!box) return;
+    const modes = (state.info && Array.isArray(state.info.modes)) ? state.info.modes : [];
+    const map = prices || commerce().tunnel_prices || {};
+    box.replaceChildren(...modes.map((m) => {
+      const inp = h('input', {
+        type: 'number', dir: 'ltr', min: '0', step: '1000',
+        'data-mode': m.id, value: String(map[m.id] != null ? map[m.id] : 0),
+      });
+      return h('div', { class: 'price-item' },
+        h('label', null, m.label || m.id),
+        inp);
+    }));
+  }
+
+  async function loadCommerceForm() {
+    if (!isOwner()) return;
+    try {
+      const s = await api('GET', '/api/settings');
+      if (state.me) state.me.commerce = {
+        sell_tunnels_enabled: s.sell_tunnels_enabled,
+        register_enabled: s.register_enabled,
+        currency: s.currency,
+        payment: s.payment,
+        tunnel_prices: s.tunnel_prices,
+      };
+      const sell = $('#set-sell-enabled');
+      const reg = $('#set-register-enabled');
+      if (sell) sell.checked = !!s.sell_tunnels_enabled;
+      if (reg) reg.checked = !!s.register_enabled;
+      if ($('#pay-card')) $('#pay-card').value = (s.payment && s.payment.card) || '';
+      if ($('#pay-wallet')) $('#pay-wallet').value = (s.payment && s.payment.wallet_address) || '';
+      if ($('#pay-note')) $('#pay-note').value = (s.payment && s.payment.note) || '';
+      if ($('#pay-currency')) $('#pay-currency').value = s.currency || 'تومان';
+      fillPriceGrid(s.tunnel_prices || {});
+      await loadOwnerDeposits();
+    } catch (err) {
+      if (err.status !== 401) toast(err.message || NET_ERR, 'error');
+    }
+  }
+
+  async function onCommerceSubmit(e) {
+    e.preventDefault();
+    const errBox = $('#commerce-error');
+    hideErr(errBox);
+    const prices = {};
+    for (const inp of document.querySelectorAll('#price-grid input[data-mode]')) {
+      const n = Number(inp.value || 0);
+      if (!Number.isFinite(n) || n < 0) return showErr(errBox, 'قیمت‌ها باید عدد صفر یا بزرگ‌تر باشند.');
+      prices[inp.getAttribute('data-mode')] = Math.floor(n);
+    }
+    act($('#commerce-submit'), async () => {
+      const r = await api('PATCH', '/api/settings', {
+        sell_tunnels_enabled: $('#set-sell-enabled').checked,
+        register_enabled: $('#set-register-enabled').checked,
+        payment_card: $('#pay-card').value.trim(),
+        payment_wallet_address: $('#pay-wallet').value.trim(),
+        payment_note: $('#pay-note').value.trim(),
+        wallet_currency: $('#pay-currency').value.trim() || 'تومان',
+        tunnel_prices: prices,
+      });
+      if (state.me) {
+        state.me.commerce = {
+          sell_tunnels_enabled: r.sell_tunnels_enabled,
+          register_enabled: r.register_enabled,
+          currency: r.currency,
+          payment: r.payment,
+          tunnel_prices: r.tunnel_prices,
+        };
+      }
+      toast('تنظیمات فروش ذخیره شد.', 'success');
+      updateModePriceHint();
+      fillDepositModes();
+    });
+  }
+
+  async function refreshRegisterGate() {
+    const link = $('#login-to-register');
+    try {
+      const c = await api('GET', '/api/commerce');
+      if (link) link.hidden = !c.register_enabled;
+      if (!c.register_enabled) {
+        const rf = $('#register-form');
+        if (rf) rf.hidden = true;
+        const lf = $('#login-form');
+        if (lf) lf.hidden = false;
+      }
+    } catch (_) {
+      if (link) link.hidden = true;
+    }
+  }
+
+  function showRegisterView() {
+    $('#login-form').hidden = true;
+    $('#register-form').hidden = false;
+    hideErr($('#register-error'));
+    $('#reg-user').focus();
+  }
+
+  function showLoginViewOnly() {
+    $('#register-form').hidden = true;
+    $('#login-form').hidden = false;
+    hideErr($('#login-error'));
+    $('#login-user').focus();
+  }
+
+  async function onRegister(e) {
+    e.preventDefault();
+    const errBox = $('#register-error');
+    const btn = $('#register-btn');
+    hideErr(errBox);
+    const username = ($('#reg-user').value || '').trim().toLowerCase();
+    const password = $('#reg-pass').value || '';
+    if (username.length < 3) return showErr(errBox, 'نام کاربری حداقل ۳ کاراکتر باشد.');
+    if (password.length < 10) return showErr(errBox, 'رمز عبور حداقل ۱۰ کاراکتر باشد.');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'در حال ساخت…';
+    try {
+      const r = await api('POST', '/api/register', { username, password });
+      if (r && r.csrf) state.csrf = r.csrf;
+      await enterApp();
+      toast('حساب ساخته شد. برای ساخت تانل از کیف پول موجودی بگیرید.', 'success');
+    } catch (err) {
+      showErr(errBox, err.message || NET_ERR);
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'ساخت حساب';
+    }
+  }
+
+  function openWalletAdjust(u) {
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const amount = h('input', { type: 'number', dir: 'ltr', min: '1', required: true, value: '100000' });
+    const note = h('input', { type: 'text', maxlength: '500', placeholder: 'یادداشت اختیاری' });
+    const dirSel = h('select', null,
+      h('option', { value: 'credit' }, 'افزایش موجودی'),
+      h('option', { value: 'debit' }, 'کاهش موجودی'));
+    const form = h('form', { class: 'form', novalidate: true },
+      errBox,
+      field('عملیات', dirSel),
+      field('مبلغ', amount),
+      field('یادداشت', note),
+      h('p', { class: 'muted' }, `موجودی فعلی: ${fmtMoney(u.wallet_balance || 0)}`));
+    form.id = uid('wa');
+    const saveBtn = h('button', { type: 'submit', class: 'btn btn-primary', form: form.id }, 'اعمال');
+    const m = openModal({
+      title: `کیف پول «${u.username}»`,
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const n = Number(amount.value);
+      if (!Number.isInteger(n) || n < 1) return showErr(errBox, 'مبلغ باید عدد مثبت باشد.');
+      act(saveBtn, async () => {
+        await api('POST', `/api/users/${enc(u.id)}/wallet`, {
+          amount: n,
+          direction: dirSel.value,
+          note: (note.value || '').trim(),
+        });
+        toast('موجودی به‌روز شد.', 'success');
+        m.close();
+        await load('users');
+      });
+    });
+  }
+
+  async function openUserOverview(u) {
+    const body = h('div', { class: 'user-overview' }, loadingState());
+    const m = openModal({
+      title: `وضعیت کامل «${u.username}»`,
+      body,
+      footer: [h('button', { type: 'button', class: 'btn btn-primary', onclick: () => m.close() }, 'بستن')],
+    });
+    try {
+      const data = await api('GET', `/api/users/${enc(u.id)}/overview`);
+      const user = data.user || u;
+      body.replaceChildren(
+        h('div', { class: 'user-stats' },
+          h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtMoney(user.wallet_balance || 0)), h('span', { class: 'user-stat-k' }, 'کیف پول')),
+          h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtNum((data.servers || []).length)), h('span', { class: 'user-stat-k' }, 'سرور')),
+          h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtNum((data.tunnels || []).length)), h('span', { class: 'user-stat-k' }, 'تانل')),
+          h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtNum((data.relays || []).length)), h('span', { class: 'user-stat-k' }, 'رله'))),
+        h('h4', { class: 'sub-head' }, 'سرورها'),
+        h('div', { class: 'list-rows' }, (data.servers || []).length
+          ? data.servers.map((s) => h('div', { class: 'ledger-row' }, h('strong', null, s.name), h('span', { dir: 'ltr' }, `${s.role} · ${s.host}`)))
+          : [h('p', { class: 'muted' }, 'سروری نیست')]),
+        h('h4', { class: 'sub-head' }, 'تانل‌ها'),
+        h('div', { class: 'list-rows' }, (data.tunnels || []).length
+          ? data.tunnels.map((t) => h('div', { class: 'ledger-row' }, h('strong', null, t.mode), h('span', null, t.status || '')))
+          : [h('p', { class: 'muted' }, 'تانلی نیست')]),
+        h('h4', { class: 'sub-head' }, 'گردش حساب'),
+        h('div', { class: 'list-rows' }, (data.ledger || []).slice(0, 12).map(ledgerRow)));
+    } catch (err) {
+      body.replaceChildren(h('p', { class: 'form-error' }, err.message || NET_ERR));
+    }
+  }
+
+  function renderOrders() {
+    const box = $(lists.orders.el);
+    if (!box) return;
+    const data = lists.orders.data || [];
+    if (!data.length) {
+      box.replaceChildren(h('p', { class: 'ov-empty' }, isOwner() ? 'هنوز سفارشی ثبت نشده است.' : 'هنوز سفارشی نفرستاده‌اید.'));
+      return;
+    }
+    box.replaceChildren(...data.map(orderCard));
+  }
+
+  function orderTone(status) {
+    if (status === 'done' || status === 'approved') return status === 'done' ? 'ok' : 'warn';
+    if (status === 'rejected') return 'bad';
+    if (status === 'cancelled') return 'muted';
+    return 'warn';
+  }
+
+  function secretFact(label, value, copyable) {
+    if (value == null || value === '') return null;
+    const v = h('span', { class: 'svc-fact-v', dir: 'ltr' }, String(value));
+    const wrap = h('div', { class: 'svc-fact' }, h('span', { class: 'svc-fact-k' }, label), v);
+    if (copyable) {
+      const btn = h('button', { type: 'button', class: 'btn btn-sm', style: 'margin-top:.45rem' }, 'کپی');
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(String(value)).then(
+          () => toast('کپی شد.', 'success'),
+          () => toast('کپی ممکن نشد.', 'error'),
+        );
+      });
+      wrap.appendChild(btn);
+    }
+    return wrap;
+  }
+
+  function orderSideBlock(title, side) {
+    if (!side) return h('div', { class: 'svc-fact' }, h('span', { class: 'svc-fact-k' }, title), h('span', { class: 'svc-fact-v' }, '—'));
+    const facts = [
+      secretFact('نام', side.name),
+      secretFact('آدرس', `${side.host || ''}:${side.port || 22}`, true),
+      secretFact('کاربر', side.username, true),
+      secretFact('دسترسی', side.has_access ? 'ارسال شده' : 'بدون رمز'),
+    ].filter(Boolean);
+    if (isOwner() && side.has_access) {
+      facts.push(secretFact('رمز SSH', side.password, true));
+      facts.push(secretFact('کلید خصوصی', side.private_key, true));
+      facts.push(secretFact('sudo', side.sudo_password, true));
+      if (side.access_error) facts.push(secretFact('خطا', side.access_error));
+    }
+    return h('div', { class: 'svc-fact' },
+      h('span', { class: 'svc-fact-k' }, title),
+      h('div', { style: 'display:grid;gap:.45rem;margin-top:.35rem' }, ...facts));
+  }
+
+  function orderCard(o) {
+    const [kind, label] = ORDER_STATUS[o.status] || ['muted', o.status || '?'];
+    const tone = orderTone(o.status);
+    const actions = [];
+    if (!isOwner() && o.status === 'pending') {
+      const cancelBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'لغو');
+      cancelBtn.addEventListener('click', () => act(cancelBtn, async () => {
+        await api('POST', `/api/orders/${enc(o.id)}/cancel`);
+        toast('سفارش لغو شد.', 'success');
+        await load('orders');
+      }));
+      actions.push(cancelBtn);
+    }
+    if (isOwner() && o.status === 'pending') {
+      const okBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'تأیید');
+      const noBtn = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'رد');
+      okBtn.addEventListener('click', () => act(okBtn, async () => {
+        await api('POST', `/api/orders/${enc(o.id)}/decide`, { action: 'approve' });
+        toast('سفارش تأیید شد.', 'success');
+        await load('orders');
+      }));
+      noBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog({ title: 'رد سفارش', message: `سفارش #${o.id} رد شود؟`, okText: 'رد', danger: true });
+        if (!ok) return;
+        act(noBtn, async () => {
+          await api('POST', `/api/orders/${enc(o.id)}/decide`, { action: 'reject' });
+          toast('سفارش رد شد.', 'info');
+          await load('orders');
+        });
+      });
+      actions.push(okBtn, noBtn);
+    }
+    if (isOwner() && (o.status === 'approved' || o.status === 'pending')) {
+      const goBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'انجام سفارش');
+      goBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'انجام سفارش',
+          message: `تانل ${o.mode_label || o.mode} برای «${o.customer_username}» ساخته و مستقر شود؟`,
+          okText: 'شروع استقرار',
+        });
+        if (!ok) return;
+        act(goBtn, async () => {
+          const r = await api('POST', `/api/orders/${enc(o.id)}/fulfill`, {});
+          if (r && r.job_id != null) {
+            state.sessionJobs.add(String(r.job_id));
+            openJobView(r.job_id);
+          }
+          toast('استقرار سفارش شروع شد.', 'success');
+          await Promise.all([load('orders'), load('tunnels'), load('servers'), load('jobs', true)]);
+        });
+      });
+      actions.push(goBtn);
+    }
+    const meta = [
+      h('span', null, ['وضعیت ', badge(kind, label)]),
+      h('span', null, ['مشتری ', h('b', null, o.customer_username || '—')]),
+      h('span', null, ['ثبت ', h('b', null, fmtTime(o.created_at))]),
+    ];
+    if (o.tunnel_id) meta.push(h('span', null, ['تانل #', h('b', { dir: 'ltr' }, String(o.tunnel_id))]));
+    if (o.owner_note) meta.push(h('span', null, ['یادداشت مالک ', h('b', null, o.owner_note)]));
+    return h('article', { class: `svc-slip is-${tone}` },
+      h('div', { class: 'svc-slip-top' },
+        h('div', { style: 'display:flex;gap:.8rem;align-items:center;min-width:0' },
+          h('span', { class: 'svc-mark', 'aria-hidden': 'true' }, String(o.id)),
+          h('div', null,
+            h('p', { class: 'svc-kicker' }, o.mode || 'tunnel'),
+            h('h3', { class: 'svc-title' }, o.mode_label || o.mode || 'سفارش'))),
+        badge(kind, label)),
+      h('div', { class: 'svc-meta' }, ...meta),
+      o.message ? h('div', { class: 'svc-msg' }, o.message) : null,
+      h('div', { class: 'svc-grid' }, orderSideBlock('ایران', o.iran), orderSideBlock('خارج', o.kharej)),
+      actions.length ? h('div', { class: 'svc-actions' }, ...actions) : null);
+  }
+
+  async function onCreateOrder(e) {
+    e.preventDefault();
+    const errBox = $('#of-error');
+    hideErr(errBox);
+    const mode = $('#of-mode').value;
+    if (!mode) return showErr(errBox, 'نوع تانل را انتخاب کنید.');
+    const iran = orderServerPayload('iran');
+    const kharej = orderServerPayload('kharej');
+    if (!iran.name || !kharej.name) return showErr(errBox, 'نام هر دو سرور لازم است.');
+    if (!IPV4_RE.test(iran.host) || !IPV4_RE.test(kharej.host)) return showErr(errBox, 'IP هر دو سرور باید IPv4 معتبر باشد.');
+    if (iran.include_access && !iran.password) return showErr(errBox, 'رمز SSH سرور ایران را وارد کنید.');
+    if (kharej.include_access && !kharej.password) return showErr(errBox, 'رمز SSH سرور خارج را وارد کنید.');
+    const payload = {
+      mode,
+      message: $('#of-message').value.trim() || null,
+      iran,
+      kharej,
+    };
+    act($('#of-submit'), async () => {
+      await api('POST', '/api/orders', payload);
+      toast('سفارش ثبت شد.', 'success');
+      $('#order-form').reset();
+      $('#of-iran-port').value = '22';
+      $('#of-kharej-port').value = '22';
+      $('#of-iran-user').value = 'root';
+      $('#of-kharej-user').value = 'root';
+      syncOrderAccess('iran');
+      syncOrderAccess('kharej');
+      fillOrderModeSelect();
+      await load('orders');
+    });
+  }
+
+  /* ---------- tickets ---------- */
+
+  function renderTickets() {
+    const box = $(lists.tickets.el);
+    if (!box) return;
+    const data = lists.tickets.data || [];
+    if (!data.length) {
+      box.replaceChildren(h('p', { class: 'ov-empty' }, 'تیکتی نیست.'));
+      return;
+    }
+    box.replaceChildren(...data.map(ticketCard));
+  }
+
+  function ticketTone(status) {
+    if (status === 'answered') return 'ok';
+    if (status === 'closed') return 'muted';
+    return 'warn';
+  }
+
+  function ticketCard(t) {
+    const [kind, label] = TICKET_STATUS[t.status] || ['muted', t.status || '?'];
+    const btn = h('button', { type: 'button', class: `svc-slip is-${ticketTone(t.status)}`, style: 'width:100%;text-align:right;cursor:pointer' },
+      h('div', { class: 'svc-slip-top' },
+        h('div', { style: 'display:flex;gap:.8rem;align-items:center;min-width:0' },
+          h('span', { class: 'svc-mark', 'aria-hidden': 'true' }, String(t.id)),
+          h('div', null,
+            h('p', { class: 'svc-kicker' }, TICKET_CAT[t.category] || t.category),
+            h('h3', { class: 'svc-title' }, t.subject || 'تیکت'))),
+        badge(kind, label)),
+      h('div', { class: 'svc-meta' },
+        h('span', null, ['مشتری ', h('b', null, t.customer_username || '—')]),
+        h('span', null, ['پیام‌ها ', h('b', { dir: 'ltr' }, fmtNum(t.message_count || 0))]),
+        h('span', null, ['بروزرسانی ', h('b', null, fmtTime(t.updated_at))])),
+      t.last_message ? h('div', { class: 'svc-msg' }, t.last_message) : null);
+    btn.addEventListener('click', () => openTicketThread(t.id));
+    return btn;
+  }
+
+  function accessBlock(access) {
+    if (!access) return null;
+    if (!access.has_access && !access.host && !access.password && !access.panel_url) return null;
+    const rows = [];
+    const add = (k, v, mono) => {
+      if (v == null || v === '') return;
+      rows.push(h('div', { class: 'ticket-access-row' },
+        h('span', null, k),
+        h(mono ? 'b' : 'strong', mono ? { dir: 'ltr' } : null, String(v))));
+    };
+    add('هاست', access.host, true);
+    add('پورت', access.port, true);
+    add('کاربر', access.username, true);
+    add('رمز', access.password, true);
+    add('پنل', access.panel_url, true);
+    add('یادداشت', access.note, false);
+    if (access.access_error) add('خطا', access.access_error, false);
+    if (!rows.length) {
+      return h('div', { class: 'ticket-access' }, 'دسترسی ارسال شده (جزئیات فقط برای مالک).');
+    }
+    const head = h('div', null, 'دسترسی ارسالی');
+    if (access.password || access.panel_url || access.host) {
+      const copyBtn = h('button', { type: 'button', class: 'btn btn-sm', style: 'margin-inline-start:.5rem' }, 'کپی خلاصه');
+      copyBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const text = [
+          access.host && `host=${access.host}${access.port ? ':' + access.port : ''}`,
+          access.username && `user=${access.username}`,
+          access.password && `pass=${access.password}`,
+          access.panel_url && `panel=${access.panel_url}`,
+          access.note && `note=${access.note}`,
+        ].filter(Boolean).join('\n');
+        navigator.clipboard.writeText(text).then(
+          () => toast('دسترسی کپی شد.', 'success'),
+          () => toast('کپی ممکن نشد.', 'error'),
+        );
+      });
+      head.appendChild(copyBtn);
+    }
+    return h('div', { class: 'ticket-access' }, head, ...rows);
+  }
+
+  async function openTicketThread(id, silent) {
+    const panel = $('#ticket-thread');
+    if (!panel) return;
+    try {
+      const data = await api('GET', `/api/tickets/${enc(id)}`);
+      ticketState.id = id;
+      ticketState.data = data;
+      renderTicketThread();
+      panel.hidden = false;
+      if (!silent) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (err) {
+      if (err.status !== 401) toast(err.message || NET_ERR, 'error');
+    }
+  }
+
+  function renderTicketThread() {
+    const panel = $('#ticket-thread');
+    const t = ticketState.data;
+    if (!panel || !t) return;
+    const [kind, label] = TICKET_STATUS[t.status] || ['muted', t.status || '?'];
+    const msgs = (t.messages || []).map((m) => h('article', { class: m.author_role === 'owner' ? 'ticket-msg is-owner' : 'ticket-msg' },
+      h('div', { class: 'ticket-msg-top' },
+        h('span', { class: 'ticket-msg-author' }, `${m.author_username || '?'}${m.author_role === 'owner' ? ' · مالک' : ''}`),
+        h('span', { class: 'ticket-msg-time' }, fmtTime(m.created_at))),
+      h('p', { class: 'ticket-msg-body' }, m.body || ''),
+      accessBlock(m.access)));
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const body = h('textarea', { id: uid('f'), rows: '3', maxlength: '5000', required: true, placeholder: 'پاسخ…' });
+    const accHost = h('input', { id: uid('f'), type: 'text', dir: 'ltr', maxlength: '200', placeholder: 'IP' });
+    const accPort = h('input', { id: uid('f'), type: 'number', dir: 'ltr', min: '1', max: '65535', placeholder: '22' });
+    const accUser = h('input', { id: uid('f'), type: 'text', dir: 'ltr', maxlength: '64', placeholder: 'user' });
+    const accPass = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'off', placeholder: 'رمز' });
+    const accUrl = h('input', { id: uid('f'), type: 'text', dir: 'ltr', maxlength: '500', placeholder: 'آدرس پنل' });
+    const accNote = h('input', { id: uid('f'), type: 'text', maxlength: '500', placeholder: 'یادداشت' });
+    const fold = h('details', { class: 'access-fold' },
+      h('summary', null, 'پیوست دسترسی (اختیاری)'),
+      h('div', { class: 'form-grid' },
+        field('هاست', accHost), field('پورت', accPort), field('کاربر', accUser),
+        field('رمز', accPass), field('آدرس پنل', accUrl), field('یادداشت', accNote)));
+    const sendBtn = h('button', { type: 'submit', class: 'btn btn-primary' }, 'ارسال پیام');
+    const form = h('form', { class: 'form ticket-reply', novalidate: true }, errBox, field('پیام', body), fold,
+      h('div', { class: 'form-actions' }, sendBtn));
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const text = body.value.trim();
+      if (!text) return showErr(errBox, 'متن پیام را بنویسید.');
+      const access = {};
+      if (accHost.value.trim()) access.host = accHost.value.trim();
+      if (accPort.value) access.port = Number(accPort.value);
+      if (accUser.value.trim()) access.username = accUser.value.trim();
+      if (accPass.value) access.password = accPass.value;
+      if (accUrl.value.trim()) access.panel_url = accUrl.value.trim();
+      if (accNote.value.trim()) access.note = accNote.value.trim();
+      const payload = { body: text };
+      if (Object.keys(access).length) payload.access = access;
+      act(sendBtn, async () => {
+        const r = await api('POST', `/api/tickets/${enc(t.id)}/messages`, payload);
+        ticketState.data = r;
+        renderTicketThread();
+        await load('tickets', true);
+        toast('پیام ارسال شد.', 'success');
+      });
+    });
+    const closeBtn = isOwner() && t.status !== 'closed'
+      ? h('button', { type: 'button', class: 'btn btn-sm' }, 'بستن تیکت')
+      : null;
+    const reopenBtn = isOwner() && t.status === 'closed'
+      ? h('button', { type: 'button', class: 'btn btn-sm' }, 'باز کردن')
+      : null;
+    if (closeBtn) closeBtn.addEventListener('click', () => act(closeBtn, async () => {
+      ticketState.data = await api('PATCH', `/api/tickets/${enc(t.id)}`, { status: 'closed' });
+      renderTicketThread();
+      await load('tickets', true);
+      toast('تیکت بسته شد.', 'info');
+    }));
+    if (reopenBtn) reopenBtn.addEventListener('click', () => act(reopenBtn, async () => {
+      ticketState.data = await api('PATCH', `/api/tickets/${enc(t.id)}`, { status: 'open' });
+      renderTicketThread();
+      await load('tickets', true);
+      toast('تیکت باز شد.', 'success');
+    }));
+    const hideBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'بستن گفتگو');
+    hideBtn.addEventListener('click', () => {
+      ticketState.id = null;
+      ticketState.data = null;
+      panel.hidden = true;
+      panel.replaceChildren();
+    });
+    panel.replaceChildren(
+      h('div', { class: 'ticket-thread-head' },
+        h('div', null,
+          h('p', { class: 'svc-kicker' }, TICKET_CAT[t.category] || t.category),
+          h('h3', { class: 'svc-title' }, t.subject || 'تیکت'),
+          h('div', { class: 'svc-meta' },
+            badge(kind, label),
+            h('span', null, ['مشتری ', h('b', null, t.customer_username || '—')]))),
+        h('div', { class: 'svc-actions' }, closeBtn, reopenBtn, hideBtn)),
+      h('div', { class: 'ticket-msgs' }, ...msgs),
+      t.status === 'closed' && !isOwner()
+        ? h('p', { class: 'muted' }, 'تیکت بسته است.')
+        : form,
+    );
+  }
+
+  function readTicketAccess() {
+    const host = $('#tk-acc-host').value.trim();
+    const portRaw = $('#tk-acc-port').value;
+    const username = $('#tk-acc-user').value.trim();
+    const password = $('#tk-acc-pass').value;
+    const panel_url = $('#tk-acc-url').value.trim();
+    const note = $('#tk-acc-note').value.trim();
+    const access = {};
+    if (host) access.host = host;
+    if (portRaw) access.port = Number(portRaw);
+    if (username) access.username = username;
+    if (password) access.password = password;
+    if (panel_url) access.panel_url = panel_url;
+    if (note) access.note = note;
+    return Object.keys(access).length ? access : null;
+  }
+
+  async function onCreateTicket(e) {
+    e.preventDefault();
+    const errBox = $('#tf-ticket-error');
+    hideErr(errBox);
+    const subject = $('#tk-subject').value.trim();
+    const body = $('#tk-body').value.trim();
+    if (!subject) return showErr(errBox, 'موضوع را وارد کنید.');
+    if (!body) return showErr(errBox, 'متن تیکت را بنویسید.');
+    const payload = {
+      subject,
+      category: $('#tk-category').value || 'other',
+      body,
+    };
+    const access = readTicketAccess();
+    if (access) payload.access = access;
+    act($('#tk-submit'), async () => {
+      const r = await api('POST', '/api/tickets', payload);
+      toast('تیکت ثبت شد.', 'success');
+      $('#ticket-form').reset();
+      $('#tk-category').value = 'other';
+      await load('tickets');
+      if (r && r.id) openTicketThread(r.id);
     });
   }
 
@@ -3238,11 +4537,13 @@
     $('#boot').hidden = true;
     $('#app-view').hidden = true;
     $('#login-view').hidden = false;
+    showLoginViewOnly();
     $('#login-pass').value = '';
     const errBox = $('#login-error');
     if (msg) showErr(errBox, msg);
     else hideErr(errBox);
     $('#login-user').focus();
+    refreshRegisterGate();
   }
 
   async function enterApp() {
@@ -3267,7 +4568,14 @@
     loadLiveTunnels();
     if (can('allow_relay')) load('relays');
     load('jobs');
-    if (isOwner()) load('users');
+    load('orders');
+    load('tickets');
+    loadWallet(true);
+    if (isOwner()) {
+      load('users');
+      loadCommerceForm();
+    }
+    paintWalletChip();
     startPolling();
   }
 
@@ -3339,6 +4647,13 @@
       load('users', true);
       loadSsl();
     }
+    if (state.loggedIn && name === 'orders') load('orders', true);
+    if (state.loggedIn && name === 'tickets') {
+      load('tickets', true);
+      if (ticketState.id) openTicketThread(ticketState.id, true);
+    }
+    if (state.loggedIn && name === 'wallet') loadWallet();
+    if (state.loggedIn && name === 'users' && isOwner()) loadCommerceForm();
   }
 
   function readTheme() {
@@ -3891,6 +5206,27 @@
       });
     }
     $('#login-form').addEventListener('submit', onLogin);
+    const regForm = $('#register-form');
+    if (regForm) regForm.addEventListener('submit', onRegister);
+    const showReg = $('#btn-show-register');
+    if (showReg) showReg.addEventListener('click', showRegisterView);
+    const showLoginBtn = $('#btn-show-login');
+    if (showLoginBtn) showLoginBtn.addEventListener('click', showLoginViewOnly);
+    const depForm = $('#deposit-form');
+    if (depForm) depForm.addEventListener('submit', onDepositSubmit);
+    const commerceForm = $('#commerce-form');
+    if (commerceForm) commerceForm.addEventListener('submit', onCommerceSubmit);
+    for (const [id, side] of [['of-iran-access', 'of-iran-secrets'], ['of-kharej-access', 'of-kharej-secrets']]) {
+      const cb = $(`#${id}`);
+      const box = $(`#${side}`);
+      if (cb && box && !cb.dataset.walletBound) {
+        cb.dataset.walletBound = '1';
+        cb.addEventListener('change', () => { box.hidden = !cb.checked; });
+        box.hidden = !cb.checked;
+      }
+    }
+    const rw = $('#btn-refresh-wallet');
+    if (rw) rw.addEventListener('click', (e) => act(e.currentTarget, () => loadWallet(), 'در حال بروزرسانی…'));
     $('#btn-logout').addEventListener('click', () => { closeAccountMenu(); logout(); });
     $('#btn-password').addEventListener('click', openPasswordForm);
     const userBtn = $('#btn-username');
@@ -3929,8 +5265,20 @@
     if (refreshOut) refreshOut.addEventListener('click', (e) => act(e.currentTarget, () => load('tunnels'), 'در حال بروزرسانی…'));
     const refreshUsers = $('#btn-refresh-users');
     if (refreshUsers) refreshUsers.addEventListener('click', (e) => act(e.currentTarget, () => load('users'), 'در حال بروزرسانی…'));
+    const refreshOrders = $('#btn-refresh-orders');
+    if (refreshOrders) refreshOrders.addEventListener('click', (e) => act(e.currentTarget, () => load('orders'), 'در حال بروزرسانی…'));
+    const refreshTickets = $('#btn-refresh-tickets');
+    if (refreshTickets) refreshTickets.addEventListener('click', (e) => act(e.currentTarget, () => load('tickets'), 'در حال بروزرسانی…'));
     const userForm = $('#user-form');
     if (userForm) userForm.addEventListener('submit', onCreateUser);
+    const orderForm = $('#order-form');
+    if (orderForm) {
+      orderForm.addEventListener('submit', onCreateOrder);
+      bindOrderAccessToggle('iran');
+      bindOrderAccessToggle('kharej');
+    }
+    const ticketForm = $('#ticket-form');
+    if (ticketForm) ticketForm.addEventListener('submit', onCreateTicket);
     $('#tunnel-form').addEventListener('submit', onCreateTunnel);
     $('#relay-form').addEventListener('submit', onCreateRelay);
     for (const btn of document.querySelectorAll('.vpn-panel-card')) {
@@ -3974,6 +5322,8 @@
     $('#tf-sp-check').addEventListener('click', onSpoofCheck);
     $('#tf-mode').addEventListener('change', updateTunnelForm);
     $('#tf-direct').addEventListener('change', updateTunnelForm);
+    syncModePicker($('#tf-mode'));
+    syncModePicker($('#of-mode'));
 
     const tabs = () => Array.from(document.querySelectorAll('.tab')).filter((b) => !b.hidden);
     for (const b of document.querySelectorAll('.tab')) {

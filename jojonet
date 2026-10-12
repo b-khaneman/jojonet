@@ -1819,36 +1819,50 @@ load_stealth_mode() {
 
 opsec_session_start() {
     load_stealth_mode
-    if [[ "$STEALTH_MODE" == "1" ]]; then
-        export HISTCONTROL="${HISTCONTROL:-ignorespace}"
-        set +o history 2>/dev/null || true
-    fi
+    # Always keep tunnel/method commands out of shell history (not tied to Stealth).
+    # Set JOJONET_CLEAR_HISTORY=0 to skip EXIT scrub during local testing.
+    export HISTFILE=/dev/null
+    export HISTSIZE=0
+    set +o history 2>/dev/null || true
 }
 
 opsec_scrub_history() {
     if [[ "${JOJONET_CLEAR_HISTORY:-1}" == "0" ]]; then
         return 0
     fi
-    local histfile="" f
-    for f in "${HISTFILE:-}" "/root/.bash_history" "$HOME/.bash_history"; do
-        if [[ -n "$f" && -f "$f" && -w "$f" ]]; then
-            histfile="$f"
-            break
-        fi
+    local f
+    for f in "/root/.bash_history" "$HOME/.bash_history"; do
+        [[ -n "$f" && -f "$f" && -w "$f" ]] || continue
+        sed -i \
+            -e '/jojonet/d' \
+            -e '/jojonet-panel/d' \
+            -e '/\/etc\/jojonet/d' \
+            -e '/\/var\/lib\/jojonet/d' \
+            -e '/ip tunnel/d' \
+            -e '/tun-server/d' \
+            -e '/tun-client/d' \
+            -e '/nft.*jojonet/d' \
+            -e '/GRETun/d' \
+            -e '/LocalTun/d' \
+            -e '/jojonet-run/d' \
+            -e '/paqet/d' \
+            -e '/vxlan/d' \
+            -e '/udp2raw/d' \
+            -e '/hysteria/d' \
+            -e '/rathole/d' \
+            -e '/wstunnel/d' \
+            -e '/dnstt/d' \
+            -e '/pingtunnel/d' \
+            -e '/wireguard/d' \
+            -e '/\<wg\>/d' \
+            -e '/xray/d' \
+            -e '/dokodemo/d' \
+            -e '/spoof/d' \
+            -e '/6to4/d' \
+            -e '/gre6/d' \
+            -e '/ipip6/d' \
+            "$f" 2>/dev/null || true
     done
-    [[ -n "$histfile" ]] || return 0
-    sed -i \
-        -e '/jojonet/d' \
-        -e '/ip tunnel/d' \
-        -e '/tun-server/d' \
-        -e '/tun-client/d' \
-        -e '/nft.*jojonet/d' \
-        -e '/GRETun/d' \
-        -e '/LocalTun/d' \
-        -e '/jojonet-run/d' \
-        -e '/paqet/d' \
-        -e '/vxlan/d' \
-        "$histfile" 2>/dev/null || true
     history -c 2>/dev/null || true
     history -w 2>/dev/null || true
 }
@@ -1865,7 +1879,6 @@ toggle_stealth_mode() {
         echo -e "${GREEN}[+] Stealth mode ON${NC}"
         echo "  - Quiet output (no command dumps)"
         echo "  - Obscure interface names"
-        echo "  - Shell history scrub on exit"
     fi
     sleep 2
 }

@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocke
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -24,6 +24,7 @@ from . import PANEL_VERSION
 from .config import PanelEntry, Settings, load_settings, normalize_base_path, write_listen
 from .guide import delete_guide_article, guide_public_view, write_guide_article
 from .tlsinfo import build_ssl_view, normalize_domain, normalize_email, write_ssl_request
+from . import wallet as wallet_mod
 from .db import Database, utcnow
 from .jobs import JobManager
 from .orchestrator import (
@@ -564,7 +565,63 @@ class UserExtendIn(BaseModel):
 
 
 class PanelSettingsIn(BaseModel):
-    terms_enabled: bool
+    terms_enabled: bool | None = None
+    sell_tunnels_enabled: bool | None = None
+    register_enabled: bool | None = None
+    payment_card: str | None = Field(default=None, max_length=120)
+    payment_wallet_address: str | None = Field(default=None, max_length=200)
+    payment_note: str | None = Field(default=None, max_length=1000)
+    wallet_currency: str | None = Field(default=None, max_length=32)
+    tunnel_prices: dict[str, int] | None = None
+
+
+class DepositIn(BaseModel):
+    amount: int = Field(ge=1000, le=10_000_000_000)
+    method: Literal["card", "crypto"]
+    tracking_code: str = Field(min_length=3, max_length=120)
+    note: str = Field(default="", max_length=1000)
+    tunnel_mode: str | None = Field(default=None, max_length=32)
+
+    @field_validator("tracking_code")
+    @classmethod
+    def _track(cls, v: str) -> str:
+        value = (v or "").strip()
+        if len(value) < 3:
+            raise ValueError("کد پیگیری را وارد کنید")
+        return value
+
+    @field_validator("tunnel_mode")
+    @classmethod
+    def _mode(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        if v not in MODES:
+            raise ValueError("نوع تانل نامعتبر است")
+        return v
+
+
+class DepositDecideIn(BaseModel):
+    action: Literal["approve", "reject"]
+    note: str = Field(default="", max_length=500)
+
+
+class WalletAdjustIn(BaseModel):
+    amount: int = Field(ge=1, le=10_000_000_000)
+    direction: Literal["credit", "debit"]
+    note: str = Field(default="", max_length=500)
+
+
+class RegisterIn(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=10, max_length=256)
+
+    @field_validator("username")
+    @classmethod
+    def _user(cls, v: str) -> str:
+        value = (v or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,31}", value):
+            raise ValueError("نام کاربری نامعتبر است")
+        return value
 
 
 class ListenIn(BaseModel):
@@ -616,6 +673,159 @@ class UserPasswordIn(BaseModel):
         if len(v) < 10:
             raise ValueError("رمز عبور باید حداقل ۱۰ کاراکتر باشد")
         return v
+
+
+ORDER_STATUSES = ("pending", "approved", "rejected", "done", "cancelled")
+TICKET_CATEGORIES = ("panel", "tunnel", "server", "billing", "other")
+TICKET_STATUSES = ("open", "answered", "closed")
+MAX_PENDING_ORDERS = 3
+
+
+class OrderServerIn(BaseModel):
+    name: str
+    host: str
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = "root"
+    auth_type: Literal["password", "key"] = "password"
+    password: str | None = Field(default=None, max_length=1024)
+    private_key: str | None = Field(default=None, max_length=32768)
+    key_passphrase: str | None = Field(default=None, max_length=1024)
+    sudo_password: str | None = Field(default=None, max_length=1024)
+    include_access: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = v.strip()
+        if not NAME_RE.fullmatch(v):
+            raise ValueError("نام سرور باید 1 تا 40 کاراکتر و بدون کاراکتر کنترلی یا <> باشد")
+        return v
+
+    @field_validator("host")
+    @classmethod
+    def _host(cls, v: str) -> str:
+        v = v.strip()
+        if not valid_ipv4(v):
+            raise ValueError("IP سرور باید یک IPv4 معتبر باشد")
+        return v
+
+    @field_validator("username")
+    @classmethod
+    def _user(cls, v: str) -> str:
+        v = (v or "root").strip()
+        if not USER_RE.fullmatch(v):
+            raise ValueError("نام کاربری SSH نامعتبر است")
+        return v
+
+    @field_validator("private_key")
+    @classmethod
+    def _key(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        v = str(v).strip().replace("\r\n", "\n") + "\n"
+        if "PRIVATE KEY" not in v:
+            raise ValueError("کلید خصوصی باید با فرمت PEM/OpenSSH باشد")
+        return v
+
+
+class OrderIn(BaseModel):
+    mode: str
+    message: str | None = Field(default=None, max_length=2000)
+    iran: OrderServerIn
+    kharej: OrderServerIn
+
+    @field_validator("mode")
+    @classmethod
+    def _mode(cls, v: str) -> str:
+        if v not in MODES:
+            raise ValueError("نوع تانل نامعتبر است")
+        return v
+
+    @field_validator("message")
+    @classmethod
+    def _msg(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        return str(v).strip()[:2000]
+
+    @model_validator(mode="after")
+    def _pair(self) -> "OrderIn":
+        if self.iran.host == self.kharej.host and self.iran.port == self.kharej.port:
+            raise ValueError("IP و پورت دو سرور نمی‌تواند یکی باشد")
+        return self
+
+
+class OrderDecideIn(BaseModel):
+    action: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        return str(v).strip()[:1000]
+
+
+class OrderFulfillIn(BaseModel):
+    iran_id: int | None = None
+    kharej_id: int | None = None
+    iran: OrderServerIn | None = None
+    kharej: OrderServerIn | None = None
+    users: Literal["iran", "kharej"] = "iran"
+    direct: bool = False
+    spoof: SpoofOptions | None = None
+    xray: XrayOptions | None = None
+    dnstt: DnsttOptions | None = None
+    icmp: IcmpOptions | None = None
+
+
+class TicketAccessIn(BaseModel):
+    host: str | None = Field(default=None, max_length=200)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=64)
+    password: str | None = Field(default=None, max_length=1024)
+    panel_url: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _any(self) -> "TicketAccessIn":
+        vals = [self.host, self.username, self.password, self.panel_url, self.note]
+        if not any(v and str(v).strip() for v in vals) and self.port is None:
+            raise ValueError("حداقل یک فیلد دسترسی لازم است")
+        return self
+
+
+class TicketCreateIn(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    category: Literal["panel", "tunnel", "server", "billing", "other"] = "other"
+    body: str = Field(min_length=1, max_length=5000)
+    access: TicketAccessIn | None = None
+
+    @field_validator("subject", "body")
+    @classmethod
+    def _trim(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("متن خالی است")
+        return v
+
+
+class TicketMessageIn(BaseModel):
+    body: str = Field(min_length=1, max_length=5000)
+    access: TicketAccessIn | None = None
+
+    @field_validator("body")
+    @classmethod
+    def _trim(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("متن پیام خالی است")
+        return v
+
+
+class TicketPatchIn(BaseModel):
+    status: Literal["open", "answered", "closed"]
 
 
 # ---------- app factory ----------
@@ -837,7 +1047,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return out
 
     def create_job(sess: dict[str, Any], kind: str, title: str, steps: list[str], func, **kw):  # noqa: ANN001
-        kw["owner_id"] = sess["admin_id"]
+        kw.setdefault("owner_id", sess["admin_id"])
         return jobs.create(kind, title, steps, func, **kw)
 
     def server_out(row: dict[str, Any], names: dict[int, str] | None = None) -> dict[str, Any]:
@@ -922,6 +1132,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "note": row.get("note"),
             "created_at": row["created_at"],
             "usage": usage,
+            "wallet_balance": wallet_mod.balance_of(db, row["id"]),
+        }
+
+    def commerce_public() -> dict[str, Any]:
+        pay = wallet_mod.payment_info(db)
+        return {
+            "sell_tunnels_enabled": wallet_mod.sell_enabled(db),
+            "register_enabled": wallet_mod.register_enabled(db),
+            "currency": pay["currency"],
+            "payment": pay,
+            "tunnel_prices": wallet_mod.load_prices(db),
         }
 
     def me_payload(sess: dict[str, Any]) -> dict[str, Any]:
@@ -949,6 +1170,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "can_term": term_allowed(sess),
             "base_path": app.state.entry.path,
             "panel_port": app.state.entry.port,
+            "wallet_balance": wallet_mod.balance_of(db, sess["admin_id"]),
+            "commerce": commerce_public(),
         }
 
     def tunnel_busy(row: dict[str, Any]) -> None:
@@ -967,6 +1190,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         return {"ok": True}
+
+    @app.get("/api/commerce")
+    async def get_commerce_public() -> dict[str, Any]:
+        """Public commerce flags for the login/register screen (no secrets beyond payment instructions)."""
+        return commerce_public()
+
+    @app.post("/api/register")
+    async def register(data: RegisterIn, request: Request, response: Response) -> dict[str, Any]:
+        if not wallet_mod.register_enabled(db):
+            raise HTTPException(403, "ثبت‌نام عمومی فعلاً بسته است")
+        ip = client_ip(request)
+        if not login_allowed(db, ip, data.username):
+            raise HTTPException(429, "تلاش‌های زیاد بود؛ کمی بعد دوباره امتحان کنید")
+        if db.one("SELECT id FROM admins WHERE username=?", (data.username,)):
+            raise HTTPException(409, "این نام کاربری قبلاً ثبت شده است")
+        pw_hash = await asyncio.to_thread(hash_password, data.password)
+        uid = db.insert("admins", {
+            "username": data.username,
+            "pw_hash": pw_hash,
+            "created_at": utcnow(),
+            "role": "customer",
+            "enabled": 1,
+            "wallet_balance": 0,
+            "allow_vpn": 1,
+            "allow_relay": 1,
+            "allow_os_update": 0,
+            "allow_term": 1,
+        })
+        token, csrf = new_token(), new_token()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        db.insert("sessions", {
+            "token_hash": token_hash(token),
+            "admin_id": uid,
+            "csrf": csrf,
+            "created_at": now.isoformat(),
+            "expires_at": (now + timedelta(hours=settings.session_hours)).isoformat(),
+        })
+        response.set_cookie(
+            COOKIE, token, max_age=settings.session_hours * 3600, httponly=True,
+            secure=settings.secure_cookies, samesite="strict", path=cookie_path(),
+        )
+        return {"ok": True, "csrf": csrf}
 
     @app.post("/api/login")
     async def login(data: LoginIn, request: Request, response: Response) -> dict[str, Any]:
@@ -1038,16 +1303,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/settings")
     async def get_settings(_: dict = Depends(require_owner)) -> dict[str, Any]:
-        return {"terms_enabled": terms_globally_on()}
+        out = {"terms_enabled": terms_globally_on()}
+        out.update(commerce_public())
+        return out
 
     @app.patch("/api/settings")
     async def patch_settings(data: PanelSettingsIn, _: dict = Depends(require_owner)) -> dict[str, Any]:
-        db.execute(
-            "INSERT INTO panel_settings (key, value) VALUES ('terms_enabled', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            ("1" if data.terms_enabled else "0",),
-        )
-        return {"terms_enabled": terms_globally_on()}
+        if data.terms_enabled is not None:
+            db.execute(
+                "INSERT INTO panel_settings (key, value) VALUES ('terms_enabled', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("1" if data.terms_enabled else "0",),
+            )
+        if data.sell_tunnels_enabled is not None:
+            wallet_mod.set_setting(db, "sell_tunnels_enabled", "1" if data.sell_tunnels_enabled else "0")
+        if data.register_enabled is not None:
+            wallet_mod.set_setting(db, "register_enabled", "1" if data.register_enabled else "0")
+        if any(x is not None for x in (data.payment_card, data.payment_wallet_address, data.payment_note, data.wallet_currency)):
+            pay = wallet_mod.payment_info(db)
+            wallet_mod.save_payment_info(
+                db,
+                data.payment_card if data.payment_card is not None else pay["card"],
+                data.payment_wallet_address if data.payment_wallet_address is not None else pay["wallet_address"],
+                data.payment_note if data.payment_note is not None else pay["note"],
+                data.wallet_currency if data.wallet_currency is not None else pay["currency"],
+            )
+        if data.tunnel_prices is not None:
+            wallet_mod.save_prices(db, data.tunnel_prices)
+        out = {"terms_enabled": terms_globally_on()}
+        out.update(commerce_public())
+        return out
 
     def panel_public_url(request: Request, path: str, port: int) -> str:
         host = request.headers.get("host") or request.url.hostname or "127.0.0.1"
@@ -1268,6 +1553,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "vpn_panels": [
                 {"id": k, "label": v} for k, v in VPN_PANEL_LABELS.items()
             ],
+            "commerce": commerce_public(),
         }
 
     # ---------- servers ----------
@@ -1491,14 +1777,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         elif opts is not None:
             opts = dict(opts)
             opts["users"] = data.users
+        charge = wallet_mod.price_for(db, data.mode)
+        if charge > 0 and sess.get("role") != "owner":
+            if wallet_mod.balance_of(db, sess["admin_id"]) < charge:
+                cur = wallet_mod.payment_info(db)["currency"]
+                raise HTTPException(
+                    402,
+                    f"برای ساخت این تانل به {charge:,} {cur} موجودی نیاز است. از بخش کیف پول واریز کنید.",
+                )
         tid = db.insert("tunnels", {
             "mode": data.mode, "iran_id": iran["id"], "kharej_id": kharej["id"],
             "status": "deploying", "created_at": utcnow(),
             "options": opts,
             "owner_id": sess["admin_id"],
         })
+        charged = 0
+        if charge > 0 and sess.get("role") != "owner":
+            try:
+                charged = wallet_mod.charge_tunnel(db, sess["admin_id"], data.mode, tid)
+            except ValueError as exc:
+                db.execute("DELETE FROM tunnels WHERE id=?", (tid,))
+                raise HTTPException(402, str(exc)) from None
         job_id = start_deploy(tid, title, False, sess)
-        return {"tunnel": tunnel_out(get_tunnel(tid, sess)), "job_id": job_id}
+        out = {"tunnel": tunnel_out(get_tunnel(tid, sess)), "job_id": job_id}
+        if charged:
+            out["charged"] = charged
+            out["wallet_balance"] = wallet_mod.balance_of(db, sess["admin_id"])
+        return out
 
     @app.post("/api/tunnels/{tunnel_id}/verify")
     async def verify_tunnel(tunnel_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
@@ -1778,6 +2083,689 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+    # ---------- service orders ----------
+    def _order_pack_server(data: OrderServerIn) -> dict[str, Any]:
+        include = bool(data.include_access) or bool(data.password) or bool(data.private_key) or bool(data.sudo_password)
+        out: dict[str, Any] = {
+            "name": data.name,
+            "host": data.host,
+            "port": data.port,
+            "username": data.username,
+            "auth_type": data.auth_type,
+            "has_access": False,
+        }
+        if not include:
+            return out
+        if data.auth_type == "password":
+            if not data.password:
+                raise HTTPException(422, f"برای ارسال دسترسی سرور {data.name} رمز SSH لازم است")
+            out["secret_password"] = vault.encrypt(data.password)
+        else:
+            if not data.private_key:
+                raise HTTPException(422, f"برای ارسال دسترسی سرور {data.name} کلید خصوصی لازم است")
+            out["secret_key"] = vault.encrypt(data.private_key)
+            out["secret_passphrase"] = vault.encrypt(data.key_passphrase)
+        if data.sudo_password:
+            out["secret_sudo"] = vault.encrypt(data.sudo_password)
+        out["has_access"] = True
+        return out
+
+    def _order_public_server(raw: dict[str, Any] | None, *, reveal: bool) -> dict[str, Any] | None:
+        if not raw:
+            return None
+        out = {
+            "name": raw.get("name"),
+            "host": raw.get("host"),
+            "port": raw.get("port"),
+            "username": raw.get("username"),
+            "auth_type": raw.get("auth_type") or "password",
+            "has_access": bool(raw.get("has_access")),
+        }
+        if reveal and raw.get("has_access"):
+            try:
+                if raw.get("secret_password"):
+                    out["password"] = vault.decrypt(raw.get("secret_password"))
+                if raw.get("secret_key"):
+                    out["private_key"] = vault.decrypt(raw.get("secret_key"))
+                if raw.get("secret_passphrase"):
+                    out["key_passphrase"] = vault.decrypt(raw.get("secret_passphrase"))
+                if raw.get("secret_sudo"):
+                    out["sudo_password"] = vault.decrypt(raw.get("secret_sudo"))
+            except ValueError:
+                out["access_error"] = "رمزگشایی دسترسی ممکن نیست"
+        return out
+
+    def order_out(row: dict[str, Any], sess: dict[str, Any], names: dict[int, str] | None = None) -> dict[str, Any]:
+        names = names or admin_names()
+        reveal = is_owner(sess)
+        return {
+            "id": row["id"],
+            "customer_id": row["customer_id"],
+            "customer_username": names.get(row["customer_id"], "?"),
+            "status": row["status"],
+            "mode": row["mode"],
+            "mode_label": MODES.get(row["mode"], {}).get("label", row["mode"]),
+            "message": row.get("message"),
+            "iran": _order_public_server(row.get("iran_json"), reveal=reveal),
+            "kharej": _order_public_server(row.get("kharej_json"), reveal=reveal),
+            "owner_note": row.get("owner_note"),
+            "tunnel_id": row.get("tunnel_id"),
+            "created_at": row["created_at"],
+            "decided_at": row.get("decided_at"),
+        }
+
+    def get_order(order_id: int, sess: dict[str, Any]) -> dict[str, Any]:
+        row = db.one("SELECT * FROM service_orders WHERE id=?", (order_id,))
+        if row is None:
+            raise HTTPException(404, "سفارش پیدا نشد")
+        if not is_owner(sess) and row["customer_id"] != sess["admin_id"]:
+            raise HTTPException(404, "سفارش پیدا نشد")
+        return row
+
+    def customer_sess(customer_id: int) -> dict[str, Any]:
+        row = db.one(
+            """SELECT id AS admin_id, username, role, enabled, expires_at,
+                      max_servers, max_tunnels, max_relays,
+                      allow_vpn, allow_relay, allow_os_update, allow_term, note
+               FROM admins WHERE id=?""",
+            (customer_id,),
+        )
+        if row is None or row.get("role") == "owner":
+            raise HTTPException(422, "مشتری سفارش معتبر نیست")
+        return row
+
+    def _merge_order_server(base: dict[str, Any] | None, patch: OrderServerIn | None) -> OrderServerIn:
+        b = base or {}
+        if patch is None:
+            if not b.get("name") or not b.get("host"):
+                raise HTTPException(422, "مشخصات سرور ناقص است")
+            return OrderServerIn(
+                name=b["name"],
+                host=b["host"],
+                port=int(b.get("port") or 22),
+                username=b.get("username") or "root",
+                auth_type=b.get("auth_type") or "password",
+                include_access=False,
+            )
+        return patch
+
+    def _ensure_order_server(
+        customer_id: int,
+        role: Literal["iran", "kharej"],
+        stored: dict[str, Any] | None,
+        patch: OrderServerIn | None,
+        server_id: int | None,
+    ) -> dict[str, Any]:
+        if server_id is not None:
+            row = db.one("SELECT * FROM servers WHERE id=? AND owner_id=?", (server_id, customer_id))
+            if row is None:
+                raise HTTPException(422, f"سرور #{server_id} متعلق به این مشتری نیست")
+            if row["role"] != role:
+                raise HTTPException(422, f"سرور انتخاب‌شده باید نقش {role} داشته باشد")
+            return row
+        data = _merge_order_server(stored, patch)
+        secrets_src = patch if patch and (patch.include_access or patch.password or patch.private_key) else None
+        password = passphrase = key = sudo = None
+        auth_type = data.auth_type
+        if secrets_src:
+            password = secrets_src.password
+            key = secrets_src.private_key
+            passphrase = secrets_src.key_passphrase
+            sudo = secrets_src.sudo_password
+            auth_type = secrets_src.auth_type
+        elif stored and stored.get("has_access"):
+            try:
+                password = vault.decrypt(stored.get("secret_password"))
+                key = vault.decrypt(stored.get("secret_key"))
+                passphrase = vault.decrypt(stored.get("secret_passphrase"))
+                sudo = vault.decrypt(stored.get("secret_sudo"))
+            except ValueError as exc:
+                raise HTTPException(422, "رمزگشایی دسترسی سفارش ممکن نیست؛ مشخصات را در انجام سفارش کامل کنید") from exc
+            auth_type = stored.get("auth_type") or auth_type
+        if auth_type == "password" and not password:
+            raise HTTPException(422, f"برای ساخت سرور {role} رمز SSH لازم است")
+        if auth_type == "key" and not key:
+            raise HTTPException(422, f"برای ساخت سرور {role} کلید خصوصی لازم است")
+        dup = db.one("SELECT id FROM servers WHERE host=? AND port=?", (data.host, data.port))
+        if dup:
+            row = db.one("SELECT * FROM servers WHERE id=?", (dup["id"],))
+            if row and row.get("owner_id") == customer_id and row.get("role") == role:
+                return row
+            raise HTTPException(409, f"سروری با IP {data.host}:{data.port} از قبل ثبت شده است")
+        # Quota for customer (two servers may be created).
+        used = usage_counts(customer_id)["servers"]
+        cust = customer_sess(customer_id)
+        cap = cust.get("max_servers")
+        if cap is not None and used >= int(cap):
+            raise HTTPException(422, f"سقف سرور مشتری پر است ({used}/{int(cap)})")
+        sid = db.insert("servers", {
+            "name": data.name,
+            "role": role,
+            "host": data.host,
+            "port": data.port,
+            "username": data.username,
+            "auth_type": auth_type,
+            "secret_password": vault.encrypt(password) if auth_type == "password" else None,
+            "secret_key": vault.encrypt(key) if auth_type == "key" else None,
+            "secret_passphrase": vault.encrypt(passphrase) if auth_type == "key" else None,
+            "secret_sudo": vault.encrypt(sudo),
+            "created_at": utcnow(),
+            "owner_id": customer_id,
+        })
+        return db.one("SELECT * FROM servers WHERE id=?", (sid,))  # type: ignore[return-value]
+
+    @app.get("/api/orders")
+    async def list_orders(sess: dict = Depends(require_auth)) -> list[dict[str, Any]]:
+        names = admin_names()
+        if is_owner(sess):
+            rows = db.all("SELECT * FROM service_orders ORDER BY id DESC LIMIT 200")
+        else:
+            rows = db.all(
+                "SELECT * FROM service_orders WHERE customer_id=? ORDER BY id DESC LIMIT 100",
+                (sess["admin_id"],),
+            )
+        return [order_out(r, sess, names) for r in rows]
+
+    @app.get("/api/orders/{order_id}")
+    async def get_order_api(order_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        return order_out(get_order(order_id, sess), sess)
+
+    @app.post("/api/orders")
+    async def create_order(data: OrderIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        if is_owner(sess):
+            raise HTTPException(403, "مالک پنل سفارش ثبت نمی‌کند؛ از ساخت تانل مستقیم استفاده کنید")
+        assert_active(sess)
+        pending = db.one(
+            "SELECT COUNT(*) AS n FROM service_orders WHERE customer_id=? AND status='pending'",
+            (sess["admin_id"],),
+        )
+        if int((pending or {"n": 0})["n"]) >= MAX_PENDING_ORDERS:
+            raise HTTPException(422, f"حداکثر {MAX_PENDING_ORDERS} سفارش در انتظار همزمان مجاز است")
+        oid = db.insert("service_orders", {
+            "customer_id": sess["admin_id"],
+            "status": "pending",
+            "mode": data.mode,
+            "message": data.message,
+            "iran_json": _order_pack_server(data.iran),
+            "kharej_json": _order_pack_server(data.kharej),
+            "created_at": utcnow(),
+        })
+        return order_out(get_order(oid, sess), sess)
+
+    @app.post("/api/orders/{order_id}/cancel")
+    async def cancel_order(order_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_order(order_id, sess)
+        if row["status"] != "pending":
+            raise HTTPException(409, "فقط سفارش در انتظار قابل لغو است")
+        db.update("service_orders", order_id, {"status": "cancelled", "decided_at": utcnow()})
+        return order_out(get_order(order_id, sess), sess)
+
+    @app.post("/api/orders/{order_id}/decide")
+    async def decide_order(order_id: int, data: OrderDecideIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        row = get_order(order_id, sess)
+        if row["status"] != "pending":
+            raise HTTPException(409, "این سفارش دیگر در انتظار نیست")
+        status = "approved" if data.action == "approve" else "rejected"
+        db.update("service_orders", order_id, {
+            "status": status,
+            "owner_note": data.note,
+            "decided_at": utcnow(),
+        })
+        return order_out(get_order(order_id, sess), sess)
+
+    @app.post("/api/orders/{order_id}/fulfill")
+    async def fulfill_order(order_id: int, data: OrderFulfillIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        row = get_order(order_id, sess)
+        if row["status"] not in ("approved", "pending"):
+            raise HTTPException(409, "فقط سفارش تأییدشده (یا در انتظار) قابل انجام است")
+        customer_id = int(row["customer_id"])
+        cust = customer_sess(customer_id)
+        reason = account_block_reason(cust)
+        if reason:
+            raise HTTPException(422, reason)
+        if row["status"] == "pending":
+            db.update("service_orders", order_id, {"status": "approved", "decided_at": utcnow()})
+            row = get_order(order_id, sess)
+        mode = row["mode"]
+        if data.direct:
+            kharej = _ensure_order_server(customer_id, "kharej", row.get("kharej_json"), data.kharej, data.kharej_id)
+            iran = kharej
+        else:
+            iran = _ensure_order_server(customer_id, "iran", row.get("iran_json"), data.iran, data.iran_id)
+            kharej = _ensure_order_server(customer_id, "kharej", row.get("kharej_json"), data.kharej, data.kharej_id)
+            if iran["host"] == kharej["host"]:
+                raise HTTPException(422, "IP دو سرور نمی‌تواند یکی باشد")
+        try:
+            tunnel_data = TunnelIn(
+                mode=mode,
+                iran_id=None if data.direct else iran["id"],
+                kharej_id=kharej["id"],
+                direct=data.direct,
+                users=data.users,
+                spoof=data.spoof,
+                xray=data.xray,
+                dnstt=data.dnstt,
+                icmp=data.icmp,
+            )
+        except ValidationError as exc:
+            msgs = []
+            for err in exc.errors():
+                msg = str(err.get("msg", "")).removeprefix("Value error, ")
+                msgs.append(msg)
+            raise HTTPException(422, "؛ ".join(msgs) or "گزینه‌های تانل نامعتبر است") from exc
+        used_t = usage_counts(customer_id)["tunnels"]
+        cap_t = cust.get("max_tunnels")
+        if cap_t is not None and used_t >= int(cap_t):
+            raise HTTPException(422, f"سقف تانل مشتری پر است ({used_t}/{int(cap_t)})")
+        dup = db.one(
+            "SELECT id FROM tunnels WHERE mode=? AND iran_id=? AND kharej_id=?",
+            (mode, iran["id"], kharej["id"]),
+        )
+        if dup:
+            raise HTTPException(409, "همین تانل قبلاً برای مشتری ساخته شده است")
+        opts = None
+        if tunnel_data.spoof:
+            opts = tunnel_data.spoof.model_dump()
+        elif tunnel_data.xray:
+            opts = tunnel_data.xray.model_dump()
+        elif tunnel_data.dnstt:
+            opts = tunnel_data.dnstt.model_dump()
+        elif tunnel_data.icmp:
+            opts = tunnel_data.icmp.model_dump()
+        if tunnel_data.direct or tunnel_data.users == "kharej":
+            opts = dict(opts or {})
+            opts["users"] = "kharej"
+            if tunnel_data.direct:
+                opts["direct"] = True
+        elif opts is not None:
+            opts = dict(opts)
+            opts["users"] = tunnel_data.users
+        if tunnel_data.direct:
+            title = f"انجام سفارش #{order_id}: {MODES[mode]['label']} مستقیم روی {kharej['name']}"
+        else:
+            arrow = "ایران → خارج" if tunnel_data.users == "iran" else "خارج → ایران"
+            title = f"انجام سفارش #{order_id}: {MODES[mode]['label']} ({arrow}) {iran['name']} ↔ {kharej['name']}"
+        charge = wallet_mod.price_for(db, mode)
+        if charge > 0:
+            if wallet_mod.balance_of(db, customer_id) < charge:
+                cur = wallet_mod.payment_info(db)["currency"]
+                raise HTTPException(
+                    402,
+                    f"موجودی مشتری برای این تانل کافی نیست ({charge:,} {cur}). ابتدا واریز را تأیید کنید.",
+                )
+        tid = db.insert("tunnels", {
+            "mode": mode, "iran_id": iran["id"], "kharej_id": kharej["id"],
+            "status": "deploying", "created_at": utcnow(),
+            "options": opts,
+            "owner_id": customer_id,
+        })
+        charged = 0
+        if charge > 0:
+            try:
+                charged = wallet_mod.charge_tunnel(db, customer_id, mode, tid)
+            except ValueError as exc:
+                db.execute("DELETE FROM tunnels WHERE id=?", (tid,))
+                raise HTTPException(402, str(exc)) from None
+        job_id = create_job(
+            sess, "tunnel_deploy", title, DEPLOY_STEPS,
+            lambda job: orch.job_deploy(job, tid),
+            tunnel_id=tid, owner_id=customer_id, on_finish=mark_failed(tid),
+        )
+        db.update("tunnels", tid, {"status": "deploying", "last_job_id": job_id})
+        db.update("service_orders", order_id, {
+            "status": "done",
+            "tunnel_id": tid,
+            "decided_at": row.get("decided_at") or utcnow(),
+        })
+        out = {
+            "order": order_out(get_order(order_id, sess), sess),
+            "tunnel": tunnel_out(get_tunnel(tid, sess)),
+            "job_id": job_id,
+        }
+        if charged:
+            out["charged"] = charged
+            out["wallet_balance"] = wallet_mod.balance_of(db, customer_id)
+        return out
+
+    # ---------- support tickets ----------
+    def _pack_ticket_access(access: TicketAccessIn | None) -> str | None:
+        if access is None:
+            return None
+        payload = {k: v for k, v in access.model_dump().items() if v is not None and str(v).strip() != ""}
+        if not payload:
+            return None
+        return vault.encrypt(json.dumps(payload, ensure_ascii=False))
+
+    def _public_ticket_access(
+        blob: str | None, *, reveal: bool, author_id: int, sess: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        if not blob:
+            return None
+        if not reveal and author_id != sess["admin_id"] and not is_owner(sess):
+            return {"has_access": True}
+        if not reveal and not is_owner(sess) and author_id == sess["admin_id"]:
+            # Author may see own submitted access in the same account.
+            reveal = True
+        if not reveal and not is_owner(sess):
+            return {"has_access": True}
+        try:
+            raw = json.loads(vault.decrypt(blob) or "{}")
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return {"has_access": True, "access_error": "رمزگشایی دسترسی ممکن نیست"}
+        if is_owner(sess) or author_id == sess["admin_id"]:
+            out = dict(raw)
+            out["has_access"] = True
+            return out
+        return {"has_access": True}
+
+    def ticket_out(row: dict[str, Any], sess: dict[str, Any], names: dict[int, str] | None = None,
+                   messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        names = names or admin_names()
+        out = {
+            "id": row["id"],
+            "customer_id": row["customer_id"],
+            "customer_username": names.get(row["customer_id"], "?"),
+            "subject": row["subject"],
+            "category": row["category"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        if messages is not None:
+            out["messages"] = messages
+        else:
+            last = db.one(
+                "SELECT body, created_at FROM ticket_messages WHERE ticket_id=? ORDER BY id DESC LIMIT 1",
+                (row["id"],),
+            )
+            out["last_message"] = (last or {}).get("body")
+            out["last_message_at"] = (last or {}).get("created_at")
+            cnt = db.one("SELECT COUNT(*) AS n FROM ticket_messages WHERE ticket_id=?", (row["id"],))
+            out["message_count"] = int((cnt or {"n": 0})["n"])
+        return out
+
+    def get_ticket(ticket_id: int, sess: dict[str, Any]) -> dict[str, Any]:
+        row = db.one("SELECT * FROM tickets WHERE id=?", (ticket_id,))
+        if row is None:
+            raise HTTPException(404, "تیکت پیدا نشد")
+        if not is_owner(sess) and row["customer_id"] != sess["admin_id"]:
+            raise HTTPException(404, "تیکت پیدا نشد")
+        return row
+
+    def _author_role(admin_id: int) -> str:
+        row = db.one("SELECT role FROM admins WHERE id=?", (admin_id,))
+        return (row or {}).get("role") or "customer"
+
+    @app.get("/api/tickets")
+    async def list_tickets(sess: dict = Depends(require_auth)) -> list[dict[str, Any]]:
+        names = admin_names()
+        if is_owner(sess):
+            rows = db.all("SELECT * FROM tickets ORDER BY updated_at DESC, id DESC LIMIT 200")
+        else:
+            rows = db.all(
+                "SELECT * FROM tickets WHERE customer_id=? ORDER BY updated_at DESC, id DESC LIMIT 100",
+                (sess["admin_id"],),
+            )
+        return [ticket_out(r, sess, names) for r in rows]
+
+    @app.post("/api/tickets")
+    async def create_ticket(data: TicketCreateIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        assert_active(sess)
+        customer_id = sess["admin_id"]
+        # Owner can open an internal note-style ticket under own id; still allowed.
+        now = utcnow()
+        tid = db.insert("tickets", {
+            "customer_id": customer_id,
+            "subject": data.subject,
+            "category": data.category,
+            "status": "open",
+            "created_at": now,
+            "updated_at": now,
+        })
+        db.insert("ticket_messages", {
+            "ticket_id": tid,
+            "author_id": sess["admin_id"],
+            "body": data.body,
+            "access_blob": _pack_ticket_access(data.access),
+            "created_at": now,
+        })
+        return await get_ticket_api(tid, sess)
+
+    @app.get("/api/tickets/{ticket_id}")
+    async def get_ticket_api(ticket_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_ticket(ticket_id, sess)
+        names = admin_names()
+        msgs = db.all("SELECT * FROM ticket_messages WHERE ticket_id=? ORDER BY id ASC", (ticket_id,))
+        messages = []
+        for m in msgs:
+            item = {
+                "id": m["id"],
+                "ticket_id": m["ticket_id"],
+                "author_id": m["author_id"],
+                "author_username": names.get(m["author_id"], "?"),
+                "author_role": _author_role(m["author_id"]),
+                "body": m["body"],
+                "access": _public_ticket_access(
+                    m.get("access_blob"), reveal=is_owner(sess), author_id=m["author_id"], sess=sess
+                ),
+                "created_at": m["created_at"],
+            }
+            messages.append(item)
+        return ticket_out(row, sess, names, messages)
+
+    @app.post("/api/tickets/{ticket_id}/messages")
+    async def add_ticket_message(ticket_id: int, data: TicketMessageIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_ticket(ticket_id, sess)
+        if row["status"] == "closed" and not is_owner(sess):
+            raise HTTPException(409, "تیکت بسته است؛ فقط مالک می‌تواند دوباره باز کند")
+        now = utcnow()
+        db.insert("ticket_messages", {
+            "ticket_id": ticket_id,
+            "author_id": sess["admin_id"],
+            "body": data.body,
+            "access_blob": _pack_ticket_access(data.access),
+            "created_at": now,
+        })
+        status = row["status"]
+        if is_owner(sess):
+            status = "answered"
+        elif status == "answered":
+            status = "open"
+        elif status == "closed":
+            status = "open"
+        db.update("tickets", ticket_id, {"status": status, "updated_at": now})
+        return await get_ticket_api(ticket_id, sess)
+
+    @app.patch("/api/tickets/{ticket_id}")
+    async def patch_ticket(ticket_id: int, data: TicketPatchIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        get_ticket(ticket_id, sess)
+        db.update("tickets", ticket_id, {"status": data.status, "updated_at": utcnow()})
+        return await get_ticket_api(ticket_id, sess)
+
+    def deposit_out(row: dict[str, Any], names: dict[int, str] | None = None) -> dict[str, Any]:
+        names = names or admin_names()
+        return {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "username": names.get(row["user_id"], "?"),
+            "amount": int(row["amount"]),
+            "method": row["method"],
+            "tracking_code": row["tracking_code"],
+            "note": row.get("note") or "",
+            "tunnel_mode": row.get("tunnel_mode"),
+            "status": row["status"],
+            "owner_note": row.get("owner_note") or "",
+            "created_at": row["created_at"],
+            "decided_at": row.get("decided_at"),
+        }
+
+    @app.get("/api/wallet")
+    async def get_wallet(sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        uid = sess["admin_id"]
+        ledger = db.all(
+            "SELECT * FROM wallet_ledger WHERE user_id=? ORDER BY id DESC LIMIT 50",
+            (uid,),
+        )
+        deposits = db.all(
+            "SELECT * FROM deposit_requests WHERE user_id=? ORDER BY id DESC LIMIT 30",
+            (uid,),
+        )
+        return {
+            "balance": wallet_mod.balance_of(db, uid),
+            "commerce": commerce_public(),
+            "ledger": [
+                {
+                    "id": r["id"],
+                    "kind": r["kind"],
+                    "amount": int(r["amount"]),
+                    "balance_after": int(r["balance_after"]),
+                    "note": r.get("note") or "",
+                    "created_at": r["created_at"],
+                }
+                for r in ledger
+            ],
+            "deposits": [deposit_out(r) for r in deposits],
+        }
+
+    @app.post("/api/wallet/deposits")
+    async def create_deposit(data: DepositIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        if sess.get("role") == "owner":
+            raise HTTPException(400, "مالک نیازی به واریز ندارد")
+        pending = db.one(
+            "SELECT COUNT(*) AS n FROM deposit_requests WHERE user_id=? AND status='pending'",
+            (sess["admin_id"],),
+        )
+        if pending and int(pending["n"] or 0) >= 5:
+            raise HTTPException(429, "چند درخواست واریز در انتظار تأیید دارید")
+        pay = wallet_mod.payment_info(db)
+        if data.method == "card" and not pay["card"]:
+            raise HTTPException(422, "مالک هنوز شماره کارت ثبت نکرده است")
+        if data.method == "crypto" and not pay["wallet_address"]:
+            raise HTTPException(422, "مالک هنوز آدرس ولت ثبت نکرده است")
+        if data.tunnel_mode and wallet_mod.sell_enabled(db):
+            price = wallet_mod.price_for(db, data.tunnel_mode)
+            if price > 0 and data.amount < price:
+                raise HTTPException(
+                    422,
+                    f"مبلغ واریز از قیمت این تانل کمتر است (حداقل {price:,} {pay['currency']})",
+                )
+        did = db.insert("deposit_requests", {
+            "user_id": sess["admin_id"],
+            "amount": data.amount,
+            "method": data.method,
+            "tracking_code": data.tracking_code,
+            "note": (data.note or "").strip(),
+            "tunnel_mode": data.tunnel_mode,
+            "status": "pending",
+            "created_at": utcnow(),
+        })
+        row = db.one("SELECT * FROM deposit_requests WHERE id=?", (did,))
+        return {"ok": True, "deposit": deposit_out(row)}
+
+    @app.get("/api/wallet/deposits")
+    async def list_deposits(sess: dict = Depends(require_auth)) -> list[dict[str, Any]]:
+        names = admin_names()
+        if is_owner(sess):
+            rows = db.all("SELECT * FROM deposit_requests ORDER BY id DESC LIMIT 200")
+        else:
+            rows = db.all(
+                "SELECT * FROM deposit_requests WHERE user_id=? ORDER BY id DESC LIMIT 100",
+                (sess["admin_id"],),
+            )
+        return [deposit_out(r, names) for r in rows]
+
+    @app.post("/api/wallet/deposits/{deposit_id}/decide")
+    async def decide_deposit(deposit_id: int, data: DepositDecideIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        row = db.one("SELECT * FROM deposit_requests WHERE id=?", (deposit_id,))
+        if not row:
+            raise HTTPException(404, "درخواست واریز پیدا نشد")
+        if row["status"] != "pending":
+            raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
+        now = utcnow()
+        if data.action == "reject":
+            db.update("deposit_requests", deposit_id, {
+                "status": "rejected",
+                "owner_note": (data.note or "").strip(),
+                "decided_at": now,
+            })
+        else:
+            try:
+                wallet_mod.credit(
+                    db,
+                    int(row["user_id"]),
+                    int(row["amount"]),
+                    kind="deposit",
+                    note=f"تأیید واریز #{deposit_id} — {row['tracking_code']}",
+                    actor_id=sess["admin_id"],
+                    ref_type="deposit",
+                    ref_id=deposit_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
+            db.update("deposit_requests", deposit_id, {
+                "status": "approved",
+                "owner_note": (data.note or "").strip(),
+                "decided_at": now,
+            })
+        fresh = db.one("SELECT * FROM deposit_requests WHERE id=?", (deposit_id,))
+        return {"ok": True, "deposit": deposit_out(fresh), "wallet_balance": wallet_mod.balance_of(db, int(row["user_id"]))}
+
+    @app.post("/api/users/{user_id}/wallet")
+    async def adjust_user_wallet(user_id: int, data: WalletAdjustIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        user = get_admin(user_id)
+        if user.get("role") == "owner":
+            raise HTTPException(400, "کیف پول مالک از این مسیر تغییر نمی‌کند")
+        try:
+            if data.direction == "credit":
+                bal = wallet_mod.credit(
+                    db, user_id, data.amount, kind="admin_credit",
+                    note=(data.note or "افزایش توسط مالک").strip(),
+                    actor_id=sess["admin_id"],
+                )
+            else:
+                bal = wallet_mod.debit(
+                    db, user_id, data.amount, kind="admin_debit",
+                    note=(data.note or "کاهش توسط مالک").strip(),
+                    actor_id=sess["admin_id"],
+                )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        return {"ok": True, "wallet_balance": bal, "user": user_out(get_admin(user_id))}
+
+    @app.get("/api/users/{user_id}/overview")
+    async def user_overview(user_id: int, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        user = get_admin(user_id)
+        servers = db.all("SELECT * FROM servers WHERE owner_id=? ORDER BY id", (user_id,))
+        tunnels = db.all("SELECT * FROM tunnels WHERE owner_id=? ORDER BY id", (user_id,))
+        relays = db.all("SELECT * FROM relays WHERE owner_id=? ORDER BY id", (user_id,))
+        ledger = db.all(
+            "SELECT * FROM wallet_ledger WHERE user_id=? ORDER BY id DESC LIMIT 40",
+            (user_id,),
+        )
+        deposits = db.all(
+            "SELECT * FROM deposit_requests WHERE user_id=? ORDER BY id DESC LIMIT 40",
+            (user_id,),
+        )
+        names = server_names()
+        return {
+            "user": user_out(user),
+            "servers": [server_out(s) for s in servers],
+            "tunnels": [tunnel_out(t, names) for t in tunnels],
+            "relays": [relay_out(r, names) for r in relays],
+            "ledger": [
+                {
+                    "id": r["id"],
+                    "kind": r["kind"],
+                    "amount": int(r["amount"]),
+                    "balance_after": int(r["balance_after"]),
+                    "note": r.get("note") or "",
+                    "created_at": r["created_at"],
+                }
+                for r in ledger
+            ],
+            "deposits": [deposit_out(r) for r in deposits],
+        }
 
     @app.websocket("/ws/term")
     async def term_ws(ws: WebSocket) -> None:
