@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.29
+- Customer cards show usage as three figures, permissions as separate on/off chips, and expiry on its own row.
+
 ## 1.6.0 / panel 1.3.28
 - The panel no longer binds port 80 or 443 itself. systemd owns the listen socket and passes it to the locked-down service, so a privileged port stays up across updates.
 - `jojonet-panel update` waits until the secret URL answers over HTTPS. If it does not, the previous unit, socket, and env are restored and the old service is started again.

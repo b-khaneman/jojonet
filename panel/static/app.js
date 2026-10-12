@@ -2200,19 +2200,41 @@
       });
     });
 
+    const expiry = owner
+      ? 'بدون انقضا'
+      : (u.expires_at ? `${fmtTime(u.expires_at)}${days != null ? ` (${fmtNum(days)} روز)` : ''}` : 'بدون انقضا');
+    const perm = (on, label) => h('span', {
+      class: on ? 'perm is-on' : 'perm',
+      title: on ? `${label}: روشن` : `${label}: خاموش`,
+    }, label);
+    const stat = (label, value) => h('div', { class: 'user-stat' },
+      h('span', { class: 'user-stat-n', dir: 'ltr' }, value),
+      h('span', { class: 'user-stat-k' }, label));
+    const facts = [h('div', { class: 'user-fact' },
+      h('span', { class: 'user-fact-k' }, 'انقضا'),
+      h('span', { class: 'user-fact-v' }, expiry))];
+    if (u.note) {
+      facts.push(h('div', { class: 'user-fact' },
+        h('span', { class: 'user-fact-k' }, 'یادداشت'),
+        h('span', { class: 'user-fact-v' }, u.note)));
+    }
+
     return h('article', { class: 'card user-card' },
       h('div', { class: 'card-head' },
-        h('div', null,
+        h('div', { class: 'user-id' },
           h('h4', { class: 'card-title' }, u.username),
-          h('span', { class: 'mode-chip' }, owner ? 'مالک' : 'مشتری')),
+          h('span', { class: owner ? 'role-chip role-owner' : 'role-chip' }, owner ? 'مالک' : 'مشتری')),
         badge(status[0], status[1])),
-      h('dl', { class: 'kv' },
-        kv('انقضا', owner ? 'بدون انقضا' : (u.expires_at ? `${fmtTime(u.expires_at)}${days != null ? ` (${fmtNum(days)} روز)` : ''}` : 'بدون انقضا')),
-        kv('سرور', limitText(usage.servers || 0, u.max_servers, '')),
-        kv('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
-        kv('رله', limitText(usage.relays || 0, u.max_relays, '')),
-        kv('VPN / رله / آپدیت / ترمینال', `${u.allow_vpn ? 'بله' : 'خیر'} / ${u.allow_relay ? 'بله' : 'خیر'} / ${u.allow_os_update ? 'بله' : 'خیر'} / ${u.allow_term !== false ? 'بله' : 'خیر'}`),
-        kv('یادداشت', u.note || '—')),
+      h('div', { class: 'user-stats' },
+        stat('سرور', limitText(usage.servers || 0, u.max_servers, '')),
+        stat('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
+        stat('رله', limitText(usage.relays || 0, u.max_relays, ''))),
+      h('div', { class: 'user-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
+        perm(!!u.allow_vpn, 'VPN'),
+        perm(!!u.allow_relay, 'رله'),
+        perm(!!u.allow_os_update, 'آپدیت'),
+        perm(u.allow_term !== false, 'ترمینال')),
+      h('div', { class: 'user-facts' }, facts),
       h('div', { class: 'card-actions' }, extendBtn, toggleBtn, termBtn, pwBtn, delBtn));
   }
 
