@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.31
+- The header account control is a menu: profile, username, password, and logout. The username text in the bar is a mark, and the signed-in account can rename itself.
+
 ## 1.6.0 / panel 1.3.30
 - The live-scan note explains an unregistered tunnel in plain language. The badge says «ثبت‌نشده» instead of «یتیم».
 

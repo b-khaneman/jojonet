@@ -189,6 +189,19 @@ class PasswordIn(BaseModel):
     new_password: str = Field(min_length=10, max_length=256)
 
 
+class UsernameIn(BaseModel):
+    username: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("username")
+    @classmethod
+    def _username(cls, v: str) -> str:
+        v = v.strip()
+        if not USER_RE.fullmatch(v) or v.endswith("$"):
+            raise ValueError("نام کاربری نامعتبر است")
+        return v
+
+
 class VpnPanelIn(BaseModel):
     kind: Literal["xui", "xui_classic", "pasarguard"]
 
@@ -965,6 +978,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db.update("admins", admin["id"], {"pw_hash": new_hash})
         db.execute("DELETE FROM sessions WHERE admin_id=? AND token_hash<>?", (admin["id"], sess["token_hash"]))
         return {"ok": True}
+
+    @app.post("/api/username")
+    async def change_username(data: UsernameIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        admin = db.one("SELECT * FROM admins WHERE id=?", (sess["admin_id"],))
+        if not admin or not await asyncio.to_thread(verify_password, data.password, admin["pw_hash"]):
+            raise HTTPException(400, "رمز فعلی اشتباه است")
+        if data.username != admin["username"]:
+            taken = db.one("SELECT id FROM admins WHERE username=? AND id<>?", (data.username, admin["id"]))
+            if taken:
+                raise HTTPException(409, "این نام کاربری قبلاً استفاده شده است")
+            db.update("admins", admin["id"], {"username": data.username})
+        return {"ok": True, "username": data.username}
 
     def get_admin(user_id: int) -> dict[str, Any]:
         row = db.one("SELECT * FROM admins WHERE id=?", (user_id,))

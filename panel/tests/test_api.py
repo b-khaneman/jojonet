@@ -365,6 +365,20 @@ def test_password_change(client, auth, admin):
     assert client.post("/api/login", json={"username": "admin", "password": "another-password-1"}).status_code == 200
 
 
+def test_owner_can_rename_account(client, auth, admin):
+    assert client.post("/api/username", json={"username": "boss", "password": "nope"}, headers=auth).status_code == 400
+    assert client.post("/api/username", json={"username": "1bad", "password": admin[1]}, headers=auth).status_code == 422
+    taken = client.post("/api/users", json={"username": "custname1", "password": "customer-pass-1"}, headers=auth)
+    assert taken.status_code == 200, taken.text
+    assert client.post("/api/username", json={"username": "custname1", "password": admin[1]}, headers=auth).status_code == 409
+    renamed = client.post("/api/username", json={"username": "boss", "password": admin[1]}, headers=auth)
+    assert renamed.status_code == 200, renamed.text
+    assert client.get("/api/me", headers=auth).json()["username"] == "boss"
+    client.post("/api/logout", headers=auth)
+    assert client.post("/api/login", json={"username": "admin", "password": admin[1]}).status_code == 401
+    assert client.post("/api/login", json={"username": "boss", "password": admin[1]}).status_code == 200
+
+
 def test_info_modes(client, auth):
     info = client.get("/api/info").json()
     ids = [m["id"] for m in info["modes"]]

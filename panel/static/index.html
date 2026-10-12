@@ -91,10 +91,6 @@
       </div>
     </div>
     <div class="top-actions">
-      <div class="user-meta">
-        <span id="hdr-user" class="user-chip" title="کاربر فعلی"></span>
-        <span id="hdr-quota" class="quota-chip" hidden></span>
-      </div>
       <div class="theme-switch" role="radiogroup" aria-label="انتخاب تم">
         <button type="button" class="theme-btn" role="radio" data-theme-set="jojo" aria-checked="false">فعلی</button>
         <button type="button" class="theme-btn" role="radio" data-theme-set="day" aria-checked="false">روز</button>
@@ -102,8 +98,26 @@
       </div>
       <button id="hx-toggle-right" class="hx-fab" type="button" aria-label="ترمینال راست" aria-pressed="false" title="ترمینال راست">ترمینال راست</button>
       <button id="hx-toggle-left" class="hx-fab" type="button" aria-label="ترمینال چپ" aria-pressed="false" title="ترمینال چپ">ترمینال چپ</button>
-      <button id="btn-password" class="btn btn-ghost btn-sm" type="button">تغییر رمز عبور</button>
-      <button id="btn-logout" class="btn btn-ghost btn-sm" type="button">خروج</button>
+      <div class="account-menu" id="account-menu">
+        <button id="btn-account" class="account-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-panel" aria-label="حساب کاربری">
+          <svg class="account-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"></circle>
+            <circle cx="12" cy="9.6" r="2.15" fill="currentColor"></circle>
+            <path d="M7.5 17.2a5.1 5.1 0 0 1 9 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+            <path class="account-owner-mark" d="M18.2 3.6l.55 1.15 1.25.15-.9.85.22 1.25-1.12-.6-1.12.6.22-1.25-.9-.85 1.25-.15z" fill="currentColor"></path>
+          </svg>
+        </button>
+        <div id="account-panel" class="account-panel" role="menu" hidden>
+          <div class="account-id">
+            <span id="account-name" class="account-name" dir="ltr"></span>
+            <span id="account-role" class="account-role"></span>
+            <span id="hdr-quota" class="quota-chip" hidden></span>
+          </div>
+          <button id="btn-username" class="account-item" type="button" role="menuitem">تغییر نام کاربری</button>
+          <button id="btn-password" class="account-item" type="button" role="menuitem">تغییر رمز عبور</button>
+          <button id="btn-logout" class="account-item account-item-danger" type="button" role="menuitem">خروج</button>
+        </div>
+      </div>
     </div>
   </header>
 

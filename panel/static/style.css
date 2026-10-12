@@ -835,6 +835,114 @@ textarea::placeholder {
   min-width: 0;
 }
 
+.account-menu {
+  position: relative;
+}
+
+.account-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.account-btn:hover,
+.account-btn[aria-expanded="true"] {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.account-btn.is-owner {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.account-mark {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.account-owner-mark {
+  opacity: 0;
+}
+
+.account-btn.is-owner .account-owner-mark {
+  opacity: 1;
+}
+
+.account-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + .45rem);
+  inset-inline-end: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 15.5rem;
+  padding: .35rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.account-panel[hidden] {
+  display: none;
+}
+
+.account-id {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .12rem;
+  padding: .55rem .7rem .65rem;
+  margin-bottom: .25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-name {
+  font-size: 1.02rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.account-role {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.account-item {
+  display: flex;
+  width: 100%;
+  padding: .55rem .7rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  text-align: start;
+  cursor: pointer;
+}
+
+.account-item:hover,
+.account-item:focus-visible {
+  background: var(--surface-3);
+  outline: none;
+}
+
+.account-item-danger {
+  color: var(--err);
+}
+
 .user-chip {
   padding: .2rem .7rem;
   border: 1px solid var(--border);

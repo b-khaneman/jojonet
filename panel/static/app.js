@@ -547,11 +547,15 @@
 
   function paintHeader() {
     const me = state.me || {};
-    const userEl = $('#hdr-user');
-    const quotaEl = $('#hdr-quota');
-    if (userEl) userEl.textContent = me.username || '';
+    const nameEl = $('#account-name');
+    const roleEl = $('#account-role');
+    const btn = $('#btn-account');
+    if (nameEl) nameEl.textContent = me.username || '';
+    if (roleEl) roleEl.textContent = me.role === 'owner' ? 'مالک' : (me.role === 'customer' ? 'مشتری' : '');
+    if (btn) btn.classList.toggle('is-owner', me.role === 'owner');
     const entryEl = $('#hdr-entry');
     if (entryEl) entryEl.textContent = me.base_path || '';
+    const quotaEl = $('#hdr-quota');
     if (!quotaEl) return;
     if (me.role === 'owner') {
       quotaEl.hidden = true;
@@ -2636,7 +2640,78 @@
     el.textContent = panelV ? `نسخه ${panelV}` : '';
   }
 
+  function closeAccountMenu() {
+    const panel = $('#account-panel');
+    const btn = $('#btn-account');
+    if (panel) panel.hidden = true;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+
+  function bindAccountMenu() {
+    const root = $('#account-menu');
+    const btn = $('#btn-account');
+    const panel = $('#account-panel');
+    if (!root || !btn || !panel) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = panel.hidden;
+      panel.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', (e) => {
+      if (!root.contains(e.target)) closeAccountMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAccountMenu();
+    });
+  }
+
+  function openUsernameForm() {
+    closeAccountMenu();
+    const formId = uid('un');
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const fUser = h('input', {
+      id: uid('f'), type: 'text', dir: 'ltr', autocomplete: 'username', autocapitalize: 'off',
+      spellcheck: 'false', required: true, maxlength: '32', value: (state.me && state.me.username) || '',
+    });
+    const fPw = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'current-password', required: true });
+    const form = h('form', { id: formId, class: 'form', novalidate: true },
+      errBox,
+      field('نام کاربری جدید', fUser, 'حرف انگلیسی، عدد، نقطه، _ یا - . حداکثر ۳۲ نویسه.'),
+      field('رمز عبور فعلی', fPw));
+    const saveBtn = h('button', { type: 'submit', form: formId, class: 'btn btn-primary' }, 'ذخیره نام');
+    const m = openModal({
+      title: 'تغییر نام کاربری',
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+      sticky: true,
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const username = fUser.value.trim();
+      if (!/^[A-Za-z_][A-Za-z0-9._-]{0,31}$/.test(username)) {
+        return showErr(errBox, 'نام کاربری باید با حرف انگلیسی یا _ شروع شود.');
+      }
+      if (!fPw.value) return showErr(errBox, 'رمز عبور فعلی را وارد کنید.');
+      saveBtn.disabled = true;
+      try {
+        const row = await api('POST', '/api/username', { username, password: fPw.value });
+        if (state.me) state.me.username = row.username || username;
+        paintHeader();
+        toast('نام کاربری تغییر کرد. ورود بعدی با همین نام است.', 'success');
+        m.close();
+      } catch (err) {
+        if (err.status !== 401) showErr(errBox, err.message);
+      } finally {
+        saveBtn.disabled = false;
+      }
+      return undefined;
+    });
+  }
+
   function openPasswordForm() {
+    closeAccountMenu();
     const formId = uid('pw');
     const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
     const fOld = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'current-password', required: true });
@@ -3224,6 +3299,7 @@
     bindTheme();
     bindHxTerms();
     bindListen();
+    bindAccountMenu();
     const termPolicy = $('#set-terms-enabled');
     if (termPolicy) {
       termPolicy.addEventListener('change', async () => {
@@ -3240,8 +3316,10 @@
       });
     }
     $('#login-form').addEventListener('submit', onLogin);
-    $('#btn-logout').addEventListener('click', logout);
+    $('#btn-logout').addEventListener('click', () => { closeAccountMenu(); logout(); });
     $('#btn-password').addEventListener('click', openPasswordForm);
+    const userBtn = $('#btn-username');
+    if (userBtn) userBtn.addEventListener('click', openUsernameForm);
     $('#btn-add-server').addEventListener('click', () => openServerForm(null));
     $('#btn-refresh-servers').addEventListener('click', (e) => act(e.currentTarget, () => load('servers'), 'در حال بروزرسانی…'));
     $('#btn-refresh-tunnels').addEventListener('click', (e) => act(e.currentTarget, () => Promise.all([load('tunnels'), load('servers'), loadLiveTunnels(true)]), 'در حال بروزرسانی…'));
