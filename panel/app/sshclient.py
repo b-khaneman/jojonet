@@ -14,7 +14,9 @@ LineCallback = Callable[[str], Awaitable[None] | None]
 
 # Keep panel remote commands out of interactive bash history on the server.
 _HIST_ENV = "HISTFILE=/dev/null HISTSIZE=0"
-_SCRUB_AFTER_SEC = 60
+# Scrub after every root command (not only long ones) so short install/checks leave no traces.
+_SCRUB_AFTER_SEC = 0
+_SHELL_CMD = "env HISTFILE=/dev/null HISTSIZE=0 HISTFILESIZE=0 HISTCONTROL=ignorespace bash --norc --noprofile -i"
 _SCRUB_HISTORY = (
     "for f in /root/.bash_history \"$HOME/.bash_history\"; do "
     "[ -n \"$f\" ] && [ -f \"$f\" ] && [ -w \"$f\" ] || continue; "
@@ -24,6 +26,14 @@ _SCRUB_HISTORY = (
     "-e '/\\/etc\\/jojonet/d' "
     "-e '/\\/var\\/lib\\/jojonet/d' "
     "-e '/ip tunnel/d' "
+    "-e '/tun-server/d' "
+    "-e '/tun-client/d' "
+    "-e '/nft.*jojonet/d' "
+    "-e '/GRETun/d' "
+    "-e '/LocalTun/d' "
+    "-e '/jojonet-run/d' "
+    "-e '/paqet/d' "
+    "-e '/vxlan/d' "
     "-e '/udp2raw/d' "
     "-e '/hysteria/d' "
     "-e '/rathole/d' "
@@ -31,12 +41,17 @@ _SCRUB_HISTORY = (
     "-e '/dnstt/d' "
     "-e '/pingtunnel/d' "
     "-e '/wireguard/d' "
+    "-e '/\\<wg\\>/d' "
     "-e '/xray/d' "
     "-e '/dokodemo/d' "
     "-e '/spoof/d' "
+    "-e '/6to4/d' "
+    "-e '/gre6/d' "
+    "-e '/ipip6/d' "
     "\"$f\" 2>/dev/null || true; "
     "done; "
-    "history -c 2>/dev/null || true"
+    "history -c 2>/dev/null || true; "
+    "history -w 2>/dev/null || true"
 )
 
 
@@ -203,11 +218,20 @@ class RemoteSession:
         cols = max(20, min(int(cols or 80), 300))
         rows = max(8, min(int(rows or 24), 120))
         try:
-            self.proc = await self.conn.create_process(
-                term_type="xterm-256color",
-                term_size=(cols, rows),
-                encoding=None,
-            )
+            # Prefer a history-disabled bash; fall back to the account default shell.
+            try:
+                self.proc = await self.conn.create_process(
+                    _SHELL_CMD,
+                    term_type="xterm-256color",
+                    term_size=(cols, rows),
+                    encoding=None,
+                )
+            except asyncssh.Error:
+                self.proc = await self.conn.create_process(
+                    term_type="xterm-256color",
+                    term_size=(cols, rows),
+                    encoding=None,
+                )
         except asyncssh.Error as exc:
             raise SSHError(f"باز کردن شل تعاملی ناموفق بود: {exc}") from exc
         return self.proc
@@ -231,6 +255,8 @@ class RemoteSession:
             except Exception:
                 pass
         if self.conn is not None:
+            # Scrub while the connection is still open (interactive terminal / session end).
+            await self._scrub_history()
             self.conn.close()
             try:
                 await asyncio.wait_for(self.conn.wait_closed(), timeout=5)

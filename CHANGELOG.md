@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.42
+- Failed paid tunnel deploys refund the wallet charge; deposit approval is transactional.
+- Order fulfill lets the owner supply SSH secrets and mode options (Spoof, DNSTT, Xray, ICMP).
+- Panel SSH and the web terminal keep jojonet commands out of bash history with the same scrub patterns as the CLI.
+
 ## 1.6.0 / panel 1.3.41
 - Tunnel type selection is a searchable technical picker with grouped protocols, stack badges, and a clear deployment brief.
 

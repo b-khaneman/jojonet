@@ -761,13 +761,12 @@ def test_support_tickets_with_optional_access(client, admin):
     assert bare.json()["messages"][0]["access"] is None
 
 
-def test_wallet_deposit_and_tunnel_charge(client, admin):
+def test_wallet_deposit_and_tunnel_charge(client, admin, monkeypatch):
+    from app.orchestrator import StepFailed
     from test_tenants import add_customer, login_as
 
     owner_auth = login_as(client, admin[0], admin[1])
     add_customer(client, owner_auth, username="pay1", password="customer-pass-1", max_servers=2, max_tunnels=2)
-    prices = {"gre": 50000, "wireguard": 0, "ipip": 0, "sit": 0, "geneve": 0, "vxlan": 0, "icmp": 0, "dnstt": 0, "spoof": 0, "dokodemo": 0, "xray_reverse": 0, "ssh": 0}
-    # fill only known keys from settings response later if needed
     sett = client.patch("/api/settings", json={
         "sell_tunnels_enabled": True,
         "register_enabled": True,
@@ -813,3 +812,49 @@ def test_wallet_deposit_and_tunnel_charge(client, admin):
         "amount": 10000, "direction": "debit", "note": "کسر تست"
     }, headers=owner_auth)
     assert adj.status_code == 200 and adj.json()["wallet_balance"] == 90000
+
+    # Public registration gate
+    client.post("/api/logout", headers=owner_auth)
+    assert client.post("/api/register", json={"username": "newbie1", "password": "newbie-pass-1"}).status_code == 200
+    client.post("/api/logout")
+    owner_auth = login_as(client, admin[0], admin[1])
+    assert client.patch("/api/settings", json={"register_enabled": False}, headers=owner_auth).status_code == 200
+    client.post("/api/logout", headers=owner_auth)
+    closed = client.post("/api/register", json={"username": "newbie2", "password": "newbie-pass-2"})
+    assert closed.status_code == 403
+
+    # Tunnel charge + refund on failed deploy
+    cauth = login_as(client, "pay1", "customer-pass-1")
+    iran = client.post("/api/servers", json={
+        "name": "IR-Pay", "role": "iran", "host": "10.50.1.1", "port": 22,
+        "username": "root", "auth_type": "password", "password": "x",
+    }, headers=cauth)
+    kharej = client.post("/api/servers", json={
+        "name": "DE-Pay", "role": "kharej", "host": "10.50.2.2", "port": 22,
+        "username": "root", "auth_type": "password", "password": "y",
+    }, headers=cauth)
+    assert iran.status_code == 200 and kharej.status_code == 200, (iran.text, kharej.text)
+
+    async def boom_step(job, tunnel_id):
+        await job.start(0)
+        raise StepFailed("deploy failed on purpose")
+
+    monkeypatch.setattr(client.app.state.orch, "job_deploy", boom_step)
+    created = client.post("/api/tunnels", json={
+        "mode": "gre",
+        "iran_id": iran.json()["id"],
+        "kharej_id": kharej.json()["id"],
+        "users": "iran",
+    }, headers=cauth)
+    assert created.status_code == 200, created.text
+    assert created.json()["charged"] == 50000
+    assert created.json()["wallet_balance"] == 40000
+    job = wait_job(client, created.json()["job_id"])
+    assert job["status"] == "failed"
+    bal_after = client.get("/api/wallet", headers=cauth)
+    assert bal_after.status_code == 200
+    assert bal_after.json()["balance"] == 90000
+    tunnels = client.get("/api/tunnels", headers=cauth)
+    assert tunnels.status_code == 200
+    match = [t for t in tunnels.json() if t["id"] == created.json()["tunnel"]["id"]]
+    assert match and match[0]["status"] == "failed"

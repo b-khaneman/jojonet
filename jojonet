@@ -1823,6 +1823,7 @@ opsec_session_start() {
     # Set JOJONET_CLEAR_HISTORY=0 to skip EXIT scrub during local testing.
     export HISTFILE=/dev/null
     export HISTSIZE=0
+    export HISTFILESIZE=0
     set +o history 2>/dev/null || true
 }
 

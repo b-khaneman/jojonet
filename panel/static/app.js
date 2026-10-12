@@ -3801,23 +3801,7 @@
     }
     if (isOwner() && (o.status === 'approved' || o.status === 'pending')) {
       const goBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'انجام سفارش');
-      goBtn.addEventListener('click', async () => {
-        const ok = await confirmDialog({
-          title: 'انجام سفارش',
-          message: `تانل ${o.mode_label || o.mode} برای «${o.customer_username}» ساخته و مستقر شود؟`,
-          okText: 'شروع استقرار',
-        });
-        if (!ok) return;
-        act(goBtn, async () => {
-          const r = await api('POST', `/api/orders/${enc(o.id)}/fulfill`, {});
-          if (r && r.job_id != null) {
-            state.sessionJobs.add(String(r.job_id));
-            openJobView(r.job_id);
-          }
-          toast('استقرار سفارش شروع شد.', 'success');
-          await Promise.all([load('orders'), load('tunnels'), load('servers'), load('jobs', true)]);
-        });
-      });
+      goBtn.addEventListener('click', () => openFulfillModal(o));
       actions.push(goBtn);
     }
     const meta = [
@@ -3839,6 +3823,208 @@
       o.message ? h('div', { class: 'svc-msg' }, o.message) : null,
       h('div', { class: 'svc-grid' }, orderSideBlock('ایران', o.iran), orderSideBlock('خارج', o.kharej)),
       actions.length ? h('div', { class: 'svc-actions' }, ...actions) : null);
+  }
+
+  function openFulfillModal(o) {
+    const mode = o.mode || '';
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const usersSel = h('select', null,
+      h('option', { value: 'iran', selected: true }, 'کاربران روی ایران'),
+      h('option', { value: 'kharej' }, 'کاربران روی خارج'));
+    const directModes = (state.info && Array.isArray(state.info.direct_modes)) ? state.info.direct_modes : ['dnstt', 'icmp'];
+    const canDirect = directModes.includes(mode);
+    const directBox = h('input', { type: 'checkbox', id: uid('ff-direct') });
+    const directWrap = h('label', { class: 'check', hidden: !canDirect },
+      directBox, h('span', null, 'فقط سرور خارج (بدون ایران)'));
+
+    const needIranPass = !(o.iran && o.iran.has_access);
+    const needKharejPass = !(o.kharej && o.kharej.has_access);
+    const iranPass = h('input', { type: 'password', dir: 'ltr', autocomplete: 'off', placeholder: 'رمز SSH ایران' });
+    const iranSudo = h('input', { type: 'password', dir: 'ltr', autocomplete: 'off', placeholder: 'sudo ایران (اختیاری)' });
+    const kharejPass = h('input', { type: 'password', dir: 'ltr', autocomplete: 'off', placeholder: 'رمز SSH خارج' });
+    const kharejSudo = h('input', { type: 'password', dir: 'ltr', autocomplete: 'off', placeholder: 'sudo خارج (اختیاری)' });
+
+    const extras = h('div', { class: 'form-grid' });
+    const inputs = {};
+    if (mode === 'spoof') {
+      inputs.iranIp = h('input', { type: 'text', dir: 'ltr', value: '5.160.0.1' });
+      inputs.kharejIp = h('input', { type: 'text', dir: 'ltr', value: '8.8.8.8' });
+      inputs.listen = h('input', { type: 'number', dir: 'ltr', value: '8443' });
+      inputs.forward = h('input', { type: 'text', dir: 'ltr', value: '127.0.0.1:443' });
+      inputs.up = h('select', null, h('option', { value: 'udp', selected: true }, 'UDP'), h('option', { value: 'tcp' }, 'TCP'));
+      inputs.down = h('select', null, h('option', { value: 'udp', selected: true }, 'UDP'), h('option', { value: 'tcp' }, 'TCP'));
+      inputs.upport = h('input', { type: 'number', dir: 'ltr', value: '7001' });
+      inputs.downport = h('input', { type: 'number', dir: 'ltr', value: '7002' });
+      inputs.sport = h('input', { type: 'number', dir: 'ltr', value: '53' });
+      inputs.public = h('input', { type: 'checkbox', checked: true });
+      extras.append(
+        field('IP جعلی ایران', inputs.iranIp),
+        field('IP جعلی خارج', inputs.kharejIp),
+        field('پورت ورودی ایران', inputs.listen),
+        field('مقصد فوروارد', inputs.forward),
+        field('پروتکل رفت', inputs.up),
+        field('پروتکل برگشت', inputs.down),
+        field('پورت رفت', inputs.upport),
+        field('پورت برگشت', inputs.downport),
+        field('پورت مبدأ جعلی', inputs.sport),
+        h('label', { class: 'check' }, inputs.public, h('span', null, 'روی همه IPها گوش بده')),
+      );
+    } else if (mode === 'dokodemo' || mode === 'xray_reverse') {
+      inputs.net = h('select', null,
+        h('option', { value: 'tcp', selected: true }, 'TCP'),
+        h('option', { value: 'ws' }, 'WebSocket'),
+        h('option', { value: 'grpc' }, 'gRPC'));
+      inputs.ctrl = h('input', { type: 'number', dir: 'ltr', placeholder: 'اختیاری' });
+      inputs.ports = h('input', { type: 'text', dir: 'ltr', value: '443' });
+      extras.append(field('انتقال', inputs.net), field('پورت کنترل', inputs.ctrl), field('پورت‌های فوروارد', inputs.ports));
+    } else if (mode === 'dnstt') {
+      inputs.domain = h('input', { type: 'text', dir: 'ltr', placeholder: 't.example.com' });
+      inputs.rMode = h('select', null,
+        h('option', { value: 'doh', selected: true }, 'DoH'),
+        h('option', { value: 'dot' }, 'DoT'),
+        h('option', { value: 'udp' }, 'UDP'));
+      inputs.resolver = h('input', { type: 'text', dir: 'ltr', placeholder: 'اختیاری' });
+      inputs.dnsport = h('input', { type: 'number', dir: 'ltr', placeholder: 'اختیاری' });
+      inputs.ports = h('input', { type: 'text', dir: 'ltr', value: '443' });
+      extras.append(
+        field('دامنه DNSTT', inputs.domain),
+        field('Resolver', inputs.rMode),
+        field('آدرس resolver', inputs.resolver),
+        field('پورت UDP خارج', inputs.dnsport),
+        field('پورت‌های فوروارد', inputs.ports),
+      );
+    } else if (mode === 'icmp') {
+      inputs.ports = h('input', { type: 'text', dir: 'ltr', value: '443' });
+      extras.append(field('پورت‌های فوروارد', inputs.ports));
+    }
+
+    const form = h('form', { class: 'form', novalidate: true },
+      errBox,
+      h('p', { class: 'muted' }, `تانل ${o.mode_label || mode} برای «${o.customer_username || 'مشتری'}» مستقر می‌شود.`),
+      field('سمت کاربران', usersSel),
+      directWrap,
+      needIranPass || needKharejPass
+        ? h('p', { class: 'hint' }, 'رمز SSH در سفارش نبود؛ برای ساخت سرور وارد کنید.')
+        : null,
+      needIranPass ? field('رمز ایران', iranPass) : null,
+      needIranPass ? field('sudo ایران', iranSudo) : null,
+      needKharejPass ? field('رمز خارج', kharejPass) : null,
+      needKharejPass ? field('sudo خارج', kharejSudo) : null,
+      extras.childNodes.length ? h('div', { class: 'auth-section' }, h('p', { class: 'hint' }, 'گزینه‌های مخصوص این نوع تانل'), extras) : null,
+    );
+    form.id = uid('ff');
+    const saveBtn = h('button', { type: 'submit', class: 'btn btn-primary', form: form.id }, 'شروع استقرار');
+    const m = openModal({
+      title: `انجام سفارش #${o.id}`,
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+    });
+    directBox.addEventListener('change', () => {
+      usersSel.disabled = !!directBox.checked;
+      if (directBox.checked) usersSel.value = 'kharej';
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const payload = {
+        users: usersSel.value === 'kharej' ? 'kharej' : 'iran',
+        direct: !!(canDirect && directBox.checked),
+      };
+      if (needIranPass) {
+        if (!iranPass.value) return showErr(errBox, 'رمز SSH سرور ایران لازم است.');
+        payload.iran = {
+          name: (o.iran && o.iran.name) || 'iran',
+          host: (o.iran && o.iran.host) || '',
+          port: (o.iran && o.iran.port) || 22,
+          username: (o.iran && o.iran.username) || 'root',
+          auth_type: 'password',
+          include_access: true,
+          password: iranPass.value,
+          sudo_password: iranSudo.value || null,
+        };
+      }
+      if (needKharejPass) {
+        if (!kharejPass.value) return showErr(errBox, 'رمز SSH سرور خارج لازم است.');
+        payload.kharej = {
+          name: (o.kharej && o.kharej.name) || 'kharej',
+          host: (o.kharej && o.kharej.host) || '',
+          port: (o.kharej && o.kharej.port) || 22,
+          username: (o.kharej && o.kharej.username) || 'root',
+          auth_type: 'password',
+          include_access: true,
+          password: kharejPass.value,
+          sudo_password: kharejSudo.value || null,
+        };
+      }
+      if (mode === 'spoof') {
+        const listen = Number(inputs.listen.value);
+        const up = Number(inputs.upport.value);
+        const down = Number(inputs.downport.value);
+        const sport = Number(inputs.sport.value);
+        if (!IPV4_RE.test(inputs.iranIp.value.trim())) return showErr(errBox, 'IP جعلی ایران نامعتبر است.');
+        if (!IPV4_RE.test(inputs.kharejIp.value.trim())) return showErr(errBox, 'IP جعلی خارج نامعتبر است.');
+        const forward = inputs.forward.value.trim();
+        const fm = /^(.+):(\d{1,5})$/.exec(forward);
+        if (!fm || Number(fm[2]) < 1 || Number(fm[2]) > 65535) return showErr(errBox, 'مقصد فوروارد نامعتبر است.');
+        if (![listen, up, down, sport].every((n) => Number.isInteger(n) && n >= 1 && n <= 65535)) {
+          return showErr(errBox, 'پورت‌های Spoof باید بین ۱ تا ۶۵۵۳۵ باشند.');
+        }
+        if (up === down) return showErr(errBox, 'پورت رفت و برگشت نباید یکی باشد.');
+        payload.spoof = {
+          iran_spoof_ip: inputs.iranIp.value.trim(),
+          kharej_spoof_ip: inputs.kharejIp.value.trim(),
+          listen_port: listen,
+          listen_public: !!inputs.public.checked,
+          forward,
+          up_transport: inputs.up.value,
+          down_transport: inputs.down.value,
+          up_port: up,
+          down_port: down,
+          spoof_port: sport,
+          skip_check: false,
+        };
+      } else if (mode === 'dokodemo' || mode === 'xray_reverse') {
+        const ports = inputs.ports.value.replace(/\s+/g, '');
+        if (!ports || !PORTS_SPEC_RE.test(ports)) return showErr(errBox, 'پورت‌های فوروارد نامعتبر است.');
+        let ctrl_port = null;
+        if (inputs.ctrl.value.trim()) {
+          const n = Number(inputs.ctrl.value);
+          if (!Number.isInteger(n) || n < 1 || n > 65535) return showErr(errBox, 'پورت کنترل نامعتبر است.');
+          ctrl_port = n;
+        }
+        payload.xray = { net: inputs.net.value, ctrl_port, ports };
+      } else if (mode === 'dnstt') {
+        const domain = inputs.domain.value.trim().toLowerCase().replace(/\.+$/, '');
+        if (!DOMAIN_RE.test(domain) || !domain.includes('.')) return showErr(errBox, 'دامنه DNSTT نامعتبر است.');
+        const out = { domain, resolver_mode: inputs.rMode.value };
+        if (inputs.resolver.value.trim()) out.resolver = inputs.resolver.value.trim();
+        if (inputs.dnsport.value.trim()) {
+          const n = Number(inputs.dnsport.value);
+          if (!Number.isInteger(n) || n < 1 || n > 65535) return showErr(errBox, 'پورت UDP خارج نامعتبر است.');
+          out.dns_port = n;
+        }
+        const ports = inputs.ports.value.replace(/\s+/g, '');
+        if (ports) {
+          if (!PORTS_SPEC_RE.test(ports)) return showErr(errBox, 'پورت‌های فوروارد نامعتبر است.');
+          out.ports = ports;
+        }
+        payload.dnstt = out;
+      } else if (mode === 'icmp') {
+        const ports = inputs.ports.value.replace(/\s+/g, '');
+        if (ports && !PORTS_SPEC_RE.test(ports)) return showErr(errBox, 'پورت‌های فوروارد نامعتبر است.');
+        payload.icmp = ports ? { ports } : {};
+      }
+      act(saveBtn, async () => {
+        const r = await api('POST', `/api/orders/${enc(o.id)}/fulfill`, payload);
+        m.close();
+        if (r && r.job_id != null) {
+          state.sessionJobs.add(String(r.job_id));
+          openJobView(r.job_id);
+        }
+        toast('استقرار سفارش شروع شد.', 'success');
+        await Promise.all([load('orders'), load('tunnels'), load('servers'), load('jobs', true)]);
+      });
+    });
   }
 
   async function onCreateOrder(e) {

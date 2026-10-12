@@ -65,7 +65,7 @@ def test_vault_roundtrip(tmp_path):
 
 
 def test_sshclient_histfile_wrap():
-    from app.sshclient import _already_hist_wrapped, _bash_c
+    from app.sshclient import _SCRUB_HISTORY, _SHELL_CMD, _already_hist_wrapped, _bash_c
 
     cmd = _bash_c("id -u")
     assert "HISTFILE=/dev/null" in cmd
@@ -74,6 +74,8 @@ def test_sshclient_histfile_wrap():
     sudo = _bash_c("id -u", via_sudo=True)
     assert sudo.startswith("env HISTFILE=/dev/null")
     assert _already_hist_wrapped(sudo)
+    assert "gre6" in _SCRUB_HISTORY and "ipip6" in _SCRUB_HISTORY and "vxlan" in _SCRUB_HISTORY
+    assert "HISTFILE=/dev/null" in _SHELL_CMD
 
 
 @pytest.mark.parametrize(

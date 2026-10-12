@@ -841,6 +841,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="JojoNet Panel", version=PANEL_VERSION, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     db = Database(settings.db_path)
+    try:
+        wallet_mod.refund_aborted_deploys(db)
+    except Exception:
+        log.exception("wallet refund sweep after restart failed")
     vault = Vault(settings.vault_key_path)
     jobs = JobManager(db)
     orch = Orchestrator(db, vault, settings, jobs)
@@ -1694,17 +1698,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scanned = await orch.scan_live_tunnels(servers, tunnels)
         return {"servers": scanned, "scanned_at": utcnow()}
 
-    def mark_failed(tunnel_id: int):
+    def mark_failed(tunnel_id: int, *, refund_if_fail: bool = False):
         def _done(ok: bool) -> None:
-            row = db.one("SELECT status FROM tunnels WHERE id=?", (tunnel_id,))
-            if row and not ok and row["status"] in ("deploying", "deleting"):
+            row = db.one("SELECT status, mode, owner_id, last_check FROM tunnels WHERE id=?", (tunnel_id,))
+            if not row:
+                return
+            if ok:
+                return
+            if row["status"] in ("deploying", "deleting"):
                 db.update("tunnels", tunnel_id, {"status": "failed"})
+            if (
+                refund_if_fail
+                and row["status"] == "deploying"
+                and row.get("owner_id") is not None
+                and wallet_mod.should_refund_failed_deploy(row)
+            ):
+                wallet_mod.refund_tunnel(db, int(row["owner_id"]), str(row["mode"]), tunnel_id)
         return _done
 
     def start_deploy(tunnel_id: int, title: str, redeploy: bool, sess: dict[str, Any]) -> int:
         func = orch.job_redeploy if redeploy else orch.job_deploy
-        job_id = create_job(sess, "tunnel_redeploy" if redeploy else "tunnel_deploy", title, DEPLOY_STEPS,
-                             lambda job: func(job, tunnel_id), tunnel_id=tunnel_id, on_finish=mark_failed(tunnel_id))
+        job_id = create_job(
+            sess,
+            "tunnel_redeploy" if redeploy else "tunnel_deploy",
+            title,
+            DEPLOY_STEPS,
+            lambda job: func(job, tunnel_id),
+            tunnel_id=tunnel_id,
+            on_finish=mark_failed(tunnel_id, refund_if_fail=not redeploy),
+        )
         db.update("tunnels", tunnel_id, {"status": "deploying", "last_job_id": job_id})
         return job_id
 
@@ -2364,6 +2386,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if dup:
             raise HTTPException(409, "همین تانل قبلاً برای مشتری ساخته شده است")
+        if mode in V6_MODES and db.one(
+            "SELECT id FROM tunnels WHERE iran_id=? AND kharej_id=? AND mode IN ('sit','gre6','ipip6')",
+            (iran["id"], kharej["id"]),
+        ):
+            raise HTTPException(409, "برای هر جفت سرور فقط یک تانل IPv6 (6to4/GRE6/IPIP6) مجاز است؛ ابتدا تانل قبلی را حذف کنید")
+        if mode == "spoof" and db.one(
+            "SELECT id FROM tunnels WHERE mode='spoof' AND (iran_id=? OR kharej_id=?)",
+            (iran["id"], kharej["id"]),
+        ):
+            raise HTTPException(409, "هر سرور فقط یک تانل Spoof می‌تواند داشته باشد؛ ابتدا تانل Spoof قبلی را حذف کنید")
+        if mode in STREAM_MODES and db.one(
+            "SELECT id FROM tunnels WHERE mode=? AND (iran_id=? OR kharej_id=?)",
+            (mode, iran["id"], kharej["id"]),
+        ):
+            if mode == "dnstt":
+                raise HTTPException(409, "هر سرور فقط یک تانل DNSTT می‌تواند داشته باشد (UDP/53)؛ ابتدا تانل قبلی را حذف کنید")
+            raise HTTPException(409, "هر سرور فقط یک تانل ICMP می‌تواند داشته باشد (سوکت raw)؛ ابتدا تانل قبلی را حذف کنید")
         opts = None
         if tunnel_data.spoof:
             opts = tunnel_data.spoof.model_dump()
@@ -2410,7 +2449,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         job_id = create_job(
             sess, "tunnel_deploy", title, DEPLOY_STEPS,
             lambda job: orch.job_deploy(job, tid),
-            tunnel_id=tid, owner_id=customer_id, on_finish=mark_failed(tid),
+            tunnel_id=tid, owner_id=customer_id, on_finish=mark_failed(tid, refund_if_fail=True),
         )
         db.update("tunnels", tid, {"status": "deploying", "last_job_id": job_id})
         db.update("service_orders", order_id, {
@@ -2690,24 +2729,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "decided_at": now,
             })
         else:
+            # Keep credit + status flip in one SQLite transaction so a crash cannot double-approve.
             try:
-                wallet_mod.credit(
-                    db,
-                    int(row["user_id"]),
-                    int(row["amount"]),
-                    kind="deposit",
-                    note=f"تأیید واریز #{deposit_id} — {row['tracking_code']}",
-                    actor_id=sess["admin_id"],
-                    ref_type="deposit",
-                    ref_id=deposit_id,
-                )
+                with db._lock:
+                    pending = db._conn.execute(
+                        "SELECT status FROM deposit_requests WHERE id=?", (deposit_id,)
+                    ).fetchone()
+                    if not pending or pending["status"] != "pending":
+                        raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
+                    db._conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        db._conn.execute(
+                            "UPDATE admins SET wallet_balance = COALESCE(wallet_balance, 0) + ? WHERE id=?",
+                            (int(row["amount"]), int(row["user_id"])),
+                        )
+                        bal_row = db._conn.execute(
+                            "SELECT wallet_balance FROM admins WHERE id=?", (int(row["user_id"]),)
+                        ).fetchone()
+                        bal = int(bal_row["wallet_balance"] or 0) if bal_row else 0
+                        db._conn.execute(
+                            "INSERT INTO wallet_ledger (user_id, actor_id, kind, amount, balance_after, note, ref_type, ref_id, created_at) "
+                            "VALUES (?, ?, 'deposit', ?, ?, ?, 'deposit', ?, ?)",
+                            (
+                                int(row["user_id"]),
+                                sess["admin_id"],
+                                int(row["amount"]),
+                                bal,
+                                f"تأیید واریز #{deposit_id} — {row['tracking_code']}"[:500],
+                                deposit_id,
+                                now,
+                            ),
+                        )
+                        db._conn.execute(
+                            "UPDATE deposit_requests SET status='approved', owner_note=?, decided_at=? WHERE id=? AND status='pending'",
+                            ((data.note or "").strip(), now, deposit_id),
+                        )
+                        if db._conn.execute("SELECT changes()").fetchone()[0] != 1:
+                            raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
+                        db._conn.execute("COMMIT")
+                    except Exception:
+                        try:
+                            db._conn.execute("ROLLBACK")
+                        except Exception:
+                            pass
+                        raise
+            except HTTPException:
+                raise
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from None
-            db.update("deposit_requests", deposit_id, {
-                "status": "approved",
-                "owner_note": (data.note or "").strip(),
-                "decided_at": now,
-            })
         fresh = db.one("SELECT * FROM deposit_requests WHERE id=?", (deposit_id,))
         return {"ok": True, "deposit": deposit_out(fresh), "wallet_balance": wallet_mod.balance_of(db, int(row["user_id"]))}
 

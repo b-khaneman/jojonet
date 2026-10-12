@@ -193,17 +193,28 @@ def charge_tunnel(db: Database, user_id: int, mode: str, tunnel_id: int) -> int:
     return amount
 
 
-def refund_tunnel(db: Database, user_id: int, mode: str, tunnel_id: int) -> None:
-    """Best-effort refund if deploy never started / failed immediately — only if last charge matches."""
-    amount = price_for(db, mode)
-    if amount <= 0:
-        return
-    row = db.one(
-        "SELECT id FROM wallet_ledger WHERE user_id=? AND kind='tunnel_charge' AND ref_type='tunnel' AND ref_id=? ORDER BY id DESC LIMIT 1",
+def refund_tunnel(db: Database, user_id: int, mode: str, tunnel_id: int) -> int:
+    """Refund a tunnel charge once. Returns amount credited (0 if nothing to refund)."""
+    charged = db.one(
+        "SELECT id, amount FROM wallet_ledger WHERE user_id=? AND kind='tunnel_charge' AND ref_type='tunnel' AND ref_id=? ORDER BY id DESC LIMIT 1",
         (user_id, tunnel_id),
     )
-    if not row:
-        return
+    if not charged:
+        return 0
+    already = db.one(
+        "SELECT id FROM wallet_ledger WHERE user_id=? AND kind='tunnel_refund' AND ref_type='tunnel' AND ref_id=? LIMIT 1",
+        (user_id, tunnel_id),
+    )
+    if already:
+        return 0
+    try:
+        amount = abs(int(charged.get("amount") or 0))
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        amount = price_for(db, mode)
+    if amount <= 0:
+        return 0
     label = MODES.get(mode, {}).get("label", mode)
     try:
         credit(
@@ -217,4 +228,36 @@ def refund_tunnel(db: Database, user_id: int, mode: str, tunnel_id: int) -> None
             ref_id=tunnel_id,
         )
     except ValueError:
-        pass
+        return 0
+    return amount
+
+
+def should_refund_failed_deploy(tunnel: dict[str, Any]) -> bool:
+    """True when this looks like a first deploy that never reached a healthy state."""
+    lc = tunnel.get("last_check")
+    if isinstance(lc, dict) and lc.get("ok") is True:
+        return False
+    return True
+
+
+def refund_aborted_deploys(db: Database) -> int:
+    """After panel restart, refund unrefunded charges for failed first deploys."""
+    rows = db.all(
+        "SELECT t.id, t.mode, t.owner_id, t.last_check FROM tunnels t "
+        "WHERE t.status='failed' AND t.owner_id IS NOT NULL "
+        "AND EXISTS ("
+        "  SELECT 1 FROM wallet_ledger w WHERE w.user_id=t.owner_id AND w.kind='tunnel_charge' "
+        "  AND w.ref_type='tunnel' AND w.ref_id=t.id"
+        ") "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM wallet_ledger w2 WHERE w2.user_id=t.owner_id AND w2.kind='tunnel_refund' "
+        "  AND w2.ref_type='tunnel' AND w2.ref_id=t.id"
+        ")"
+    )
+    n = 0
+    for row in rows:
+        if not should_refund_failed_deploy(row):
+            continue
+        if refund_tunnel(db, int(row["owner_id"]), str(row["mode"]), int(row["id"])):
+            n += 1
+    return n
