@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.6.0 / panel 1.3.27
+- Installer no longer aborts with `$2: unbound variable` while reading the saved panel path.
 - Side terminals can be dragged by the title bar and resized from the corner or the edges. The size and place are remembered in this browser.
 
 ## 1.6.0 / panel 1.3.26

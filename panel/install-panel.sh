@@ -166,8 +166,8 @@ require_root() {
 }
 
 env_value() {
-    local key="$1" file="$2" v=""
-    [[ -f "$file" ]] || return 0
+    local key="$1" file="${2:-$ENV_FILE}" v=""
+    [[ -n "$file" && -f "$file" ]] || return 0
     v="$(sed -n "s/^${key}=//p" "$file" | tail -n 1)"
     v="${v%\"}"; v="${v#\"}"
     v="${v%\'}"; v="${v#\'}"
@@ -677,7 +677,7 @@ ensure_panel_path() {
         saved="$(tr -d '[:space:]' < "$DATA_DIR/web.path")"
         saved="${saved%/}"
     fi
-    cur="${saved:-$(env_value JOJONET_PANEL_PATH)}"
+    cur="${saved:-$(env_value JOJONET_PANEL_PATH "$ENV_FILE")}"
     cur="${cur%/}"
     # Keep a chosen path. Replace an empty or old random hex path with the fixed entry.
     if [[ "$cur" =~ ^/[A-Za-z0-9][A-Za-z0-9_-]{15,63}$ && ! "$cur" =~ ^/[0-9a-f]{24}$ ]]; then
@@ -1098,7 +1098,7 @@ panel_url() {
     local webpath="${PANEL_WEB_PATH:-}"
     webpath="${webpath%/}"
     if [[ -z "$webpath" ]]; then
-        webpath="$(env_value JOJONET_PANEL_PATH)"
+        webpath="$(env_value JOJONET_PANEL_PATH "$ENV_FILE")"
         webpath="${webpath%/}"
     fi
     if ((PORT == 443)); then printf 'https://%s%s/' "$addr" "$webpath"; else printf 'https://%s:%s%s/' "$addr" "$PORT" "$webpath"; fi
