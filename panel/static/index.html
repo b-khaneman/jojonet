@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="__BASE__/static/vendor/xterm.css?v=__V__">
 <script src="__BASE__/static/vendor/xterm.min.js?v=__V__" defer></script>
 <script src="__BASE__/static/vendor/xterm-addon-fit.js?v=__V__" defer></script>
+<script src="__BASE__/static/guide.js?v=__V__" defer></script>
 <script src="__BASE__/static/app.js?v=__V__" defer></script>
 </head>
 <body>
@@ -120,6 +121,7 @@
 
   <nav class="tabs" role="tablist" aria-label="بخش‌های پنل">
     <button type="button" class="tab is-active" role="tab" id="tabbtn-overview" data-tab="overview" aria-controls="tab-overview" aria-selected="true">وضعیت</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-guide" data-tab="guide" aria-controls="tab-guide" aria-selected="false" tabindex="-1">آموزش</button>
     <button type="button" class="tab" role="tab" id="tabbtn-servers" data-tab="servers" aria-controls="tab-servers" aria-selected="false" tabindex="-1">سرورها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-tunnels" data-tab="tunnels" aria-controls="tab-tunnels" aria-selected="false" tabindex="-1">تانل‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-relays" data-tab="relays" aria-controls="tab-relays" aria-selected="false" tabindex="-1">رله‌ها</button>
@@ -132,6 +134,19 @@
   <main id="main" class="main" tabindex="-1">
     <section id="tab-overview" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-overview">
       <div id="overview-board" class="ov" aria-live="polite"></div>
+    </section>
+
+    <section id="tab-guide" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-guide" hidden>
+      <div class="section-head">
+        <div>
+          <h2>آموزش</h2>
+          <p class="muted">هر تانل را از داخل پنل، مرحله‌به‌مرحله بسازید. بعد از سالم شدن، پنل VPN، اوتباند Reality و رله را هم بزنید.</p>
+        </div>
+      </div>
+      <div class="guide">
+        <nav class="guide-nav" id="guide-nav" aria-label="فهرست آموزش"></nav>
+        <article class="guide-body" id="guide-body"></article>
+      </div>
     </section>
 
     <section id="tab-servers" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-servers" hidden>

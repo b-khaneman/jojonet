@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.39
+- The panel has an آموزش tab: a right-aligned, step-by-step guide for every tunnel type, then the VPN panel, Reality outbound, and relay.
+
 ## 1.6.0 / panel 1.3.38
 - An update reloads the panel process without closing the listen port, and the page retries a short network gap instead of looking disconnected.
 

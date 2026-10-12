@@ -4113,3 +4113,150 @@ html[data-theme="night"] .code-edit-input:focus {
 @media (prefers-reduced-motion: reduce) {
   .ssl-bar { animation: none; }
 }
+
+.guide {
+  display: grid;
+  grid-template-columns: minmax(12.5rem, 16.5rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.guide-nav {
+  position: sticky;
+  top: .75rem;
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  max-height: calc(100vh - 7.5rem);
+  overflow: auto;
+  padding: .35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.guide-group {
+  margin: .7rem .45rem .2rem;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.guide-group:first-child { margin-top: .25rem; }
+
+.guide-link {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: .42rem .7rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: .9rem;
+  text-align: right;
+  cursor: pointer;
+}
+
+.guide-link:hover { background: var(--surface-2); }
+
+.guide-link.is-on {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  color: var(--text);
+  font-weight: 700;
+}
+
+.guide-body {
+  min-width: 0;
+  padding: 1.15rem 1.25rem 1.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.guide-kicker {
+  margin: 0;
+  color: var(--accent);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.guide-title {
+  margin: .2rem 0 .45rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.guide-lead,
+.guide-note {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: .95rem;
+  line-height: 1.9;
+}
+
+.guide-note {
+  margin: 1rem 0 0;
+  padding: .75rem .9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.guide-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: guide-step;
+}
+
+.guide-steps li {
+  position: relative;
+  margin: 0 0 .7rem;
+  padding: .8rem .95rem .85rem  .9rem;
+  padding-right: 3.15rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.guide-steps li::before {
+  counter-increment: guide-step;
+  content: counter(guide-step);
+  position: absolute;
+  top: .8rem;
+  right: .7rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: .85rem;
+}
+
+.guide-steps h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.guide-steps p {
+  margin: .25rem 0 0;
+  color: var(--muted);
+  font-size: .94rem;
+  line-height: 1.9;
+}
+
+@media (max-width: 800px) {
+  .guide { grid-template-columns: 1fr; }
+  .guide-nav {
+    position: static;
+    max-height: 14rem;
+  }
+}

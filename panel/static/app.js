@@ -12,7 +12,7 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['overview', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'users'];
+  const TABS = ['overview', 'guide', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'users'];
   const XRAY_TUNNEL_MODES = new Set(['dokodemo', 'xray_reverse']);
 
   const ROLE_LABEL = { iran: 'ایران', kharej: 'خارج' };
@@ -3856,6 +3856,7 @@
   }
 
   function bindStatic() {
+    if (typeof window.jojoMountGuide === 'function') window.jojoMountGuide();
     bindTheme();
     bindHxTerms();
     bindListen();
