@@ -1339,6 +1339,56 @@ class Orchestrator:
                     await job.ok(3, "نصب شد؛ مشخصات ورود را از لاگ بخوانید")
                 self.set_check(server_id, True, f"{label} از قبل نصب بود" if skipped else f"{label} نصب شد")
 
+    async def job_server_ssl(self, job: Job, server_id: int, domain: str, email: str) -> None:
+        row = self.server(server_id)
+        script = server_ssl_script(domain, email, str(row["host"]))
+        async with self._lock(server_id):
+            await job.start(0)
+            async with await self.open(job, row) as sess:
+                await job.ok(0)
+                await job.start(1)
+                await job.log(f"[{row['name']}] دامنه {domain} روی IP سرور {row['host']} بررسی می‌شود")
+                await job.ok(1, "بررسی آغاز شد")
+                await job.start(2)
+                res = await sess.run_root(
+                    script,
+                    timeout=480,
+                    on_line=lambda l: job.log(f"[{row['name']}] {l}"),
+                )
+                info = parse_server_ssl(res.stdout or "")
+                if not res.ok or info.get("ok") != "1":
+                    detail = info.get("error") or ""
+                    if not detail:
+                        lines = (res.stderr or res.stdout or "").strip().splitlines()
+                        detail = lines[-1] if lines else ""
+                    raise StepFailed(str(detail)[:240] or f"دریافت گواهی روی {row['name']} ناموفق بود (کد {res.rc})")
+                await job.ok(2, f"گواهی {domain} دریافت شد")
+                await job.start(3)
+                payload = {
+                    "ok": True,
+                    "at": utcnow(),
+                    "domain": info.get("domain") or domain,
+                    "issuer": info.get("issuer") or "Let's Encrypt",
+                    "not_after": normalize_ssl_not_after(info.get("not_after") or ""),
+                    "cert": info.get("cert") or "",
+                    "key": info.get("key") or "",
+                    "email": email or "",
+                }
+                self.db.update("servers", server_id, {"last_ssl": payload})
+                await job.log("")
+                await job.log("----- گواهی SSL -----")
+                await job.log(f"  دامنه:     {payload['domain']}")
+                await job.log(f"  مرجع صدور: {payload['issuer']}")
+                if payload["not_after"]:
+                    await job.log(f"  انقضا:     {payload['not_after']}")
+                if payload["cert"]:
+                    await job.log(f"  فایل گواهی: {payload['cert']}")
+                if payload["key"]:
+                    await job.log(f"  فایل کلید:  {payload['key']}")
+                await job.log("  تمدید خودکار certbot فعال است.")
+                await job.log("----------------------")
+                await job.ok(3, f"گواهی روی {row['name']} نصب شد")
+
     def match_panel_tunnel_id(self, server_id: int, name: str, tunnels: list[dict[str, Any]]) -> int | None:
         for t in tunnels:
             if t.get("iran_id") == server_id and t.get("iran_iface") == name:
@@ -1508,12 +1558,149 @@ OS_UPDATE_STEPS = ["اتصال SSH", "آپدیت بسته‌های سیستم"]
 ENABLE_BOOT_STEPS = ["اتصال SSH", "فعال‌سازی ماندگاری بعد از ریبوت"]
 REMOTE_DELETE_STEPS = ["حذف از سرور"]
 VPN_PANEL_STEPS = ["اتصال SSH", "آماده‌سازی jojonet", "نصب یک‌کلیکی پنل", "خواندن مشخصات ورود"]
+SERVER_SSL_STEPS = ["اتصال SSH", "بررسی دامنه و پورت ۸۰", "دریافت گواهی Let's Encrypt", "نصب گواهی روی سرور"]
+SERVER_SSL_BEGIN = "===== JOJONET_SERVER_SSL ====="
+SERVER_SSL_END = "===== END_JOJONET_SERVER_SSL ====="
 VPN_CHECK_BEGIN = "===== JOJONET_VPN_CHECK ====="
 VPN_CHECK_END = "===== END_JOJONET_VPN_CHECK ====="
 VPN_CHECK_KEYS = ("xui", "xui_flavor", "xui_running", "pasarguard", "pasarguard_running")
 VPN_CREDS_BEGIN = "===== JOJONET_VPN_CREDS ====="
 VPN_CREDS_END = "===== END_JOJONET_VPN_CREDS ====="
 VPN_CREDS_KEYS = ("kind", "label", "url", "username", "password", "note")
+SERVER_SSL_KEYS = ("ok", "domain", "issuer", "not_after", "cert", "key", "error")
+
+
+def server_ssl_script(domain: str, email: str, expected_ip: str) -> str:
+    """Issue a free Let's Encrypt cert on the remote VPS for the user's domain."""
+    d = shlex.quote(domain)
+    e = shlex.quote(email or "")
+    ip = shlex.quote(expected_ip)
+    begin = SERVER_SSL_BEGIN
+    end = SERVER_SSL_END
+    return f"""
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+DOMAIN={d}
+EMAIL={e}
+EXPECT_IP={ip}
+OUT_DIR="/etc/jojonet/ssl/$DOMAIN"
+LIVE_DIR="/etc/letsencrypt/live/$DOMAIN"
+echo "domain=$DOMAIN"
+echo "expect_ip=$EXPECT_IP"
+
+resolved="$(getent ahosts "$DOMAIN" 2>/dev/null | awk '{{print $1}}' | grep -E '^[0-9.]+$' | sort -u || true)"
+if [ -z "$resolved" ]; then
+  echo "{begin}"
+  echo "ok=0"
+  echo "error=دامنه هنوز به هیچ IPv4 اشاره نمی‌کند. رکورد A را به IP همین سرور بدهید و پروکسی را خاموش کنید."
+  echo "{end}"
+  exit 10
+fi
+echo "resolved=$resolved"
+match=0
+for ip in $resolved; do
+  if [ "$ip" = "$EXPECT_IP" ]; then match=1; break; fi
+done
+if [ "$match" != "1" ]; then
+  echo "{begin}"
+  echo "ok=0"
+  echo "error=دامنه به IP دیگری اشاره می‌کند (نه $EXPECT_IP). رکورد A را اصلاح کنید و پروکسی ابری را خاموش کنید."
+  echo "{end}"
+  exit 11
+fi
+
+holder="$(ss -Htlnp 'sport = :80' 2>/dev/null | head -n 1 || true)"
+if [ -n "$holder" ]; then
+  echo "{begin}"
+  echo "ok=0"
+  echo "error=پورت ۸۰ روی این سرور اشغال است. سرویس روی پورت ۸۰ را موقتاً متوقف کنید و دوباره تلاش کنید."
+  echo "{end}"
+  exit 12
+fi
+
+if ! command -v certbot >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get -o DPkg::Lock::Timeout=180 update -qq || true
+    apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends certbot || {{
+      echo "{begin}"; echo "ok=0"; echo "error=نصب certbot ناموفق بود."; echo "{end}"; exit 13;
+    }}
+  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    pm="$(command -v dnf || command -v yum)"
+    "$pm" install -y -q certbot || {{
+      echo "{begin}"; echo "ok=0"; echo "error=نصب certbot ناموفق بود."; echo "{end}"; exit 13;
+    }}
+  else
+    echo "{begin}"; echo "ok=0"; echo "error=مدیر بسته پشتیبانی‌شده پیدا نشد."; echo "{end}"; exit 13
+  fi
+fi
+
+mail_args="--register-unsafely-without-email"
+if [ -n "$EMAIL" ]; then mail_args="--email $EMAIL"; fi
+if ! certbot certonly --standalone --non-interactive --agree-tos --preferred-challenges http \\
+    -d "$DOMAIN" $mail_args; then
+  echo "{begin}"
+  echo "ok=0"
+  echo "error=Let's Encrypt گواهی صادر نکرد. DNS، فایروال پورت ۸۰ و محدودیت نرخ را بررسی کنید."
+  echo "{end}"
+  exit 14
+fi
+
+if [ ! -f "$LIVE_DIR/fullchain.pem" ] || [ ! -f "$LIVE_DIR/privkey.pem" ]; then
+  echo "{begin}"; echo "ok=0"; echo "error=فایل گواهی بعد از صدور پیدا نشد."; echo "{end}"; exit 15
+fi
+
+mkdir -p "$OUT_DIR"
+install -m 644 "$LIVE_DIR/fullchain.pem" "$OUT_DIR/fullchain.pem"
+install -m 600 "$LIVE_DIR/privkey.pem" "$OUT_DIR/privkey.pem"
+not_after="$(openssl x509 -in "$OUT_DIR/fullchain.pem" -noout -enddate 2>/dev/null | sed 's/^notAfter=//' || true)"
+issuer="$(openssl x509 -in "$OUT_DIR/fullchain.pem" -noout -issuer 2>/dev/null | sed -n 's/.*O = \\([^,]*\\).*/\\1/p' || true)"
+[ -n "$issuer" ] || issuer="Let's Encrypt"
+echo "{begin}"
+echo "ok=1"
+echo "domain=$DOMAIN"
+echo "issuer=$issuer"
+echo "not_after=$not_after"
+echo "cert=$OUT_DIR/fullchain.pem"
+echo "key=$OUT_DIR/privkey.pem"
+echo "{end}"
+"""
+
+
+def parse_server_ssl(text: str) -> dict[str, str]:
+    if not text:
+        return {}
+    start = text.rfind(SERVER_SSL_BEGIN)
+    if start < 0:
+        return {}
+    rest = text[start + len(SERVER_SSL_BEGIN) :]
+    end = rest.find(SERVER_SSL_END)
+    block = rest if end < 0 else rest[:end]
+    out: dict[str, str] = {}
+    for raw in block.splitlines():
+        line = re.sub(r"^\[.*?\]\s*", "", raw).strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip().lower()
+        val = val.strip()
+        if key in SERVER_SSL_KEYS and val:
+            out[key] = val
+    return out
+
+
+def normalize_ssl_not_after(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if "T" in text and text[:4].isdigit():
+        return text.replace("Z", "+00:00")
+    cleaned = text.replace(" GMT", "").replace(" UTC", "")
+    try:
+        from datetime import datetime, timezone
+
+        return datetime.strptime(cleaned, "%b %d %H:%M:%S %Y").replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return text
 
 
 def parse_vpn_creds(text: str) -> dict[str, str]:

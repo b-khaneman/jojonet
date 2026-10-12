@@ -1021,6 +1021,9 @@
     const dnsBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'تنظیم DNS');
     dnsBtn.addEventListener('click', () => openDnsForm(s));
 
+    const sslBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'گواهی SSL رایگان');
+    sslBtn.addEventListener('click', () => openServerSslForm(s));
+
     const updBtn = can('allow_os_update') ? h('button', { type: 'button', class: 'btn btn-sm' }, 'آپدیت سیستم') : null;
     if (updBtn) updBtn.addEventListener('click', async () => {
       const ok = await confirmDialog({
@@ -1065,9 +1068,67 @@
         kv('احراز هویت', s.auth_type === 'key' ? 'کلید SSH' : 'رمز عبور'),
         kv('رمز sudo', s.has_sudo_password ? 'ثبت شده' : 'ندارد'),
         kv('اثر انگشت میزبان', s.hostkey_fingerprint ? h('code', { class: 'fp', dir: 'ltr' }, s.hostkey_fingerprint) : 'هنوز ثبت نشده'),
-        kv('آخرین بررسی', lc ? fmtTime(lc.at) : '—')),
+        kv('آخرین بررسی', lc ? fmtTime(lc.at) : '—'),
+        kv('گواهی SSL', sslSummary(s.last_ssl))),
       lc && lc.info ? h('p', { class: `check-info${lc.ok ? '' : ' is-err'}` }, infoText(lc.info)) : null,
-      h('div', { class: 'card-actions' }, testBtn, installBtn, pingBtn, dnsBtn, updBtn, editBtn, delBtn));
+      s.last_ssl && s.last_ssl.ok ? h('p', { class: 'check-info' }, sslDetail(s.last_ssl)) : null,
+      h('div', { class: 'card-actions' }, testBtn, installBtn, pingBtn, dnsBtn, sslBtn, updBtn, editBtn, delBtn));
+  }
+
+  function sslSummary(info) {
+    if (!info || !info.ok || !info.domain) return 'هنوز صادر نشده';
+    return ltr(String(info.domain));
+  }
+
+  function sslDetail(info) {
+    const bits = [];
+    if (info.issuer) bits.push('مرجع صدور: ' + info.issuer);
+    if (info.not_after) bits.push('انقضا: ' + fmtTime(info.not_after));
+    if (info.cert) bits.push('مسیر: ' + info.cert);
+    return bits.join(' · ') || 'گواهی نصب شده است.';
+  }
+
+  function openServerSslForm(s) {
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const prev = (s.last_ssl && s.last_ssl.domain) || '';
+    const d = h('input', {
+      id: uid('f'), class: 'ssl-input', type: 'text', dir: 'ltr', required: true, maxlength: '253',
+      autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false',
+      placeholder: 'vpn.example.com', value: prev,
+    });
+    const e = h('input', {
+      id: uid('f'), class: 'ssl-input', type: 'text', inputmode: 'email', dir: 'ltr', maxlength: '254',
+      autocomplete: 'off', placeholder: 'you@example.com',
+      value: (s.last_ssl && s.last_ssl.email) || '',
+    });
+    const form = h('form', { class: 'form ssl-form', novalidate: true },
+      errBox,
+      h('p', { class: 'muted' },
+        `گواهی رایگان Let’s Encrypt روی سرور «${s.name}» (${s.host}) نصب می‌شود. رکورد A دامنه باید مستقیم به همین IP باشد، پروکسی خاموش باشد و پورت ۸۰ آزاد باشد.`),
+      h('div', { class: 'ssl-fields' },
+        h('div', { class: 'field' }, h('label', { for: d.id, class: 'ssl-label' }, 'دامنهٔ سرور:'), d),
+        h('div', { class: 'field' }, h('label', { for: e.id, class: 'ssl-label' }, 'ایمیل اطلاع‌رسانی:'), e)));
+    form.id = uid('sssl');
+    const saveBtn = h('button', { type: 'submit', class: 'btn btn-primary', form: form.id }, 'دریافت گواهی رایگان');
+    const m = openModal({
+      title: `گواهی SSL رایگان — ${s.name}`,
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+    });
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      hideErr(errBox);
+      const domain = d.value.trim();
+      const email = e.value.trim();
+      if (!domain) return showErr(errBox, 'دامنه را وارد کنید.');
+      act(saveBtn, async () => {
+        startedJob(
+          await api('POST', `/api/servers/${enc(s.id)}/ssl`, { domain, email: email || null }),
+          'دریافت گواهی SSL آغاز شد.',
+        );
+        m.close();
+      });
+    });
   }
 
   function openDnsForm(s) {

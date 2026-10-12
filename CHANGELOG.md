@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.48
+- Every user can issue a free Let's Encrypt certificate on their own server from the Servers tab; panel-host SSL stays owner-only in مدیریت.
+- The SSL email field matches the domain field height and width in the form grid.
+
 ## 1.6.0 / panel 1.3.47
 - SSL labels are larger, amber-colored, and end with a colon so domain, issuer, expiry, and secure URL stay distinct.
 

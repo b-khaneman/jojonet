@@ -189,6 +189,10 @@
           <button id="btn-add-server" class="btn btn-primary btn-sm" type="button">افزودن سرور</button>
         </div>
       </div>
+      <div class="card create-card" id="server-ssl-help">
+        <h3 class="card-title">گواهی SSL رایگان برای سرور شما</h3>
+        <p class="muted">هر کاربر می‌تواند برای دامنهٔ خودش روی سرور خودش گواهی Let’s Encrypt بگیرد — رایگان و بدون نیاز به مالک. روی کارت سرور دکمهٔ «گواهی SSL رایگان» را بزنید. رکورد A باید مستقیم به IP همان سرور باشد، پروکسی ابری خاموش باشد و پورت ۸۰ آزاد باشد.</p>
+      </div>
       <div id="servers-list" class="list-area"></div>
     </section>
 
@@ -740,21 +744,21 @@
         </form>
       </div>
       <div class="card create-card" id="ssl-card">
-        <h3 class="card-title">گواهی SSL</h3>
-        <p class="muted">دامنه را وارد کنید. رکورد A باید مستقیم به IP همین سرور برسد و پروکسی خاموش باشد. با یک کلیک گواهی Let’s Encrypt گرفته می‌شود و آدرس امن پنل همین‌جا نشان داده می‌شود.</p>
+        <h3 class="card-title">گواهی SSL خودِ پنل</h3>
+        <p class="muted">فقط برای آدرس ورود همین پنل (سرور مالک). برای گواهی رایگان روی سرور مشتریان، از تب سرورها و دکمهٔ «گواهی SSL رایگان» استفاده کنید. رکورد A باید مستقیم به IP همین سرور پنل باشد و پروکسی خاموش باشد.</p>
         <form id="ssl-form" class="form ssl-form" novalidate>
           <div id="ssl-error" class="form-error" role="alert" hidden></div>
           <div class="ssl-fields">
             <div class="field ssl-field-domain">
-              <label for="ssl-domain" class="ssl-label">دامنهٔ گواهی:</label>
-              <input id="ssl-domain" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="253" placeholder="panel.example.com">
+              <label for="ssl-domain" class="ssl-label">دامنهٔ پنل:</label>
+              <input id="ssl-domain" class="ssl-input" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="253" placeholder="panel.example.com">
             </div>
             <div class="field ssl-field-email">
               <label for="ssl-email" class="ssl-label">ایمیل اطلاع‌رسانی:</label>
-              <input id="ssl-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="you@example.com">
+              <input id="ssl-email" class="ssl-input" type="text" inputmode="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="you@example.com">
             </div>
             <div class="ssl-field-action">
-              <button id="ssl-submit" class="btn btn-primary" type="submit">فعال‌سازی SSL</button>
+              <button id="ssl-submit" class="btn btn-primary" type="submit">فعال‌سازی SSL پنل</button>
             </div>
           </div>
         </form>

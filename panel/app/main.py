@@ -36,6 +36,7 @@ from .orchestrator import (
     OS_UPDATE_STEPS,
     PING_TEST_STEPS,
     REMOTE_DELETE_STEPS,
+    SERVER_SSL_STEPS,
     VPN_PANEL_LABELS,
     VPN_PANEL_STEPS,
     vpn_panel_already,
@@ -1103,6 +1104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "has_sudo_password": bool(row["secret_sudo"]),
             "hostkey_fingerprint": row["hostkey_fingerprint"],
             "last_check": row["last_check"],
+            "last_ssl": row.get("last_ssl"),
             "created_at": row["created_at"],
         }
         return attach_owner(out, row, names)
@@ -2024,6 +2026,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         job_id = create_job(
             sess, "server_dns", f"تنظیم DNS روی {row['name']}", DNS_STEPS,
             lambda job: orch.job_server_dns(job, server_id, data.dns1, data.dns2 or ""),
+            server_id=server_id,
+        )
+        return {"job_id": job_id}
+
+    @app.post("/api/servers/{server_id}/ssl")
+    async def server_ssl(server_id: int, data: SslIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        row = get_server(server_id, sess)
+        try:
+            domain = normalize_domain(data.domain)
+            email = normalize_email(data.email)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        job_id = create_job(
+            sess,
+            "server_ssl",
+            f"گواهی SSL رایگان برای {domain} روی {row['name']}",
+            SERVER_SSL_STEPS,
+            lambda job: orch.job_server_ssl(job, server_id, domain, email),
             server_id=server_id,
         )
         return {"job_id": job_id}

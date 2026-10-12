@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS servers (
     hostkey TEXT,
     hostkey_fingerprint TEXT,
     last_check TEXT,
+    last_ssl TEXT,
     created_at TEXT NOT NULL,
     owner_id INTEGER REFERENCES admins(id)
 );
@@ -160,7 +161,7 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
 );
 """
 
-JSON_FIELDS = {"last_check", "steps", "options", "iran_json", "kharej_json"}
+JSON_FIELDS = {"last_check", "last_ssl", "steps", "options", "iran_json", "kharej_json"}
 
 ADMIN_COLUMNS = {
     "role": "TEXT NOT NULL DEFAULT 'customer'",
@@ -178,6 +179,9 @@ ADMIN_COLUMNS = {
 }
 OWNER_TABLES = ("servers", "tunnels", "relays", "jobs")
 TABLE_COLUMNS = {
+    "servers": {
+        "last_ssl": "TEXT",
+    },
     "tunnels": {
         "iran_iface": "TEXT",
         "kharej_iface": "TEXT",

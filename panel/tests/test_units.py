@@ -376,6 +376,26 @@ def test_installer_socket_activation_and_rollback():
     assert "Moved permanently" in redirect and "JOJONET_PANEL_DOMAIN" in redirect
 
 
+def test_server_ssl_script_and_parser():
+    from app.orchestrator import normalize_ssl_not_after, parse_server_ssl, server_ssl_script
+
+    script = server_ssl_script("vpn.example.com", "ops@example.com", "203.0.113.10")
+    assert "vpn.example.com" in script
+    assert "203.0.113.10" in script
+    assert "certbot certonly --standalone" in script
+    assert "/etc/jojonet/ssl/" in script
+    parsed = parse_server_ssl(
+        "noise\n===== JOJONET_SERVER_SSL =====\n"
+        "ok=1\ndomain=vpn.example.com\nissuer=Let's Encrypt\n"
+        "not_after=Jan 10 20:57:17 2027 GMT\n"
+        "cert=/etc/jojonet/ssl/vpn.example.com/fullchain.pem\n"
+        "key=/etc/jojonet/ssl/vpn.example.com/privkey.pem\n"
+        "===== END_JOJONET_SERVER_SSL =====\n"
+    )
+    assert parsed["ok"] == "1" and parsed["domain"] == "vpn.example.com"
+    assert normalize_ssl_not_after(parsed["not_after"]).startswith("2027-01-10T20:57:17")
+
+
 def test_ssl_domain_view_and_certificate(tmp_path):
     from datetime import datetime, timedelta, timezone
 

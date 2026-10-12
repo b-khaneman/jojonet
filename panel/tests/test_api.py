@@ -608,6 +608,58 @@ def test_owner_requests_panel_certificate(client, admin, settings):
     assert again.status_code == 409
 
 
+def test_customer_can_request_server_ssl(client, auth, monkeypatch):
+    from test_tenants import add_customer, login_as
+
+    add_customer(client, auth, username="ssluser", password="customer-pass-1", max_servers=2)
+    client.post("/api/logout", headers=auth)
+    cauth = login_as(client, "ssluser", "customer-pass-1")
+    assert client.get("/api/ssl", headers=cauth).status_code == 403
+    assert client.post("/api/ssl", json={"domain": "panel.example.com"}, headers=cauth).status_code == 403
+
+    server = client.post("/api/servers", json=SERVER, headers=cauth).json()
+
+    async def fake_ssl(job, server_id, domain, email):
+        await job.start(0)
+        await job.ok(0)
+        await job.start(1)
+        await job.ok(1)
+        await job.start(2)
+        await job.ok(2, domain)
+        await job.start(3)
+        client.app.state.db.update(
+            "servers",
+            server_id,
+            {
+                "last_ssl": {
+                    "ok": True,
+                    "at": "2026-10-13T00:00:00+00:00",
+                    "domain": domain,
+                    "issuer": "Let's Encrypt",
+                    "not_after": "2027-01-10T20:57:17+00:00",
+                    "cert": f"/etc/jojonet/ssl/{domain}/fullchain.pem",
+                    "key": f"/etc/jojonet/ssl/{domain}/privkey.pem",
+                    "email": email or "",
+                }
+            },
+        )
+        await job.ok(3, "installed")
+
+    monkeypatch.setattr(client.app.state.orch, "job_server_ssl", fake_ssl)
+    bad = client.post(f"/api/servers/{server['id']}/ssl", json={"domain": "localhost"}, headers=cauth)
+    assert bad.status_code == 422
+    ok = client.post(
+        f"/api/servers/{server['id']}/ssl",
+        json={"domain": "https://vpn.example.com/x", "email": "ops@example.com"},
+        headers=cauth,
+    )
+    assert ok.status_code == 200 and "job_id" in ok.json(), ok.text
+    assert wait_job(client, ok.json()["job_id"])["status"] == "ok"
+    row = client.get("/api/servers", headers=cauth).json()[0]
+    assert row["last_ssl"]["domain"] == "vpn.example.com"
+    assert row["last_ssl"]["cert"].endswith("fullchain.pem")
+
+
 def test_owner_edits_guide_article(client, admin, settings):
     assert client.get("/api/guide").status_code == 401
     logged = client.post("/api/login", json={"username": admin[0], "password": admin[1]})
