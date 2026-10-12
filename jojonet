@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.0"
+readonly JOJONET_VERSION="1.6.1"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -66,6 +66,9 @@ PAQET_OPTIMIZED_TAG="PaqetOptimized"
 PAQET_OPTIMIZED_VERSION="v2.2.0-optimize"
 PAQET_CORE_REPO="hanselime/paqet"
 PAQET_CORE_VERSION="${JOJONET_PAQET_CORE_VERSION:-v1.0.0-alpha.16}"
+# Pinned amd64 archives (panel deploy is non-interactive; unsigned downloads are refused).
+PAQET_SHA256_AMD64_OPTIMIZED="72ee64a25110664bbcd35e77d16454cad3427afce2f28302205b137e7c3be2a3"
+PAQET_SHA256_AMD64_CORE="fce0890518c5f0597b5161ae16cbfd8cc16bf723544ffcc321ed3e7e04c9231a"
 BOOT_SERVICE="/etc/systemd/system/jojonet-boot.service"
 LOCALTUN_RELEASE="https://github.com/Azumi67/LocalTun_TCP/releases/download/v1.7"
 LOCALTUN_SHA256_AMD64="f40aaf88fb44d33713a2dc918820de34e94ff1bfcc5c906e616f8549ba2d3cfe"
@@ -3242,6 +3245,21 @@ paqet_optimized_download_name() {
     fi
 }
 
+paqet_pinned_sha256() {
+    # $1 = archive file name
+    case "$1" in
+        "paqet-linux-amd64-${PAQET_OPTIMIZED_VERSION}.tar.gz")
+            printf '%s' "$PAQET_SHA256_AMD64_OPTIMIZED"
+            ;;
+        "paqet-linux-amd64-${PAQET_CORE_VERSION}.tar.gz")
+            printf '%s' "$PAQET_SHA256_AMD64_CORE"
+            ;;
+        *)
+            lookup_checksum "$1" || return 1
+            ;;
+    esac
+}
+
 install_paqet_binary() {
     if [[ -x "$PAQET_BIN_DIR/paqet" ]]; then
         return 0
@@ -3250,7 +3268,7 @@ install_paqet_binary() {
         echo -e "${RED}[!] tar required for Paqet install.${NC}" >&2
         return 1
     }
-    local arch tmpdir url fname ok=0
+    local arch tmpdir url fname ok=0 expected=""
     arch=$(detect_cpu_arch_paqet) || {
         echo -e "${RED}[!] Unsupported CPU for Paqet.${NC}" >&2
         return 1
@@ -3258,16 +3276,18 @@ install_paqet_binary() {
     tmpdir=$(mktemp -d /tmp/jojonet-paqet.XXXXXX) || return 1
     fname=$(paqet_optimized_download_name "$arch")
     url="https://github.com/${PAQET_OPTIMIZED_REPO}/releases/download/${PAQET_OPTIMIZED_TAG}/${fname}"
+    expected=$(paqet_pinned_sha256 "$fname" || true)
     echo -e "${YELLOW}[*] Downloading Paqet ($fname)...${NC}" >&2
-    if download_verified "$url" "$tmpdir/paqet.tar.gz" "$fname"; then
+    if download_verified "$url" "$tmpdir/paqet.tar.gz" "$fname" "$expected"; then
         ok=1
     else
         local latest core_file
         latest="${PAQET_CORE_VERSION:-v1.0.0-alpha.16}"
         core_file="paqet-linux-${arch}-${latest}.tar.gz"
         url="https://github.com/${PAQET_CORE_REPO}/releases/download/${latest}/${core_file}"
+        expected=$(paqet_pinned_sha256 "$core_file" || true)
         echo -e "${YELLOW}[*] Optimized build unavailable — trying pinned core: $core_file${NC}" >&2
-        if download_verified "$url" "$tmpdir/paqet.tar.gz" "$core_file"; then
+        if download_verified "$url" "$tmpdir/paqet.tar.gz" "$core_file" "$expected"; then
             ok=1
         fi
     fi
@@ -7556,7 +7576,19 @@ xray_fetch() {
 ensure_unzip() {
     command -v unzip >/dev/null 2>&1 && return 0
     log_note "Installing unzip..."
-    jojonet_pkg_install unzip || true
+    if ! jojonet_pkg_install unzip; then
+        log_warn "unzip package install failed; retrying after apt/dnf update..."
+        if command -v apt-get >/dev/null 2>&1; then
+            timeout 120 apt-get update >/dev/null 2>&1 || true
+            timeout 120 env DEBIAN_FRONTEND=noninteractive apt-get install -y unzip >/dev/null 2>&1 || true
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf makecache >/dev/null 2>&1 || true
+            dnf install -y unzip >/dev/null 2>&1 || true
+        elif command -v yum >/dev/null 2>&1; then
+            yum makecache >/dev/null 2>&1 || true
+            yum install -y unzip >/dev/null 2>&1 || true
+        fi
+    fi
     command -v unzip >/dev/null 2>&1 || { log_error "unzip is required"; return 1; }
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1 / panel 1.3.49
+- **ICMP paired**: panel `ensure_ready` always installs missing `unzip`/`tar`/`curl` even when jojonet is already current; `ensure_unzip` retries package install after apt/dnf update.
+- **Paqet**: pin amd64 optimized + core release SHA-256 in jojonet so non-interactive panel deploys no longer refuse unsigned downloads.
+- **SSH self-host**: when the panel manages its own public IP, connect via `127.0.0.1` and retry transient SSH drops (avoids OpenSSH PerSourcePenalties storms).
+
 ## 1.6.0 / panel 1.3.48
 - Every user can issue a free Let's Encrypt certificate on their own server from the Servers tab; panel-host SSL stays owner-only in مدیریت.
 - The SSL email field matches the domain field height and width in the form grid.

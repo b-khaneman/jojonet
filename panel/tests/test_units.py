@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from app import orchestrator as orch
 from app.security import Vault, hash_password, verify_password
+from app.sshclient import resolve_connect_host
 from app.validators import ip_keydir, split_confs, valid_iface, valid_ipv4, valid_keydir
 
 REPO = Path(__file__).resolve().parents[2]
@@ -50,6 +51,12 @@ def test_password_hash_roundtrip():
     assert not verify_password("wrong", h)
     assert not verify_password("x", "garbage")
     assert not verify_password("x", "scrypt$1$2$3$!!$!!")
+
+
+def test_resolve_connect_host_loopback_and_remote():
+    assert resolve_connect_host("127.0.0.1") == "127.0.0.1"
+    assert resolve_connect_host("localhost") == "127.0.0.1"
+    assert resolve_connect_host("8.8.8.8") == "8.8.8.8"
 
 
 def test_vault_roundtrip(tmp_path):

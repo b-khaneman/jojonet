@@ -5,10 +5,55 @@ import hashlib
 import base64
 import os
 import shlex
+import socket
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import asyncssh
+
+
+def local_ip_addresses() -> set[str]:
+    """Best-effort set of IPs that belong to this host (IPv4/IPv6)."""
+    ips: set[str] = {"127.0.0.1", "::1"}
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None):
+            ips.add(info[4][0])
+    except OSError:
+        pass
+    for family, probe in ((socket.AF_INET, "1.1.1.1"), (socket.AF_INET6, "2606:4700:4700::1111")):
+        try:
+            s = socket.socket(family, socket.SOCK_DGRAM)
+            try:
+                s.connect((probe, 80))
+                ips.add(s.getsockname()[0])
+            finally:
+                s.close()
+        except OSError:
+            continue
+    return ips
+
+
+def resolve_connect_host(host: str) -> str:
+    """When the panel targets its own public IP, prefer loopback.
+
+    OpenSSH 9.8+ PerSourcePenalties can lock out the host's public address after a brief
+    auth/connect storm (common when the panel and a managed server share one VPS). Hairpin
+    NAT to the public IP is also less reliable than 127.0.0.1.
+    """
+    host = (host or "").strip()
+    if not host or host in {"localhost", "127.0.0.1", "::1"}:
+        return "127.0.0.1" if host != "::1" else "::1"
+    try:
+        dests = {info[4][0] for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)}
+    except OSError:
+        return host
+    local = local_ip_addresses()
+    if not (dests & local):
+        return host
+    if any(":" not in ip for ip in dests):
+        return "127.0.0.1"
+    return "::1"
 
 LineCallback = Callable[[str], Awaitable[None] | None]
 
@@ -151,46 +196,57 @@ class RemoteSession:
 
     async def _open_conn(self) -> None:
         c = self.creds
+        connect_host = resolve_connect_host(c.host)
         keys = None
         if c.private_key:
             try:
                 keys = [asyncssh.import_private_key(c.private_key, c.key_passphrase or None)]
             except (asyncssh.KeyImportError, ValueError) as exc:
                 raise SSHError(f"کلید خصوصی SSH نامعتبر است یا passphrase اشتباه است ({exc})") from exc
-        client = _PinnedClient(c.hostkey)
-        try:
-            self.conn, _ = await asyncio.wait_for(
-                asyncssh.create_connection(
-                    lambda: client,
-                    c.host,
-                    port=c.port,
-                    username=c.username,
-                    password=c.password if not keys else None,
-                    client_keys=keys,
-                    # Empty trust lists (not None) force validate_host_public_key() before authentication.
-                    known_hosts=([], [], []),
-                    agent_path=None,
-                    preferred_auth="publickey" if keys else "password,keyboard-interactive",
-                    keepalive_interval=20,
-                    login_timeout=self.connect_timeout,
-                ),
-                timeout=self.connect_timeout + 5,
-            )
-        except asyncssh.HostKeyNotVerifiable as exc:
-            raise HostKeyMismatch(
-                "کلید هاست سرور تغییر کرده است (احتمال حمله MITM یا نصب مجدد سیستم‌عامل). "
-                "اگر مطمئن هستید، در ویرایش سرور «بازنشانی کلید هاست» را بزنید."
-            ) from exc
-        except asyncssh.PermissionDenied as exc:
-            raise SSHError("احراز هویت SSH ناموفق بود (نام کاربری/رمز یا کلید اشتباه است)") from exc
-        except (asyncio.TimeoutError, TimeoutError) as exc:
-            raise SSHError(f"اتصال به {c.host}:{c.port} در زمان مقرر برقرار نشد") from exc
-        except (OSError, asyncssh.Error) as exc:
-            raise SSHError(f"اتصال SSH به {c.host}:{c.port} ناموفق بود: {exc}") from exc
-        if client.seen is None:
+        last_exc: BaseException | None = None
+        for attempt in range(3):
+            client = _PinnedClient(c.hostkey)
+            try:
+                self.conn, _ = await asyncio.wait_for(
+                    asyncssh.create_connection(
+                        lambda: client,
+                        connect_host,
+                        port=c.port,
+                        username=c.username,
+                        password=c.password if not keys else None,
+                        client_keys=keys,
+                        # Empty trust lists (not None) force validate_host_public_key() before authentication.
+                        known_hosts=([], [], []),
+                        agent_path=None,
+                        preferred_auth="publickey" if keys else "password,keyboard-interactive",
+                        keepalive_interval=20,
+                        login_timeout=self.connect_timeout,
+                    ),
+                    timeout=self.connect_timeout + 5,
+                )
+                if client.seen is None:
+                    await self.close()
+                    raise SSHError("کلید هاست سرور دریافت نشد")
+                self.hostkey = client.seen
+                return
+            except asyncssh.HostKeyNotVerifiable as exc:
+                raise HostKeyMismatch(
+                    "کلید هاست سرور تغییر کرده است (احتمال حمله MITM یا نصب مجدد سیستم‌عامل). "
+                    "اگر مطمئن هستید، در ویرایش سرور «بازنشانی کلید هاست» را بزنید."
+                ) from exc
+            except asyncssh.PermissionDenied as exc:
+                raise SSHError("احراز هویت SSH ناموفق بود (نام کاربری/رمز یا کلید اشتباه است)") from exc
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                last_exc = exc
+            except (OSError, asyncssh.Error) as exc:
+                last_exc = exc
             await self.close()
-            raise SSHError("کلید هاست سرور دریافت نشد")
-        self.hostkey = client.seen
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
+        assert last_exc is not None
+        if isinstance(last_exc, (asyncio.TimeoutError, TimeoutError)):
+            raise SSHError(f"اتصال به {c.host}:{c.port} در زمان مقرر برقرار نشد") from last_exc
+        raise SSHError(f"اتصال SSH به {c.host}:{c.port} ناموفق بود: {last_exc}") from last_exc
 
     async def connect(self) -> None:
         await self._open_conn()

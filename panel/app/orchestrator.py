@@ -70,6 +70,29 @@ for c in ip nft ping openssl tar curl unzip; do command -v "$c" >/dev/null 2>&1 
 echo "prerequisites OK"
 """
 
+# Lightweight: always run before deploy even when jojonet version already matches.
+ENSURE_TOOLS_SCRIPT = r"""
+set -u
+export DEBIAN_FRONTEND=noninteractive
+need=""
+for c in unzip tar curl; do command -v "$c" >/dev/null 2>&1 || need="$need $c"; done
+need=${need# }
+if [ -n "$need" ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get -o DPkg::Lock::Timeout=120 install -y -qq --no-install-recommends $need \
+      || { apt-get -o DPkg::Lock::Timeout=120 update -qq; apt-get -o DPkg::Lock::Timeout=120 install -y -qq --no-install-recommends $need; }
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q $need
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q $need
+  else
+    echo "unsupported package manager"; exit 3
+  fi
+fi
+for c in unzip tar curl; do command -v "$c" >/dev/null 2>&1 || { echo "missing tool: $c"; exit 7; }; done
+echo "tools_ok"
+"""
+
 SYSINFO_SCRIPT = r"""
 . /etc/os-release 2>/dev/null; echo "os=${PRETTY_NAME:-unknown}"
 echo "kernel=$(uname -r)"
@@ -77,6 +100,7 @@ echo "arch=$(uname -m)"
 echo "src=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
 echo "jojonet=$(command -v jojonet >/dev/null 2>&1 && jojonet --version 2>/dev/null | head -n1 | awk '{print $NF}')"
 echo "systemd=$(command -v systemctl >/dev/null 2>&1 && echo yes || echo no)"
+echo "unzip=$(command -v unzip >/dev/null 2>&1 && echo yes || echo no)"
 """
 
 DUMP_CONFS = 'for f in /etc/jojonet/instances/*.conf; do [ -f "$f" ] || continue; echo "==> $f <=="; cat "$f"; echo; done'
@@ -497,6 +521,16 @@ class Orchestrator:
         info = await self.sysinfo(sess)
         return info.get("jojonet", "")
 
+    async def ensure_tools(self, job: Job, sess: RemoteSession, name: str) -> None:
+        """Install unzip/tar/curl when missing — even if jojonet is already current."""
+        res = await sess.run_root(ENSURE_TOOLS_SCRIPT, timeout=300)
+        if not res.ok:
+            detail = (res.stderr or res.stdout or "").strip()[:240]
+            raise StepFailed(f"{name}: ابزارهای لازم نصب نشد ({detail or 'unzip/tar/curl'})")
+        if "tools_ok" not in (res.stdout or ""):
+            raise StepFailed(f"{name}: بررسی ابزارهای لازم ناموفق بود")
+        await job.log(f"[{name}] unzip/tar/curl آماده است")
+
     async def ensure_ready(self, job: Job, sess: RemoteSession, row: dict[str, Any]) -> dict[str, str]:
         name = row["name"]
         info = await self.sysinfo(sess)
@@ -506,12 +540,14 @@ class Orchestrator:
         have = info.get("jojonet", "")
         if have and want and have == want:
             await job.log(f"[{name}] jojonet {have} نصب است")
+            await self.ensure_tools(job, sess, name)
             return info
         await job.log(f"[{name}] نصب پیش‌نیازها و jojonet {want or ''} (فعلی: {have or 'ندارد'})")
         await self.install_prereqs(job, sess, name)
         info["jojonet"] = await self.install_jojonet(job, sess, name)
         if want and info["jojonet"] != want:
             raise StepFailed(f"{name}: نسخه نصب‌شده ({info['jojonet'] or '?'}) با نسخه پنل ({want}) یکی نیست")
+        await self.ensure_tools(job, sess, name)
         return info
 
     # ---------- server jobs ----------
