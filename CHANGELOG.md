@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.6.0 / panel 1.3.27
+- Panel on port 80 or 443 can bind again. The service unit no longer sets NoNewPrivileges together with the low-port capability.
 - Installer no longer aborts with `$2: unbound variable` while reading the saved panel path.
 - Side terminals can be dragged by the title bar and resized from the corner or the edges. The size and place are remembered in this browser.
 

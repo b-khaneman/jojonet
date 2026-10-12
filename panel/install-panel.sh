@@ -767,7 +767,6 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure
 RestartSec=3
 UMask=0077
-NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -782,9 +781,10 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=$DATA_DIR
 EOF
         if ((PORT < 1024)); then
+            # NoNewPrivileges drops ambient capabilities, so port 80/443 would never bind.
             printf '%s\n' "AmbientCapabilities=CAP_NET_BIND_SERVICE" "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
         else
-            printf '%s\n' "CapabilityBoundingSet="
+            printf '%s\n' "NoNewPrivileges=yes" "CapabilityBoundingSet="
         fi
         printf '\n%s\n%s\n' "[Install]" "WantedBy=multi-user.target"
     } >"$UNIT_FILE.tmp"
