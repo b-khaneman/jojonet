@@ -1383,7 +1383,7 @@
           const delBtn = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'حذف کامل');
           delBtn.addEventListener('click', async () => {
             const res = await confirmDialog({
-              title: t.orphan ? 'حذف تانل یتیم' : 'حذف تانل',
+              title: t.orphan ? 'حذف تانل ثبت‌نشده' : 'حذف تانل',
               message: t.orphan
                 ? `تانل «${t.name}» فقط روی سرور «${srv.name}» است و در پنل نیست. از روی سرور حذف شود؟`
                 : `تانل «${t.name}» (ثبت‌شده در پنل #${t.panel_tunnel_id}) حذف کامل شود؟`,
@@ -1407,7 +1407,7 @@
               h('span', { class: 'mode-chip', dir: 'ltr' }, mi ? mi.label : (t.mode || '?')),
               liveStatusBadge(t.status),
               badge(t.boot ? 'ok' : 'muted', t.boot ? 'boot: on' : 'boot: off'),
-              t.orphan ? badge('warn', 'یتیم') : badge('info', `#${t.panel_tunnel_id}`)),
+              t.orphan ? badge('warn', 'ثبت‌نشده') : badge('info', `#${t.panel_tunnel_id}`)),
             h('dl', { class: 'kv live-kv' },
               kv('نقش', t.role || '—'),
               kv('IP محلی / مقابل', ltr(`${t.local_ip || '—'} / ${t.remote_ip || '—'}`)),

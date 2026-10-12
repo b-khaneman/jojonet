@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.30
+- The live-scan note explains an unregistered tunnel in plain language. The badge says «ثبت‌نشده» instead of «یتیم».
+
 ## 1.6.0 / panel 1.3.29
 - Customer cards show usage as three figures, permissions as separate on/off chips, and expiry on its own row.
 

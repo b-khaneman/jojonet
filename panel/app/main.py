@@ -1521,7 +1521,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             db.update("tunnels", tid, {"status": "deleting", "last_job_id": job_id})
             return {"job_id": job_id, "panel_tunnel_id": tid, "orphan": False}
         job_id = create_job(
-            sess, "tunnel_delete_remote", f"حذف تانل یتیم {name} از {row['name']}", REMOTE_DELETE_STEPS,
+            sess, "tunnel_delete_remote", f"حذف تانل ثبت‌نشده {name} از {row['name']}", REMOTE_DELETE_STEPS,
             lambda job: orch.job_delete_remote_tunnel(job, server_id, name, force), server_id=server_id,
         )
         return {"job_id": job_id, "panel_tunnel_id": None, "orphan": True}
