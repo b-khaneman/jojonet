@@ -2964,13 +2964,136 @@
     const fab = $(`#hx-toggle-${side}`);
     if (fab) fab.setAttribute('aria-pressed', open ? 'true' : 'false');
     syncHxOffset();
+    if (open) applyHxBox(side);
     const api = hxTerms[side];
     if (open && api) setTimeout(() => api.fit(), 280);
+  }
+
+  function hxBoxKey(side) { return 'jn-hx-box-' + side; }
+
+  function floatHx(dock, rect) {
+    dock.classList.add('is-floating');
+    dock.style.left = Math.round(rect.left) + 'px';
+    dock.style.top = Math.round(rect.top) + 'px';
+    dock.style.width = Math.round(rect.width) + 'px';
+    dock.style.height = Math.round(rect.height) + 'px';
+    dock.style.right = 'auto';
+    dock.style.bottom = 'auto';
+  }
+
+  function clampHx(x, y, w, h) {
+    const maxW = Math.max(320, window.innerWidth - 8);
+    const maxH = Math.max(220, window.innerHeight - 8);
+    w = Math.min(maxW, Math.max(320, w));
+    h = Math.min(maxH, Math.max(220, h));
+    x = Math.min(Math.max(0, x), Math.max(0, window.innerWidth - w));
+    y = Math.min(Math.max(0, y), Math.max(0, window.innerHeight - h));
+    return { x, y, w, h };
+  }
+
+  function saveHxBox(side, dock) {
+    const box = clampHx(
+      parseInt(dock.style.left, 10) || 0,
+      parseInt(dock.style.top, 10) || 0,
+      dock.offsetWidth,
+      dock.offsetHeight,
+    );
+    try { localStorage.setItem(hxBoxKey(side), JSON.stringify(box)); } catch (_) { /* ignore */ }
+  }
+
+  function applyHxBox(side) {
+    const dock = $(`#hx-${side}`);
+    if (!dock) return;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(hxBoxKey(side)) || 'null'); } catch (_) { saved = null; }
+    if (!saved || !Number.isFinite(saved.w) || !Number.isFinite(saved.h)) return;
+    const box = clampHx(saved.x || 0, saved.y || 0, saved.w, saved.h);
+    floatHx(dock, { left: box.x, top: box.y, width: box.w, height: box.h });
+  }
+
+  function bindHxMove(side) {
+    const dock = $(`#hx-${side}`);
+    if (!dock) return;
+    const title = dock.querySelector('.hx-top');
+    const grip = dock.querySelector('.hx-resize');
+
+    function track(mode, event) {
+      if (!dock.classList.contains('is-open')) return;
+      event.preventDefault();
+      const rect = dock.getBoundingClientRect();
+      floatHx(dock, rect);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const origin = { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+      dock.classList.add(mode === 'move' ? 'is-dragging' : 'is-resizing');
+      function onMove(ev) {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        let x = origin.x;
+        let y = origin.y;
+        let w = origin.w;
+        let h = origin.h;
+        if (mode === 'move') {
+          x += dx;
+          y += dy;
+        } else {
+          if (mode.indexOf('e') >= 0) w += dx;
+          if (mode.indexOf('s') >= 0) h += dy;
+          if (mode.indexOf('w') >= 0) { x += dx; w -= dx; }
+          if (mode.indexOf('n') >= 0) { y += dy; h -= dy; }
+        }
+        const box = clampHx(x, y, w, h);
+        dock.style.left = box.x + 'px';
+        dock.style.top = box.y + 'px';
+        dock.style.width = box.w + 'px';
+        dock.style.height = box.h + 'px';
+      }
+      function onUp() {
+        dock.classList.remove('is-dragging', 'is-resizing');
+        saveHxBox(side, dock);
+        const api = hxTerms[side];
+        if (api) api.fit();
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      }
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    }
+
+    if (title) {
+      title.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        if (event.target.closest('button, select, a, input, textarea')) return;
+        track('move', event);
+      });
+    }
+    function startResize(mode, event) {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      track(mode, event);
+    }
+    if (grip) grip.addEventListener('pointerdown', (event) => startResize('se', event));
+    dock.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('button, select, a, input, textarea, .hx-top, .xterm')) return;
+      const rect = dock.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const edge = 8;
+      const west = x <= edge;
+      const east = x >= rect.width - edge;
+      const north = y <= edge;
+      const south = y >= rect.height - edge;
+      if (!(west || east || north || south)) return;
+      const mode = (north ? 'n' : south ? 's' : '') + (west ? 'w' : east ? 'e' : '');
+      if (mode) startResize(mode, event);
+    });
   }
 
   function bindHxTerms() {
     hxTerms.left = createHxTerm('left');
     hxTerms.right = createHxTerm('right');
+    bindHxMove('left');
+    bindHxMove('right');
     for (const side of ['left', 'right']) {
       const toggle = $(`#hx-toggle-${side}`);
       const close = $(`#hx-${side}-close`);

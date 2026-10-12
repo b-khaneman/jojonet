@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.27
+- Side terminals can be dragged by the title bar and resized from the corner or the edges. The size and place are remembered in this browser.
+
 ## 1.6.0 / panel 1.3.26
 - Installer keeps an admin-chosen port across updates. `--port` still overrides it. Docs show the fixed entry path. Saving the same address no longer reloads the panel.
 

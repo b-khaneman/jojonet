@@ -2540,6 +2540,20 @@ textarea::placeholder {
 .hx-dock-left { left: 0; right: auto; transform: translateX(-105%); }
 .hx-dock-right { right: 0; left: auto; transform: translateX(105%); }
 .hx-dock.is-open { transform: none; }
+.hx-dock.is-floating.is-open {
+  right: auto;
+  bottom: auto;
+  transform: none;
+}
+.hx-dock.is-floating:not(.is-open) {
+  transform: none;
+  visibility: hidden;
+}
+.hx-dock.is-dragging,
+.hx-dock.is-resizing {
+  transition: none;
+  user-select: none;
+}
 
 .hx-chrome {
   position: relative;
@@ -2604,6 +2618,23 @@ textarea::placeholder {
   background: #050c08;
   font-weight: 700;
   color: #3dff9a;
+  cursor: grab;
+  touch-action: none;
+}
+
+.hx-dock.is-dragging .hx-top { cursor: grabbing; }
+
+.hx-resize {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 0 50%, #3dff9a 50% 62%, transparent 62% 70%, #3dff9a 70% 82%, transparent 82%);
 }
 
 .hx-led {
