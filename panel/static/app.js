@@ -3528,6 +3528,16 @@
     }));
   }
 
+  function paintRegisterPolicy(enabled) {
+    const reg = $('#set-register-enabled');
+    const badge = $('#register-policy-badge');
+    if (reg) reg.checked = !!enabled;
+    if (badge) {
+      badge.textContent = enabled ? 'باز' : 'بسته';
+      badge.className = enabled ? 'badge ok' : 'badge muted';
+    }
+  }
+
   async function loadCommerceForm() {
     if (!isOwner()) return;
     try {
@@ -3540,9 +3550,8 @@
         tunnel_prices: s.tunnel_prices,
       };
       const sell = $('#set-sell-enabled');
-      const reg = $('#set-register-enabled');
       if (sell) sell.checked = !!s.sell_tunnels_enabled;
-      if (reg) reg.checked = !!s.register_enabled;
+      paintRegisterPolicy(!!s.register_enabled);
       if ($('#pay-card')) $('#pay-card').value = (s.payment && s.payment.card) || '';
       if ($('#pay-wallet')) $('#pay-wallet').value = (s.payment && s.payment.wallet_address) || '';
       if ($('#pay-note')) $('#pay-note').value = (s.payment && s.payment.note) || '';
@@ -3552,6 +3561,22 @@
     } catch (err) {
       if (err.status !== 401) toast(err.message || NET_ERR, 'error');
     }
+  }
+
+  async function onRegisterPolicySave() {
+    const errBox = $('#register-policy-error');
+    hideErr(errBox);
+    const enabled = !!($('#set-register-enabled') && $('#set-register-enabled').checked);
+    act($('#register-policy-save'), async () => {
+      const r = await api('PATCH', '/api/settings', { register_enabled: enabled });
+      if (state.me) {
+        state.me.commerce = Object.assign({}, state.me.commerce || {}, {
+          register_enabled: r.register_enabled,
+        });
+      }
+      paintRegisterPolicy(!!r.register_enabled);
+      toast(r.register_enabled ? 'ثبت‌نام عمومی باز شد.' : 'ثبت‌نام عمومی بسته شد؛ فقط حساب‌های قبلی وارد می‌شوند.', 'success');
+    });
   }
 
   async function onCommerceSubmit(e) {
@@ -3567,7 +3592,6 @@
     act($('#commerce-submit'), async () => {
       const r = await api('PATCH', '/api/settings', {
         sell_tunnels_enabled: $('#set-sell-enabled').checked,
-        register_enabled: $('#set-register-enabled').checked,
         payment_card: $('#pay-card').value.trim(),
         payment_wallet_address: $('#pay-wallet').value.trim(),
         payment_note: $('#pay-note').value.trim(),
@@ -3575,14 +3599,15 @@
         tunnel_prices: prices,
       });
       if (state.me) {
-        state.me.commerce = {
+        state.me.commerce = Object.assign({}, state.me.commerce || {}, {
           sell_tunnels_enabled: r.sell_tunnels_enabled,
           register_enabled: r.register_enabled,
           currency: r.currency,
           payment: r.payment,
           tunnel_prices: r.tunnel_prices,
-        };
+        });
       }
+      paintRegisterPolicy(!!r.register_enabled);
       toast('تنظیمات فروش ذخیره شد.', 'success');
       updateModePriceHint();
       fillDepositModes();
@@ -3591,10 +3616,13 @@
 
   async function refreshRegisterGate() {
     const link = $('#login-to-register');
+    const closedNote = $('#login-register-closed');
     try {
       const c = await api('GET', '/api/commerce');
-      if (link) link.hidden = !c.register_enabled;
-      if (!c.register_enabled) {
+      const open = !!c.register_enabled;
+      if (link) link.hidden = !open;
+      if (closedNote) closedNote.hidden = open;
+      if (!open) {
         const rf = $('#register-form');
         if (rf) rf.hidden = true;
         const lf = $('#login-form');
@@ -3602,6 +3630,7 @@
       }
     } catch (_) {
       if (link) link.hidden = true;
+      if (closedNote) closedNote.hidden = false;
     }
   }
 
@@ -5436,6 +5465,12 @@
     if (depForm) depForm.addEventListener('submit', onDepositSubmit);
     const commerceForm = $('#commerce-form');
     if (commerceForm) commerceForm.addEventListener('submit', onCommerceSubmit);
+    const regSave = $('#register-policy-save');
+    if (regSave) regSave.addEventListener('click', onRegisterPolicySave);
+    const regToggle = $('#set-register-enabled');
+    if (regToggle) {
+      regToggle.addEventListener('change', () => paintRegisterPolicy(regToggle.checked));
+    }
     for (const [id, side] of [['of-iran-access', 'of-iran-secrets'], ['of-kharej-access', 'of-kharej-secrets']]) {
       const cb = $(`#${id}`);
       const box = $(`#${side}`);

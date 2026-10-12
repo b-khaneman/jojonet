@@ -60,6 +60,9 @@
       حساب ندارید؟
       <button type="button" class="btn btn-ghost btn-sm" id="btn-show-register">ثبت‌نام</button>
     </p>
+    <p class="muted login-switch" id="login-register-closed" hidden>
+      ثبت‌نام عمومی بسته است؛ فقط حساب‌های موجود می‌توانند وارد شوند.
+    </p>
   </form>
   <form id="register-form" class="login-card" novalidate hidden>
     <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
@@ -765,6 +768,21 @@
           <span>نمایش ترمینال برای همه کاربران مجاز</span>
         </label>
       </div>
+      <div class="card create-card" id="register-policy-card">
+        <h3 class="card-title">ثبت‌نام مشتریان جدید</h3>
+        <p class="muted">وقتی ثبت‌نام باز باشد، افراد جدید می‌توانند از صفحهٔ ورود حساب بسازند. با بستن آن، فقط کسانی که از قبل حساب دارند وارد می‌شوند و دکمهٔ ثبت‌نام از صفحهٔ ورود حذف می‌شود.</p>
+        <div id="register-policy-error" class="form-error" role="alert" hidden></div>
+        <div class="register-policy-row">
+          <label class="check" for="set-register-enabled">
+            <input id="set-register-enabled" type="checkbox">
+            <span>ثبت‌نام عمومی باز باشد</span>
+          </label>
+          <span id="register-policy-badge" class="badge muted" dir="rtl">بسته</span>
+        </div>
+        <div class="form-actions">
+          <button id="register-policy-save" class="btn btn-primary" type="button">ذخیرهٔ وضعیت ثبت‌نام</button>
+        </div>
+      </div>
       <div class="card create-card" id="commerce-card">
         <h3 class="card-title">فروش تانل و واریز</h3>
         <p class="muted">فروش را روشن کنید، شماره کارت یا آدرس ولت بگذارید، و برای هر نوع تانل قیمت تعیین کنید. مشتری واریز می‌کند؛ بعد از تأیید شما موجودی شارژ می‌شود و با هر ساخت تانل همان مبلغ یک‌بار کم می‌شود.</p>
@@ -773,9 +791,6 @@
           <div class="form-grid">
             <div class="field">
               <label class="check" for="set-sell-enabled"><input id="set-sell-enabled" type="checkbox"><span>فروش تانل فعال باشد</span></label>
-            </div>
-            <div class="field">
-              <label class="check" for="set-register-enabled"><input id="set-register-enabled" type="checkbox"><span>ثبت‌نام عمومی باز باشد</span></label>
             </div>
             <div class="field">
               <label for="pay-card">شماره کارت</label>
