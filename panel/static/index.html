@@ -56,6 +56,29 @@
       <input id="login-pass" name="password" type="password" dir="ltr" autocomplete="current-password" required>
     </div>
     <button id="login-btn" class="btn btn-primary btn-block" type="submit">ورود</button>
+    <p class="muted login-switch" id="login-to-register" hidden>
+      حساب ندارید؟
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-show-register">ثبت‌نام</button>
+    </p>
+  </form>
+  <form id="register-form" class="login-card" novalidate hidden>
+    <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
+    <h1 class="login-title">ثبت‌نام</h1>
+    <p class="muted">حساب مشتری بسازید. مالک می‌تواند ثبت‌نام را از مدیریت ببندد.</p>
+    <div id="register-error" class="form-error" role="alert" hidden></div>
+    <div class="field">
+      <label for="reg-user">نام کاربری</label>
+      <input id="reg-user" name="username" type="text" dir="ltr" autocomplete="username" autocapitalize="off" spellcheck="false" required minlength="3" maxlength="32">
+    </div>
+    <div class="field">
+      <label for="reg-pass">رمز عبور</label>
+      <input id="reg-pass" name="password" type="password" dir="ltr" autocomplete="new-password" required minlength="10">
+    </div>
+    <button id="register-btn" class="btn btn-primary btn-block" type="submit">ساخت حساب</button>
+    <p class="muted login-switch">
+      قبلاً حساب دارید؟
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-show-login">ورود</button>
+    </p>
   </form>
 </section>
 
@@ -127,6 +150,9 @@
     <button type="button" class="tab" role="tab" id="tabbtn-relays" data-tab="relays" aria-controls="tab-relays" aria-selected="false" tabindex="-1">رله‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-panels" data-tab="panels" aria-controls="tab-panels" aria-selected="false" tabindex="-1">پنل‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-outbounds" data-tab="outbounds" aria-controls="tab-outbounds" aria-selected="false" tabindex="-1">اوتباند</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-orders" data-tab="orders" aria-controls="tab-orders" aria-selected="false" tabindex="-1">سفارش</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-tickets" data-tab="tickets" aria-controls="tab-tickets" aria-selected="false" tabindex="-1">پشتیبانی</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-wallet" data-tab="wallet" aria-controls="tab-wallet" aria-selected="false" tabindex="-1">کیف پول</button>
     <button type="button" class="tab" role="tab" id="tabbtn-jobs" data-tab="jobs" aria-controls="tab-jobs" aria-selected="false" tabindex="-1">مانیتور</button>
     <button type="button" class="tab" role="tab" id="tabbtn-users" data-tab="users" aria-controls="tab-users" aria-selected="false" tabindex="-1" hidden>مدیریت</button>
   </nav>
@@ -180,27 +206,11 @@
           <div id="tf-error" class="form-error" role="alert" hidden></div>
           <div class="form-grid">
             <div class="field field-wide mode-field">
-              <label id="tf-mode-label" for="tf-mode-trigger">نوع تانل</label>
-              <select id="tf-mode" class="mode-pick-native" required tabindex="-1" aria-hidden="true"></select>
-              <div class="mode-pick" id="tf-mode-picker">
-                <button type="button" class="mode-pick-trigger" id="tf-mode-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="tf-mode-list" aria-labelledby="tf-mode-label">
-                  <span class="mode-pick-glyph" aria-hidden="true">◇</span>
-                  <span class="mode-pick-copy">
-                    <span class="mode-pick-title" id="tf-mode-title">انتخاب نوع تانل…</span>
-                    <span class="mode-pick-sub" id="tf-mode-sub">پروتکل لایه شبکه را مشخص کنید</span>
-                  </span>
-                  <span class="mode-pick-meta" id="tf-mode-meta" hidden></span>
-                  <span class="mode-pick-chev" aria-hidden="true"></span>
-                </button>
-                <div class="mode-pick-panel" id="tf-mode-panel" hidden>
-                  <div class="mode-pick-toolbar">
-                    <input type="search" id="tf-mode-filter" class="mode-pick-filter" dir="rtl" placeholder="جستجو: GRE، WireGuard، Xray…" autocomplete="off" aria-label="جستجوی نوع تانل">
-                    <span class="mode-pick-count" id="tf-mode-count"></span>
-                  </div>
-                  <div class="mode-pick-list" id="tf-mode-list" role="listbox" aria-labelledby="tf-mode-label"></div>
-                </div>
-              </div>
-              <div id="tf-mode-desc" class="mode-brief" role="status"></div>
+              <label id="tf-mode-label" for="tf-mode-btn">نوع تانل</label>
+              <select id="tf-mode" class="mode-select-native" required aria-describedby="tf-mode-desc" tabindex="-1" aria-hidden="true"></select>
+              <div id="tf-mode-picker" class="mode-picker" data-select="tf-mode" data-label="tf-mode-label" data-desc="tf-mode-desc"></div>
+              <div id="tf-mode-desc" class="mode-brief is-idle" role="status"></div>
+              <p id="tf-mode-price" class="hint tf-mode-price" hidden></p>
             </div>
             <div class="field" id="tf-iran-field">
               <label for="tf-iran">سرور ایران</label>
@@ -470,13 +480,18 @@
           <pre id="vpn-mon-rawlog" class="log log-raw" dir="ltr" hidden></pre>
         </div>
       </div>
-      <div id="vpn-creds" class="vpn-creds" hidden>
-        <div class="vpn-creds-head">
-          <h3 class="card-title">مشخصات ورود پنل</h3>
-          <p class="muted" id="vpn-creds-label"></p>
+      <div id="vpn-creds" class="vpn-slip" hidden>
+        <div class="vpn-slip-top">
+          <span class="vpn-slip-mark" id="vpn-creds-mark" aria-hidden="true">VPN</span>
+          <div class="vpn-slip-titles">
+            <p class="vpn-slip-kicker">برگهٔ ورود پنل</p>
+            <h3 class="vpn-slip-title" id="vpn-creds-label"></h3>
+            <p class="vpn-slip-server muted" id="vpn-creds-server" hidden></p>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" id="vpn-creds-copy-all">کپی همه</button>
         </div>
-        <div id="vpn-creds-fields" class="vpn-creds-fields"></div>
-        <p class="muted vpn-creds-note" id="vpn-creds-note" hidden></p>
+        <div id="vpn-creds-fields" class="vpn-slip-fields"></div>
+        <p class="vpn-slip-note" id="vpn-creds-note">این مشخصات را جای امن نگه دارید؛ دوباره از نصب‌کننده گرفته نمی‌شود مگر در لاگ.</p>
       </div>
     </section>
 
@@ -491,6 +506,182 @@
         </div>
       </div>
       <div id="outbounds-list" class="list-area"></div>
+    </section>
+
+    <section id="tab-orders" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-orders" hidden>
+      <div class="section-head">
+        <div>
+          <h2>سفارش تانل</h2>
+          <p class="muted" id="orders-lead">مشخصات سرورها را بفرستید تا مالک بعد از تأیید، تانل را برایتان بزند.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-orders" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div class="card create-card" id="order-create-card">
+        <h3 class="card-title">ثبت سفارش جدید</h3>
+        <form id="order-form" class="form" novalidate>
+          <div id="of-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field field-wide">
+              <label id="of-mode-label" for="of-mode-btn">نوع تانل</label>
+              <select id="of-mode" class="mode-select-native" required tabindex="-1" aria-hidden="true"></select>
+              <div id="of-mode-picker" class="mode-picker" data-select="of-mode" data-label="of-mode-label"></div>
+            </div>
+            <div class="field field-wide">
+              <label for="of-message">توضیح برای مالک</label>
+              <textarea id="of-message" rows="2" maxlength="2000" placeholder="مثلاً پورت‌های مورد نیاز یا نکتهٔ شبکه"></textarea>
+            </div>
+          </div>
+          <div class="order-pair">
+            <fieldset class="order-side">
+              <legend>سرور ایران</legend>
+              <div class="form-grid">
+                <div class="field"><label for="of-iran-name">نام</label><input id="of-iran-name" type="text" maxlength="40" required></div>
+                <div class="field"><label for="of-iran-host">IP</label><input id="of-iran-host" type="text" dir="ltr" required placeholder="1.2.3.4"></div>
+                <div class="field"><label for="of-iran-port">پورت SSH</label><input id="of-iran-port" type="number" dir="ltr" min="1" max="65535" value="22"></div>
+                <div class="field"><label for="of-iran-user">کاربر</label><input id="of-iran-user" type="text" dir="ltr" value="root"></div>
+              </div>
+              <label class="check" for="of-iran-access"><input id="of-iran-access" type="checkbox"><span>دسترسی SSH را هم می‌فرستم</span></label>
+              <div id="of-iran-secrets" class="form-grid order-secrets" hidden>
+                <div class="field field-wide"><label for="of-iran-pass">رمز SSH</label><input id="of-iran-pass" type="password" dir="ltr" autocomplete="off"></div>
+                <div class="field field-wide"><label for="of-iran-sudo">رمز sudo <span class="muted">(اختیاری)</span></label><input id="of-iran-sudo" type="password" dir="ltr" autocomplete="off"></div>
+              </div>
+            </fieldset>
+            <fieldset class="order-side">
+              <legend>سرور خارج</legend>
+              <div class="form-grid">
+                <div class="field"><label for="of-kharej-name">نام</label><input id="of-kharej-name" type="text" maxlength="40" required></div>
+                <div class="field"><label for="of-kharej-host">IP</label><input id="of-kharej-host" type="text" dir="ltr" required placeholder="5.6.7.8"></div>
+                <div class="field"><label for="of-kharej-port">پورت SSH</label><input id="of-kharej-port" type="number" dir="ltr" min="1" max="65535" value="22"></div>
+                <div class="field"><label for="of-kharej-user">کاربر</label><input id="of-kharej-user" type="text" dir="ltr" value="root"></div>
+              </div>
+              <label class="check" for="of-kharej-access"><input id="of-kharej-access" type="checkbox"><span>دسترسی SSH را هم می‌فرستم</span></label>
+              <div id="of-kharej-secrets" class="form-grid order-secrets" hidden>
+                <div class="field field-wide"><label for="of-kharej-pass">رمز SSH</label><input id="of-kharej-pass" type="password" dir="ltr" autocomplete="off"></div>
+                <div class="field field-wide"><label for="of-kharej-sudo">رمز sudo <span class="muted">(اختیاری)</span></label><input id="of-kharej-sudo" type="password" dir="ltr" autocomplete="off"></div>
+              </div>
+            </fieldset>
+          </div>
+          <div class="form-actions">
+            <button id="of-submit" class="btn btn-primary" type="submit">ارسال سفارش</button>
+          </div>
+        </form>
+      </div>
+      <h3 class="sub-head">سفارش‌ها</h3>
+      <div id="orders-list" class="svc-board" aria-live="polite"></div>
+    </section>
+
+    <section id="tab-tickets" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-tickets" hidden>
+      <div class="section-head">
+        <div>
+          <h2>پشتیبانی</h2>
+          <p class="muted">تیکت بسازید، دسته را مشخص کنید و در صورت نیاز دسترسی را اختیاری بفرستید.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-tickets" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div class="ticket-layout">
+        <div class="card create-card" id="ticket-create-card">
+          <h3 class="card-title">تیکت جدید</h3>
+          <form id="ticket-form" class="form" novalidate>
+            <div id="tf-ticket-error" class="form-error" role="alert" hidden></div>
+            <div class="form-grid">
+              <div class="field field-wide">
+                <label for="tk-subject">موضوع</label>
+                <input id="tk-subject" type="text" maxlength="200" required>
+              </div>
+              <div class="field">
+                <label for="tk-category">دسته</label>
+                <select id="tk-category">
+                  <option value="panel">پنل</option>
+                  <option value="tunnel">تانل</option>
+                  <option value="server">سرور</option>
+                  <option value="billing">اشتراک / صورتحساب</option>
+                  <option value="other" selected>سایر</option>
+                </select>
+              </div>
+              <div class="field field-wide">
+                <label for="tk-body">متن</label>
+                <textarea id="tk-body" rows="3" maxlength="5000" required></textarea>
+              </div>
+            </div>
+            <details class="access-fold">
+              <summary>ارسال دسترسی (اختیاری)</summary>
+              <div class="form-grid">
+                <div class="field"><label for="tk-acc-host">IP / هاست</label><input id="tk-acc-host" type="text" dir="ltr" maxlength="200"></div>
+                <div class="field"><label for="tk-acc-port">پورت</label><input id="tk-acc-port" type="number" dir="ltr" min="1" max="65535" placeholder="22"></div>
+                <div class="field"><label for="tk-acc-user">کاربر</label><input id="tk-acc-user" type="text" dir="ltr" maxlength="64"></div>
+                <div class="field"><label for="tk-acc-pass">رمز</label><input id="tk-acc-pass" type="password" dir="ltr" autocomplete="off"></div>
+                <div class="field field-wide"><label for="tk-acc-url">آدرس پنل</label><input id="tk-acc-url" type="text" dir="ltr" maxlength="500" placeholder="http://…"></div>
+                <div class="field field-wide"><label for="tk-acc-note">یادداشت دسترسی</label><input id="tk-acc-note" type="text" maxlength="500"></div>
+              </div>
+            </details>
+            <div class="form-actions">
+              <button id="tk-submit" class="btn btn-primary" type="submit">ثبت تیکت</button>
+            </div>
+          </form>
+        </div>
+        <div id="tickets-list" class="svc-board" aria-live="polite"></div>
+        <div id="ticket-thread" class="ticket-thread" hidden></div>
+      </div>
+    </section>
+
+    <section id="tab-wallet" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-wallet" hidden>
+      <div class="section-head">
+        <div>
+          <h2>کیف پول</h2>
+          <p class="muted">موجودی خود را ببینید، برای شارژ واریز کنید و کد پیگیری را مثل تیکت برای مالک بفرستید. بعد از تأیید، موجودی شارژ می‌شود و با هر ساخت تانل همان مبلغ یک‌بار کم می‌شود.</p>
+        </div>
+        <div class="section-actions">
+          <button id="btn-refresh-wallet" class="btn btn-sm" type="button">بروزرسانی</button>
+        </div>
+      </div>
+      <div class="wallet-balance-card" id="wallet-balance-card">
+        <p class="wallet-kicker">موجودی فعلی</p>
+        <p class="wallet-amount" id="wallet-amount">۰</p>
+        <p class="muted" id="wallet-currency-label"></p>
+      </div>
+      <div class="card create-card" id="deposit-card">
+        <h3 class="card-title">درخواست افزایش موجودی</h3>
+        <p class="muted" id="deposit-pay-info">شماره کارت یا آدرس ولت مالک اینجا نشان داده می‌شود.</p>
+        <form id="deposit-form" class="form" novalidate>
+          <div id="df-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="df-amount">مبلغ واریز</label>
+              <input id="df-amount" type="number" dir="ltr" min="1000" step="1000" required>
+            </div>
+            <div class="field">
+              <label for="df-method">روش</label>
+              <select id="df-method" required>
+                <option value="card">کارت به کارت</option>
+                <option value="crypto">ولت / رمزارز</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="df-track">کد پیگیری / TX</label>
+              <input id="df-track" type="text" dir="ltr" required maxlength="120" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="df-mode">برای تانل (اختیاری)</label>
+              <select id="df-mode"><option value="">—</option></select>
+            </div>
+            <div class="field field-wide">
+              <label for="df-note">توضیح</label>
+              <input id="df-note" type="text" maxlength="1000" placeholder="مثلاً ساعت واریز">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="df-submit" class="btn btn-primary" type="submit">ارسال درخواست واریز</button>
+          </div>
+        </form>
+      </div>
+      <h3 class="sub-head">درخواست‌های من</h3>
+      <div id="my-deposits" class="list-area"></div>
+      <h3 class="sub-head">گردش حساب</h3>
+      <div id="wallet-ledger" class="list-area"></div>
     </section>
 
     <section id="tab-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-jobs" hidden>
@@ -573,6 +764,44 @@
           <input id="set-terms-enabled" type="checkbox" checked>
           <span>نمایش ترمینال برای همه کاربران مجاز</span>
         </label>
+      </div>
+      <div class="card create-card" id="commerce-card">
+        <h3 class="card-title">فروش تانل و واریز</h3>
+        <p class="muted">فروش را روشن کنید، شماره کارت یا آدرس ولت بگذارید، و برای هر نوع تانل قیمت تعیین کنید. مشتری واریز می‌کند؛ بعد از تأیید شما موجودی شارژ می‌شود و با هر ساخت تانل همان مبلغ یک‌بار کم می‌شود.</p>
+        <form id="commerce-form" class="form" novalidate>
+          <div id="commerce-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label class="check" for="set-sell-enabled"><input id="set-sell-enabled" type="checkbox"><span>فروش تانل فعال باشد</span></label>
+            </div>
+            <div class="field">
+              <label class="check" for="set-register-enabled"><input id="set-register-enabled" type="checkbox"><span>ثبت‌نام عمومی باز باشد</span></label>
+            </div>
+            <div class="field">
+              <label for="pay-card">شماره کارت</label>
+              <input id="pay-card" type="text" dir="ltr" maxlength="120" autocomplete="off" placeholder="6037-...">
+            </div>
+            <div class="field">
+              <label for="pay-wallet">آدرس ولت</label>
+              <input id="pay-wallet" type="text" dir="ltr" maxlength="200" autocomplete="off" placeholder="T... یا 0x...">
+            </div>
+            <div class="field">
+              <label for="pay-currency">واحد پول</label>
+              <input id="pay-currency" type="text" maxlength="32" value="تومان">
+            </div>
+            <div class="field field-wide">
+              <label for="pay-note">توضیح واریز برای مشتری</label>
+              <input id="pay-note" type="text" maxlength="1000" placeholder="مثلاً فقط به همین کارت واریز کنید و کد پیگیری را بفرستید">
+            </div>
+          </div>
+          <h4 class="sub-head">قیمت هر نوع تانل</h4>
+          <div id="price-grid" class="price-grid"></div>
+          <div class="form-actions">
+            <button id="commerce-submit" class="btn btn-primary" type="submit">ذخیره فروش و قیمت‌ها</button>
+          </div>
+        </form>
+        <h4 class="sub-head">درخواست‌های واریز</h4>
+        <div id="owner-deposits" class="list-area"></div>
       </div>
       <div class="card create-card">
         <h3 class="card-title">ساخت مشتری</h3>
