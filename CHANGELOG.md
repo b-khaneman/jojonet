@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.46
+- The SSL status card no longer overlaps the domain badge; the secure URL row and form fields are clearer on desktop and mobile.
+
 ## 1.6.0 / panel 1.3.45
 - Registration has a clear owner control in مدیریت: open it for new signups, or close it so only existing accounts can log in.
 
