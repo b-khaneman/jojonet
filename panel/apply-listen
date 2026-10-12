@@ -21,7 +21,7 @@ if path and not path.startswith("/"):
 if not re.fullmatch(r"/[A-Za-z0-9][A-Za-z0-9_-]{15,63}", path):
     raise SystemExit(2)
 port = int(data["port"])
-if not 1024 <= port <= 65535:
+if not 1 <= port <= 65535:
     raise SystemExit(2)
 print(path)
 print(port)
@@ -69,4 +69,18 @@ if [[ -n "$old_port" && "$old_port" != "$port" ]]; then
     fi
 fi
 
+stream="0.0.0.0:${port}"
+host="$(sed -n 's/^JOJONET_PANEL_HOST=//p' "$ENV_FILE" | head -n 1)"
+case "$host" in
+    ""|0.0.0.0) stream="0.0.0.0:${port}" ;;
+    ::|"[::]") stream="[::]:${port}" ;;
+    *:*) stream="[${host}]:${port}" ;;
+    *) stream="${host}:${port}" ;;
+esac
+socket="/etc/systemd/system/jojonet-panel.socket"
+if [[ -f "$socket" ]] && grep -q '^ListenStream=' "$socket"; then
+    sed -i "s|^ListenStream=.*|ListenStream=${stream}|" "$socket"
+    systemctl daemon-reload
+    systemctl restart jojonet-panel.socket
+fi
 systemctl restart "$SERVICE"

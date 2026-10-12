@@ -487,7 +487,7 @@
       </div>
       <div class="card create-card" id="listen-card">
         <h3 class="card-title">آدرس ورود پنل</h3>
-        <p class="muted">IP خالی پنل را باز نمی‌کند. مسیر ثابت پیش‌فرض <span dir="ltr">jojonet-panel-entry</span> است. بعد از ذخیره، پنل چند ثانیه قطع می‌شود و با آدرس جدید بالا می‌آید.</p>
+        <p class="muted">IP خالی پنل را باز نمی‌کند. مسیر ثابت پیش‌فرض <span dir="ltr">jojonet-panel-entry</span> است. پورت ۸۰ و ۴۴۳ هم مجاز است. بعد از ذخیره، پنل چند ثانیه قطع می‌شود و با آدرس جدید بالا می‌آید.</p>
         <form id="listen-form" class="form" novalidate>
           <div id="listen-error" class="form-error" role="alert" hidden></div>
           <div class="form-grid">
@@ -497,7 +497,7 @@
             </div>
             <div class="field">
               <label for="listen-port">پورت</label>
-              <input id="listen-port" type="number" dir="ltr" min="1024" max="65535" required value="2053">
+              <input id="listen-port" type="number" dir="ltr" min="1" max="65535" required value="2053">
             </div>
           </div>
           <p class="hint" dir="ltr" id="listen-url"></p>

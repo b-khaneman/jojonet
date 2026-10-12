@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.28
+- The panel no longer binds port 80 or 443 itself. systemd owns the listen socket and passes it to the locked-down service, so a privileged port stays up across updates.
+- `jojonet-panel update` waits until the secret URL answers over HTTPS. If it does not, the previous unit, socket, and env are restored and the old service is started again.
+- The owner can save port 80 or 443 from the مدیریت tab. The root helper rewrites the systemd socket and restarts it.
+
 ## 1.6.0 / panel 1.3.27
 - Panel on port 80 or 443 can bind again. The service unit no longer sets NoNewPrivileges together with the low-port capability.
 - Installer no longer aborts with `$2: unbound variable` while reading the saved panel path.

@@ -39,6 +39,8 @@ def test_secret_panel_path(tmp_path):
     assert (tmp_path / "listen.json").read_text(encoding="utf-8").strip() == '{"path":"/jojonet-panel-entry","port":2053}'
     from app.config import saved_listen_port
     assert saved_listen_port(tmp_path) == 2053
+    write_listen(tmp_path, "jojonet-panel-entry", 80)
+    assert saved_listen_port(tmp_path) == 80
 
 
 def test_password_hash_roundtrip():
@@ -322,3 +324,43 @@ def test_parse_vpn_check_and_already():
     classic = dict(info, xui_flavor="classic")
     assert orch.vpn_panel_already("xui_classic", classic)
     assert orch.vpn_panel_conflict("xui", classic)
+
+
+def test_systemd_socket_requires_this_process(monkeypatch):
+    from app.cli import systemd_listen_socket
+
+    monkeypatch.delenv("LISTEN_PID", raising=False)
+    monkeypatch.delenv("LISTEN_FDS", raising=False)
+    assert systemd_listen_socket() is None
+    monkeypatch.setenv("LISTEN_PID", "1")
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    assert systemd_listen_socket() is None
+
+
+def test_installer_socket_activation_and_rollback():
+    text = (REPO / "panel" / "install-panel.sh").read_text(encoding="utf-8")
+    assert "ListenStream=" in text
+    assert "jojonet-panel.socket" in text
+    assert "panel_answers" in text
+    assert "restore_runtime" in text
+    assert "NoNewPrivileges=yes" in text
+    assert "AmbientCapabilities" not in text
+    apply = (REPO / "panel" / "apply-listen").read_text(encoding="utf-8")
+    assert "jojonet-panel.socket" in apply
+    assert "1 <= port <= 65535" in apply
+
+
+def test_checksums_match_lf_sources():
+    import hashlib
+
+    binary = {".woff2", ".pdf", ".zip", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico"}
+    raw = (REPO / "checksums.sha256").read_text(encoding="utf-8")
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        digest, rel = line.split("  ", 1)
+        data = (REPO / rel).read_bytes()
+        if Path(rel).suffix.lower() not in binary:
+            data = data.replace(b"\r\n", b"\n")
+        got = hashlib.sha256(data).hexdigest()
+        assert got == digest, rel

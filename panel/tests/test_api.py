@@ -42,7 +42,10 @@ def test_owner_can_change_panel_path(client, admin):
     assert current.status_code == 200
     assert current.json()["path"] == client.prefix and current.json()["port"] == 2053
     assert client.put("/api/listen", json={"path": "short", "port": 2053}, headers=auth).status_code == 422
-    assert client.put("/api/listen", json={"path": "jojonet-panel-entry", "port": 80}, headers=auth).status_code == 422
+    assert client.put("/api/listen", json={"path": "jojonet-panel-entry", "port": 0}, headers=auth).status_code == 422
+    low = client.put("/api/listen", json={"path": client.prefix.strip("/"), "port": 80}, headers=auth)
+    assert low.status_code == 200, low.text
+    assert low.json()["port"] == 80
     saved = client.put("/api/listen", json={"path": "my-fixed-entry-path", "port": 2053}, headers=auth)
     assert saved.status_code == 200, saved.text
     body = saved.json()

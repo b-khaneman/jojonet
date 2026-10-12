@@ -71,6 +71,49 @@ def cmd_show_key(_: argparse.Namespace) -> int:
     return 0
 
 
+def systemd_listen_socket():
+    """Return the listening socket systemd passed in, or None.
+
+    uvicorn's ``fd`` path wraps the descriptor as ``AF_UNIX``. A TCP socket from
+    ``jojonet-panel.socket`` must be wrapped with its real family and handed to
+    ``Server.run(sockets=...)`` instead.
+    """
+    import socket
+
+    if os.environ.get("LISTEN_PID") != str(os.getpid()):
+        return None
+    try:
+        count = int(os.environ.get("LISTEN_FDS") or "0")
+    except ValueError:
+        return None
+    if count < 1:
+        return None
+    try:
+        os.set_inheritable(3, False)
+    except OSError:
+        pass
+    sock = socket.fromfd(3, socket.AF_INET, socket.SOCK_STREAM)
+    domain = socket.AF_INET
+    so_domain = getattr(socket, "SO_DOMAIN", None)
+    if so_domain is not None:
+        try:
+            domain = int(sock.getsockopt(socket.SOL_SOCKET, so_domain))
+        except OSError:
+            domain = socket.AF_INET
+    if domain not in (socket.AF_INET, socket.AF_INET6):
+        domain = socket.AF_INET
+    if domain != socket.AF_INET:
+        sock.close()
+        sock = socket.fromfd(3, domain, socket.SOCK_STREAM)
+    try:
+        sock.setblocking(False)
+    except OSError:
+        pass
+    os.environ.pop("LISTEN_FDS", None)
+    os.environ.pop("LISTEN_PID", None)
+    return sock
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -85,12 +128,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if cert and not (os.path.isfile(cert) and os.path.isfile(key)):
         print(f"TLS files not found: {cert} / {key}", file=sys.stderr)
         return 2
+    if cert and not (os.access(cert, os.R_OK) and os.access(key, os.R_OK)):
+        print(f"TLS files are not readable by this user: {cert} / {key}", file=sys.stderr)
+        return 2
     if not cert and settings.secure_cookies:
         print("refusing to serve without TLS (set JOJONET_PANEL_SECURE_COOKIES=0 for local testing only)", file=sys.stderr)
         return 2
     from .main import create_app
 
-    uvicorn.run(
+    sock = systemd_listen_socket()
+    config = uvicorn.Config(
         create_app(settings),
         host=host,
         port=port,
@@ -104,6 +151,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         log_level="info",
         timeout_graceful_shutdown=5,
     )
+    server = uvicorn.Server(config)
+    if sock is not None:
+        print(f"JojoNet Panel accepting the systemd socket on port {port}", flush=True)
+        server.run(sockets=[sock])
+    else:
+        server.run()
     return 0
 
 

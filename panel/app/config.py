@@ -81,7 +81,7 @@ def read_listen(data_dir: Path) -> tuple[str, int] | None:
         port = int(data.get("port"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    if not 1024 <= port <= 65535:
+    if not 1 <= port <= 65535:
         return None
     return path, port
 
@@ -93,8 +93,8 @@ def saved_listen_port(data_dir: Path) -> int | None:
 
 def write_listen(data_dir: Path, path: str, port: int) -> None:
     path = normalize_base_path(path)
-    if not 1024 <= int(port) <= 65535:
-        raise ValueError("panel port must be between 1024 and 65535")
+    if not 1 <= int(port) <= 65535:
+        raise ValueError("panel port must be between 1 and 65535")
     payload = json.dumps({"path": path, "port": int(port)}, separators=(",", ":")) + "\n"
     _write_private(Path(data_dir) / "listen.json", payload)
     write_web_path(data_dir, path)

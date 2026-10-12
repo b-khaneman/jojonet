@@ -553,7 +553,7 @@ class PanelSettingsIn(BaseModel):
 
 class ListenIn(BaseModel):
     path: str = Field(min_length=1, max_length=80)
-    port: int = Field(ge=1024, le=65535)
+    port: int = Field(ge=1, le=65535)
 
 
 class UserPasswordIn(BaseModel):
@@ -993,6 +993,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             host_name, sep, host_port = host.rpartition(":")
             hostname = host_name if sep and host_port.isdigit() else host
         scheme = "https" if settings.secure_cookies else (request.url.scheme or "https")
+        # https on 80/443 must keep the port: browsers send https to 443, not to 80.
         if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
             return f"{scheme}://{hostname}{path}/"
         return f"{scheme}://{hostname}:{port}{path}/"
@@ -1004,6 +1005,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def port_is_free(port: int) -> bool:
         if port == app.state.entry.port:
+            return True
+        # Ports below 1024 are opened by systemd, not by this process.
+        if port < 1024:
             return True
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:

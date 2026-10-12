@@ -24,6 +24,8 @@ readonly TLS_DIR="/etc/jojonet-panel/tls"
 readonly ENV_FILE="/etc/jojonet-panel/panel.env"
 readonly DATA_DIR="/var/lib/jojonet-panel"
 readonly UNIT_FILE="/etc/systemd/system/jojonet-panel.service"
+readonly SOCKET_FILE="/etc/systemd/system/jojonet-panel.socket"
+readonly ROLLBACK_DIR="/etc/jojonet-panel/rollback"
 readonly WRAPPER="/usr/local/bin/jojonet-panel"
 readonly DEFAULT_PORT="2053"
 readonly DEFAULT_PANEL_PATH="/jojonet-panel-entry"
@@ -52,7 +54,16 @@ fi
 log()  { printf '%s[+]%s %s\n' "$GREEN" "$NC" "$*"; }
 info() { printf '%s[*]%s %s\n' "$CYAN" "$NC" "$*"; }
 warn() { printf '%s[!]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
-die()  { printf '%s[x]%s %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
+die()  {
+    trap - ERR
+    if ((${HAVE_ROLLBACK:-0})) && ((${NEW_PANEL_OK:-0} == 0)); then
+        if restore_runtime; then
+            printf '%s[!]%s Previous panel files were restored and the service was started again.\n' "$YELLOW" "$NC" >&2
+        fi
+    fi
+    printf '%s[x]%s %s\n' "$RED" "$NC" "$*" >&2
+    exit 1
+}
 step() { printf '\n%s==> %s%s\n' "$BOLD" "$*" "$NC"; }
 
 PORT=""
@@ -77,6 +88,8 @@ ADMIN_USER=""
 ADMIN_PASS=""
 ADMIN_RAW=""
 TMP_DIRS=()
+HAVE_ROLLBACK=0
+NEW_PANEL_OK=0
 
 cleanup() {
     local d
@@ -88,7 +101,13 @@ cleanup() {
 }
 
 on_error() {
+    trap - ERR
     printf '%s[x]%s Installer failed at line %s (exit code %s).\n' "$RED" "$NC" "$2" "$1" >&2
+    if ((${HAVE_ROLLBACK:-0})) && ((${NEW_PANEL_OK:-0} == 0)); then
+        if restore_runtime; then
+            printf '%s[!]%s Previous panel files were restored and the service was started again.\n' "$YELLOW" "$NC" >&2
+        fi
+    fi
 }
 
 trap cleanup EXIT
@@ -707,6 +726,7 @@ PY
 
 write_env() {
     step "Writing $ENV_FILE"
+    backup_runtime
     if [[ ! -f "$ENV_FILE" ]]; then
         cat >"$ENV_FILE" <<EOF
 # JojoNet Panel configuration — read by systemd and the jojonet-panel command.
@@ -746,14 +766,25 @@ EOF
     chmod 0640 "$ENV_FILE"
 }
 
+listen_stream() {
+    case "$HOST" in
+        ""|0.0.0.0) printf '0.0.0.0:%s' "$PORT" ;;
+        ::|"[::]") printf '[::]:%s' "$PORT" ;;
+        *:*) printf '[%s]:%s' "$HOST" "$PORT" ;;
+        *) printf '%s:%s' "$HOST" "$PORT" ;;
+    esac
+}
+
 write_unit() {
     step "Installing systemd unit"
-    {
-        cat <<EOF
+    # systemd opens the port (including 80/443) and passes the socket in.
+    # The service stays locked down and never calls bind() itself.
+    cat >"$UNIT_FILE.tmp" <<EOF
 [Unit]
 Description=JojoNet Panel (web UI for JojoNet tunnels)
 Documentation=https://github.com/${REPO_SLUG}
-After=network-online.target
+After=network-online.target jojonet-panel.socket
+Requires=jojonet-panel.socket
 Wants=network-online.target
 
 [Service]
@@ -767,6 +798,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure
 RestartSec=3
 UMask=0077
+NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -779,18 +811,32 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=$DATA_DIR
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
 EOF
-        if ((PORT < 1024)); then
-            # NoNewPrivileges drops ambient capabilities, so port 80/443 would never bind.
-            printf '%s\n' "AmbientCapabilities=CAP_NET_BIND_SERVICE" "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
-        else
-            printf '%s\n' "NoNewPrivileges=yes" "CapabilityBoundingSet="
-        fi
-        printf '\n%s\n%s\n' "[Install]" "WantedBy=multi-user.target"
-    } >"$UNIT_FILE.tmp"
     chmod 0644 "$UNIT_FILE.tmp"
     mv -f -- "$UNIT_FILE.tmp" "$UNIT_FILE"
     log "Wrote $UNIT_FILE"
+    cat >"$SOCKET_FILE.tmp" <<EOF
+[Unit]
+Description=JojoNet Panel listen socket
+Before=jojonet-panel.service
+
+[Socket]
+ListenStream=$(listen_stream)
+NoDelay=true
+FreeBind=true
+Backlog=128
+Service=jojonet-panel.service
+
+[Install]
+WantedBy=sockets.target
+EOF
+    chmod 0644 "$SOCKET_FILE.tmp"
+    mv -f -- "$SOCKET_FILE.tmp" "$SOCKET_FILE"
+    log "Wrote $SOCKET_FILE"
     cat >"$APPLY_UNIT" <<EOF
 [Unit]
 Description=Apply JojoNet Panel path and port
@@ -940,10 +986,10 @@ cmd_url() {
 cmd_logs() {
     local n="${1:-100}"
     if [[ "$n" == "-f" ]]; then
-        exec journalctl -u "$SERVICE" -f --no-pager
+        exec journalctl -u "$SERVICE" -u jojonet-panel.socket -f --no-pager
     fi
     [[ "$n" =~ ^[0-9]+$ ]] || die "logs: N must be a number"
-    exec journalctl -u "$SERVICE" -n "$n" --no-pager
+    exec journalctl -u "$SERVICE" -u jojonet-panel.socket -n "$n" --no-pager
 }
 
 cleanup_update() {
@@ -993,8 +1039,19 @@ main() {
     esac
     need_root "$cmd"
     case "$cmd" in
-        status) exec systemctl status "$SERVICE" --no-pager ;;
-        start|stop|restart) systemctl "$cmd" "$SERVICE" ;;
+        status) exec systemctl status "$SERVICE" jojonet-panel.socket --no-pager ;;
+        start)
+            systemctl start jojonet-panel.socket
+            systemctl start "$SERVICE"
+            ;;
+        stop)
+            systemctl stop "$SERVICE"
+            systemctl stop jojonet-panel.socket
+            ;;
+        restart)
+            systemctl restart jojonet-panel.socket
+            systemctl restart "$SERVICE"
+            ;;
         logs) cmd_logs "$@" ;;
         url) cmd_url ;;
         apply-listen) exec "$INSTALL_DIR/apply-listen" ;;
@@ -1060,13 +1117,86 @@ open_firewall() {
     fi
 }
 
+backup_runtime() {
+    install -d -m 0700 "$ROLLBACK_DIR"
+    rm -f -- "$ROLLBACK_DIR/jojonet-panel.service" "$ROLLBACK_DIR/jojonet-panel.socket" \
+        "$ROLLBACK_DIR/panel.env" "$ROLLBACK_DIR/web.path" "$ROLLBACK_DIR/listen.json"
+    [[ -f "$UNIT_FILE" ]] && cp -a "$UNIT_FILE" "$ROLLBACK_DIR/jojonet-panel.service"
+    [[ -f "$SOCKET_FILE" ]] && cp -a "$SOCKET_FILE" "$ROLLBACK_DIR/jojonet-panel.socket"
+    [[ -f "$ENV_FILE" ]] && cp -a "$ENV_FILE" "$ROLLBACK_DIR/panel.env"
+    [[ -f "$DATA_DIR/web.path" ]] && cp -a "$DATA_DIR/web.path" "$ROLLBACK_DIR/web.path"
+    [[ -f "$DATA_DIR/listen.json" ]] && cp -a "$DATA_DIR/listen.json" "$ROLLBACK_DIR/listen.json"
+    HAVE_ROLLBACK=1
+}
+
+restore_runtime() {
+    [[ -f "$ROLLBACK_DIR/jojonet-panel.service" ]] || return 1
+    trap - ERR
+    set +e
+    systemctl stop "$SERVICE" >/dev/null 2>&1
+    systemctl stop jojonet-panel.socket >/dev/null 2>&1
+    cp -a "$ROLLBACK_DIR/jojonet-panel.service" "$UNIT_FILE"
+    if [[ -f "$ROLLBACK_DIR/jojonet-panel.socket" ]]; then
+        cp -a "$ROLLBACK_DIR/jojonet-panel.socket" "$SOCKET_FILE"
+    else
+        rm -f -- "$SOCKET_FILE"
+        systemctl disable jojonet-panel.socket >/dev/null 2>&1
+    fi
+    [[ -f "$ROLLBACK_DIR/panel.env" ]] && cp -a "$ROLLBACK_DIR/panel.env" "$ENV_FILE"
+    [[ -f "$ROLLBACK_DIR/web.path" ]] && cp -a "$ROLLBACK_DIR/web.path" "$DATA_DIR/web.path"
+    if [[ -f "$ROLLBACK_DIR/listen.json" ]]; then
+        cp -a "$ROLLBACK_DIR/listen.json" "$DATA_DIR/listen.json"
+    fi
+    systemctl daemon-reload >/dev/null 2>&1
+    if [[ -f "$SOCKET_FILE" ]]; then
+        systemctl restart jojonet-panel.socket >/dev/null 2>&1
+    fi
+    systemctl restart "$SERVICE" >/dev/null 2>&1
+    local rc=$?
+    set -e
+    HAVE_ROLLBACK=0
+    [[ "$rc" -eq 0 ]]
+}
+
+panel_answers() {
+    local path="" target="127.0.0.1" url="" code="" body=""
+    if [[ -f "$DATA_DIR/web.path" ]]; then
+        path="$(tr -d '[:space:]' < "$DATA_DIR/web.path")"
+    fi
+    path="${path:-${PANEL_WEB_PATH:-}}"
+    path="${path%/}"
+    [[ -n "$path" ]] || return 1
+    case "$HOST" in
+        ::|"[::]") target="[::1]" ;;
+        ""|0.0.0.0|127.0.0.1) target="127.0.0.1" ;;
+        *:*) target="[$HOST]" ;;
+        *) target="$HOST" ;;
+    esac
+    url="https://${target}:${PORT}${path}/"
+    body="$(mktemp)"
+    code="$(curl -gksS -H 'Accept-Encoding: identity' -o "$body" -w '%{http_code}' --max-time 3 "$url" 2>/dev/null || true)"
+    if [[ "$code" == "200" ]] && grep -q 'data-base=' "$body"; then
+        rm -f -- "$body"
+        return 0
+    fi
+    rm -f -- "$body"
+    return 1
+}
+
 start_service() {
     step "Starting $SERVICE"
+    systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+    systemctl stop jojonet-panel.socket >/dev/null 2>&1 || true
     systemctl daemon-reload
     systemctl enable "$SERVICE" >/dev/null 2>&1 || warn "systemctl enable failed"
+    systemctl enable jojonet-panel.socket >/dev/null 2>&1 || warn "could not enable the listen socket"
     if [[ -f "$APPLY_PATH_UNIT" && -x "$INSTALL_DIR/apply-listen" ]]; then
         systemctl enable jojonet-panel-apply.path >/dev/null 2>&1 || warn "could not enable listen watcher"
         systemctl restart jojonet-panel-apply.path >/dev/null 2>&1 || true
+    fi
+    if ! systemctl restart jojonet-panel.socket; then
+        journalctl -u jojonet-panel.socket -n 40 --no-pager >&2 || true
+        die "The listen socket failed to start on port $PORT."
     fi
     if ! systemctl restart "$SERVICE"; then
         journalctl -u "$SERVICE" -n 50 --no-pager >&2 || true
@@ -1074,14 +1204,15 @@ start_service() {
     fi
     local i
     for ((i = 0; i < 30; i++)); do
-        if [[ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null || true)" ]] && systemctl is-active --quiet "$SERVICE"; then
-            log "Panel is listening on port $PORT."
+        if systemctl is-active --quiet "$SERVICE" && panel_answers; then
+            NEW_PANEL_OK=1
+            log "Panel is answering HTTPS on port $PORT."
             return 0
         fi
         sleep 1
     done
     journalctl -u "$SERVICE" -n 50 --no-pager >&2 || true
-    die "The panel did not start listening on port $PORT within 30s (see the log above)."
+    die "The panel did not answer HTTPS on port $PORT within 30s (see the log above)."
 }
 
 panel_url() {
