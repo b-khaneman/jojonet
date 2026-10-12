@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.36
+- The first page is an account overview: remaining subscription time, service health, and usage limits, for both the owner and customers.
+
 ## 1.6.0 / panel 1.3.35
 - Outbound and routing JSON open in an editor on the page. Edits are what copy and download use, and the JSON status stays visible while typing.
 

@@ -12,7 +12,7 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'users'];
+  const TABS = ['overview', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'users'];
   const XRAY_TUNNEL_MODES = new Set(['dokodemo', 'xray_reverse']);
 
   const ROLE_LABEL = { iran: 'ایران', kharej: 'خارج' };
@@ -604,19 +604,21 @@
     if (roleEl) roleEl.textContent = me.role === 'owner' ? 'مالک' : (me.role === 'customer' ? 'مشتری' : '');
     if (btn) btn.classList.toggle('is-owner', me.role === 'owner');
     const quotaEl = $('#hdr-quota');
-    if (!quotaEl) return;
-    if (me.role === 'owner') {
-      quotaEl.hidden = true;
-      quotaEl.textContent = '';
-      return;
+    if (quotaEl) {
+      if (me.role === 'owner') {
+        quotaEl.hidden = true;
+        quotaEl.textContent = '';
+      } else {
+        const bits = [];
+        if (me.days_left != null) bits.push(`${fmtNum(me.days_left)} روز مانده`);
+        const lim = (me.limits || {});
+        const use = (me.usage || {});
+        bits.push(limitText(use.servers || 0, lim.max_servers, 'سرور'));
+        quotaEl.textContent = bits.join(' · ');
+        quotaEl.hidden = !bits.length;
+      }
     }
-    const bits = [];
-    if (me.days_left != null) bits.push(`${fmtNum(me.days_left)} روز مانده`);
-    const lim = (me.limits || {});
-    const use = (me.usage || {});
-    bits.push(limitText(use.servers || 0, lim.max_servers, 'سرور'));
-    quotaEl.textContent = bits.join(' · ');
-    quotaEl.hidden = !bits.length;
+    renderOverview();
   }
 
   function resetLists() {
@@ -644,6 +646,7 @@
         L.loaded = true;
         if (changed) L.render();
         if (L.after) L.after();
+        renderOverview();
       } catch (err) {
         if (err.status === 401) return;
         if (!L.loaded) {
@@ -679,6 +682,7 @@
     state.pollTimer = setInterval(() => {
       if (!state.loggedIn || document.hidden) return;
       load('jobs', true);
+      renderOverview();
       const transient = lists.tunnels.data.some((t) => t.status === 'deploying' || t.status === 'deleting')
         || (lists.relays.data || []).some((t) => t.status === 'deploying' || t.status === 'deleting');
       if (transient) {
@@ -699,6 +703,155 @@
         notifyDone(j.id, j.status, j.title);
       }
     }
+  }
+
+  /* ---------- overview ---------- */
+
+  function remainClock(me) {
+    if (me.enabled === false) {
+      return { tone: 'bad', num: '—', unit: 'غیرفعال', sub: 'این حساب تا فعال‌سازی دوباره سرویس ندارد.' };
+    }
+    const exp = parseTime(me.expires_at);
+    if (!exp) {
+      return {
+        tone: 'ok',
+        num: '∞',
+        unit: 'بدون انقضا',
+        sub: me.role === 'owner' ? 'حساب مالک محدودیت زمانی ندارد.' : 'برای این حساب تاریخ پایان ثبت نشده است.',
+      };
+    }
+    const ms = exp.getTime() - Date.now();
+    const until = `تا ${fmtTime(me.expires_at)}`;
+    if (ms <= 0) return { tone: 'bad', num: '0', unit: 'روز', sub: `اشتراک تمام شده است. ${until}` };
+    const days = Math.floor(ms / 86400000);
+    const hours = Math.floor((ms % 86400000) / 3600000);
+    if (days === 0) return { tone: 'bad', num: fmtNum(hours), unit: 'ساعت', sub: until };
+    const tone = days <= 3 ? 'bad' : (days <= 7 ? 'warn' : 'ok');
+    const extra = hours ? `${fmtNum(hours)} ساعت دیگر. ` : '';
+    return { tone, num: fmtNum(days), unit: 'روز', sub: `${extra}${until}` };
+  }
+
+  function serviceVerdict(me, servers, tunnels, relays) {
+    if (me.enabled === false) return { tone: 'bad', label: 'غیرفعال', text: 'حساب غیرفعال است. سرویس‌ها تا روشن شدن دوباره کار نمی‌کنند.' };
+    const exp = parseTime(me.expires_at);
+    if (exp && exp.getTime() <= Date.now()) return { tone: 'bad', label: 'منقضی', text: 'زمان اشتراک تمام شده است. برای ادامه باید تمدید شود.' };
+    const badT = tunnels.filter((t) => t.status === 'failed' || t.status === 'degraded').length;
+    const badR = relays.filter((r) => r.status === 'failed' || r.status === 'degraded').length;
+    const badS = servers.filter((s) => s.last_check && !s.last_check.ok).length;
+    const busy = tunnels.some((t) => t.status === 'deploying' || t.status === 'deleting')
+      || relays.some((r) => r.status === 'deploying' || r.status === 'deleting');
+    if (badT || badR || badS) return { tone: 'warn', label: 'نیاز به بررسی', text: 'بعضی سرویس‌ها خطا دارند. موردهای پایین را باز کنید.' };
+    if (busy) return { tone: 'warn', label: 'در حال کار', text: 'یک عملیات هنوز تمام نشده و وضعیت همین‌جا تازه می‌شود.' };
+    const unchecked = servers.filter((s) => !s.last_check).length;
+    if (unchecked) return { tone: 'warn', label: 'ناقص', text: 'بعضی سرورها هنوز تست اتصال نشده‌اند.' };
+    if (!servers.length && !tunnels.length && !relays.length) return { tone: 'idle', label: 'بدون سرویس', text: 'هنوز سرویسی ثبت نشده است. از بخش سرورها شروع کنید.' };
+    return { tone: 'ok', label: 'پایدار', text: 'سرویس‌های این حساب در وضعیت پایدار هستند.' };
+  }
+
+  function ovTile(label, num, detail, tone) {
+    return h('article', { class: `ov-tile is-${tone}` },
+      h('span', { class: 'ov-tile-k' }, label),
+      h('strong', { class: 'ov-tile-n', dir: 'ltr' }, fmtNum(num)),
+      h('span', { class: 'ov-tile-s' }, detail));
+  }
+
+  function ovMeter(label, used, max) {
+    const unlimited = max == null || max === '';
+    const pct = unlimited ? 0 : Math.min(100, Math.round((Number(used) / Math.max(1, Number(max))) * 100));
+    const tone = unlimited ? 'open' : (pct >= 100 ? 'bad' : (pct >= 80 ? 'warn' : 'ok'));
+    const fill = h('span', { class: 'ov-meter-fill' });
+    fill.style.width = unlimited ? '100%' : `${pct}%`;
+    return h('div', { class: `ov-meter is-${tone}` },
+      h('div', { class: 'ov-meter-top' },
+        h('span', null, label),
+        h('bdi', { dir: 'ltr' }, unlimited ? fmtNum(used) : `${fmtNum(used)} / ${fmtNum(max)}`)),
+      h('div', { class: 'ov-meter-track', 'aria-hidden': 'true' }, fill),
+      h('span', { class: 'ov-meter-note' }, unlimited ? 'بدون سقف' : `${fmtNum(pct)}٪ از سقف استفاده شده`));
+  }
+
+  function ovRow(title, meta, tone, tab) {
+    const btn = h('button', { type: 'button', class: 'ov-row' },
+      h('span', { class: `ov-dot is-${tone}`, 'aria-hidden': 'true' }),
+      h('span', { class: 'ov-row-name' }, title),
+      h('span', { class: 'ov-row-meta' }, meta));
+    btn.addEventListener('click', () => switchTab(tab, true));
+    return btn;
+  }
+
+  function renderOverview() {
+    const box = $('#overview-board');
+    if (!box || !state.me) return;
+    const me = state.me;
+    const servers = lists.servers.data || [];
+    const tunnels = lists.tunnels.data || [];
+    const relays = lists.relays.data || [];
+    const jobs = lists.jobs.data || [];
+    const clock = remainClock(me);
+    const verdict = serviceVerdict(me, servers, tunnels, relays);
+    const up = servers.filter((s) => s.last_check && s.last_check.ok).length;
+    const down = servers.filter((s) => s.last_check && !s.last_check.ok).length;
+    const unchecked = servers.length - up - down;
+    const tok = tunnels.filter((t) => t.status === 'ok').length;
+    const tbad = tunnels.filter((t) => t.status === 'failed' || t.status === 'degraded').length;
+    const tbusy = tunnels.filter((t) => t.status === 'deploying' || t.status === 'deleting').length;
+    const rok = relays.filter((r) => r.status === 'ok').length;
+    const rbad = relays.filter((r) => r.status === 'failed' || r.status === 'degraded').length;
+    const running = jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
+    const lim = me.limits || {};
+    const use = me.usage || {};
+    const serverTone = down ? 'bad' : (unchecked && servers.length ? 'warn' : 'ok');
+    const tunnelTone = tbad ? 'bad' : (tbusy ? 'warn' : 'ok');
+    const relayTone = rbad ? 'bad' : 'ok';
+    const hello = me.role === 'owner' ? 'مالک پنل' : 'حساب مشتری';
+
+    const rows = [];
+    servers.slice(0, 5).forEach((s) => {
+      const tone = !s.last_check ? 'idle' : (s.last_check.ok ? 'ok' : 'bad');
+      const meta = !s.last_check ? 'بررسی نشده' : (s.last_check.ok ? 'در دسترس' : 'خطا در اتصال');
+      rows.push(ovRow(s.name, meta, tone, 'servers'));
+    });
+    tunnels.slice(0, 5).forEach((t) => {
+      const st = TUNNEL_STATUS[t.status] || ['muted', t.status || 'نامشخص'];
+      const tone = st[0] === 'ok' ? 'ok' : (st[0] === 'err' ? 'bad' : (st[0] === 'warn' ? 'warn' : 'idle'));
+      const pair = t.direct ? (t.kharej_name || 'خارج') : `${t.iran_name || 'ایران'} → ${t.kharej_name || 'خارج'}`;
+      rows.push(ovRow(pair, st[1], tone, 'tunnels'));
+    });
+    if (can('allow_relay')) relays.slice(0, 5).forEach((r) => {
+      const st = RELAY_STATUS[r.status] || ['muted', r.status || 'نامشخص'];
+      const tone = st[0] === 'ok' ? 'ok' : (st[0] === 'err' ? 'bad' : (st[0] === 'warn' ? 'warn' : 'idle'));
+      rows.push(ovRow(r.name || 'رله', st[1], tone, 'relays'));
+    });
+
+    box.replaceChildren(
+      h('section', { class: `ov-hero is-${verdict.tone}` },
+        h('div', { class: 'ov-copy' },
+          h('p', { class: 'ov-kicker' }, hello),
+          h('h2', { class: 'ov-hello' }, me.username || 'حساب'),
+          h('p', { class: 'ov-lead' }, verdict.text),
+          h('span', { class: `ov-pill is-${verdict.tone}` }, verdict.label)),
+        h('div', { class: `ov-clock is-${clock.tone}` },
+          h('span', { class: 'ov-clock-k' }, 'زمان باقی‌مانده'),
+          h('strong', { class: 'ov-clock-n', dir: 'ltr' }, clock.num),
+          h('span', { class: 'ov-clock-u' }, clock.unit),
+          h('span', { class: 'ov-clock-s' }, clock.sub))),
+      h('div', { class: 'ov-tiles' },
+        ovTile('سرورها', servers.length, down ? `${fmtNum(down)} اتصال خطا` : (unchecked ? `${fmtNum(unchecked)} بررسی نشده` : (servers.length ? 'همه در دسترس' : 'هنوز سروری نیست')), serverTone),
+        ovTile('تانل‌ها', tunnels.length, tbad ? `${fmtNum(tbad)} ناموفق` : (tbusy ? `${fmtNum(tbusy)} در حال انجام` : (tunnels.length ? `${fmtNum(tok)} سالم` : 'هنوز تانلی نیست')), tunnelTone),
+        ovTile('رله‌ها', relays.length, !can('allow_relay') && !isOwner() ? 'دسترسی رله خاموش است' : (rbad ? `${fmtNum(rbad)} ناموفق` : (relays.length ? `${fmtNum(rok)} سالم` : 'هنوز رله‌ای نیست')), relayTone),
+        ovTile('عملیات', running, running ? 'در حال اجرا' : 'عملیاتی در جریان نیست', running ? 'warn' : 'ok')),
+      h('section', { class: 'ov-panel' },
+        h('h3', null, 'سقف استفاده'),
+        h('div', { class: 'ov-meters' },
+          ovMeter('سرور', use.servers || 0, lim.max_servers),
+          ovMeter('تانل', use.tunnels || 0, lim.max_tunnels),
+          ovMeter('رله', use.relays || 0, lim.max_relays))),
+      h('section', { class: 'ov-panel' },
+        h('div', { class: 'ov-panel-head' },
+          h('h3', null, 'سرویس‌ها'),
+          h('span', { class: 'ov-panel-note' }, 'برای جزئیات روی هر ردیف بزنید')),
+        rows.length
+          ? h('div', { class: 'ov-rows' }, rows)
+          : h('p', { class: 'ov-empty' }, 'سرویسی برای نمایش نیست.')));
   }
 
   /* ---------- servers ---------- */
@@ -3067,7 +3220,7 @@
     resetLists();
     updateTunnelForm();
     const hashTab = (location.hash || '').slice(1);
-    const startTab = TABS.includes(hashTab) && !$(`#tabbtn-${hashTab}`).hidden ? hashTab : 'servers';
+    const startTab = TABS.includes(hashTab) && !$(`#tabbtn-${hashTab}`).hidden ? hashTab : 'overview';
     switchTab(startTab);
     loadInfo();
     load('servers');
@@ -3135,7 +3288,7 @@
     for (const t of TABS) $(`#tab-${t}`).hidden = t !== name;
     if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
     if (focus) $(`#tabbtn-${name}`).focus();
-    if (state.loggedIn && name === 'jobs') load('jobs', true);
+    if (state.loggedIn && name === 'overview') renderOverview();
     if (state.loggedIn && name === 'relays') load('relays', true);
     if (state.loggedIn && name === 'panels') load('servers', true);
     if (state.loggedIn && name === 'tunnels') {
