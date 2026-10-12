@@ -835,6 +835,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         out["iran_name"] = names.get(row["iran_id"], "?")
         out["kharej_name"] = names.get(row["kharej_id"], "?")
         opts = row.get("options") or {}
+        public_opts = dict(opts)
+        public_opts.pop("reality", None)
+        out["options"] = public_opts or None
         out["direct"] = bool(opts.get("direct")) or row["iran_id"] == row["kharej_id"]
         users = opts.get("users")
         if out["direct"]:
@@ -1294,6 +1297,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         names = server_names(sess)
         owners = admin_names()
         return [tunnel_out(r, names, owners) for r in db.all(f"SELECT * FROM tunnels WHERE 1=1{extra} ORDER BY id DESC", params)]
+
+    def reality_bundle(row: dict[str, Any]) -> dict[str, Any]:
+        from .reality import plan
+
+        iran = db.one("SELECT id, name, host, role FROM servers WHERE id=?", (row["iran_id"],))
+        kharej = db.one("SELECT id, name, host, role FROM servers WHERE id=?", (row["kharej_id"],))
+        built = plan(row, iran, kharej)
+        save = built.pop("_save", None)
+        if save:
+            opts = dict(row.get("options") or {})
+            opts["reality"] = save
+            db.update("tunnels", row["id"], {"options": opts})
+            row["options"] = opts
+        return built
+
+    @app.get("/api/tunnels/{tunnel_id}/reality")
+    async def tunnel_reality(tunnel_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        assert_capability(sess, "allow_vpn", "اوتباند برای این حساب غیرفعال است")
+        return reality_bundle(get_tunnel(tunnel_id, sess))
 
     @app.get("/api/tunnels/live")
     async def list_live_tunnels(sess: dict = Depends(require_auth)) -> dict[str, Any]:

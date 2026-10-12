@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.35
+- Outbound and routing JSON open in an editor on the page. Edits are what copy and download use, and the JSON status stays visible while typing.
+
+## 1.6.0 / panel 1.3.34
+- The outbound tab gives a Freedom JSON file that sends 3x-ui traffic out the tunnel IP, plus a matching VLESS Reality client config, 3x-ui inbound file, and routing rule. Keys stay the same across reloads.
+
+## 1.6.0 / panel 1.3.33
+- Tunnel cards keep each interface name, address, and timestamp on its own line, and the actions sit in an even grid.
+
 ## 1.6.0 / panel 1.3.32
 - The header brand is only the mark and the name. Version, entry path, and the Telegram handle are no longer beside the title.
 

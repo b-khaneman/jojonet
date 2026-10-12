@@ -9,6 +9,10 @@ unzip -o JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/install-
 sudo jojonet --version
 sudo jojonet-panel url
 
+The panel does not open on a bare IP. Open only the address printed by
+`sudo jojonet-panel url`. The default secret path is /jojonet-panel-entry/
+so a port-80 install looks like https://SERVER:80/jojonet-panel-entry/
+
 Script only (no panel):
   unzip -o JojoNet-v1.6.0-full.zip -d /root/jojonet && bash /root/jojonet/setup.sh script
 

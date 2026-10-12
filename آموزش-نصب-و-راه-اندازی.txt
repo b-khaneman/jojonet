@@ -59,8 +59,22 @@
   jojonet-panel status
   jojonet-panel set-admin
 
-مرورگر را باز کن و به آدرسی که `jojonet-panel url` می‌دهد برو.
+مرورگر را فقط با آدرسی باز کن که این دستور چاپ می‌کند:
+
+  sudo jojonet-panel url
+
+پنل با IP خالی باز نمی‌شود. آدرس حتماً یک مسیر مخفی دارد.
+مسیر پیش‌فرض:
+
+  https://IP:PORT/jojonet-panel-entry/
+
+اگر پورت پنل ۸۰ باشد، باز هم آدرس https است و پورت را بنویس:
+
+  https://IP:80/jojonet-panel-entry/
+
+`http://IP` و `https://IP` (که یعنی پورت ۴۴۳) پنل را نشان نمی‌دهند.
 گواهی پیش‌فرض خودامضا است؛ مرورگر هشدار امنیتی نشان می‌دهد — تأیید کن و ادامه بده.
+مسیر و پورت را بعداً از داخل پنل، تب مدیریت، می‌توانی عوض کنی.
 
 
 ۵) راه‌اندازی پنل
@@ -94,12 +108,15 @@
 
 ۷) اگر چیزی بالا نیامد
 ----------------------
-  jojonet-panel status
-  jojonet-panel logs 80
+  sudo jojonet-panel status
+  sudo jojonet-panel url
+  sudo jojonet-panel logs
+  sudo journalctl -u jojonet-panel -n 40 --no-pager
+  sudo journalctl -u jojonet-panel.socket -n 20 --no-pager
   jojonet --status
-  ss -ltnp | grep 2053
 
-فایروال سرور و پنل ابری باید پورت پنل (پیش‌فرض 2053/tcp) را باز بگذارند.
+فایروال سرور و پنل ابری باید همان پورت پنل را باز بگذارد (پیش‌فرض 2053/tcp).
+اگر پورت را ۸۰ گذاشتی، در مرورگر https://IP:80/jojonet-panel-entry/ را باز کن، نه http.
 
 
 حذف

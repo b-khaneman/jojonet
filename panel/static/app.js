@@ -198,6 +198,56 @@
     return dtf ? dtf.format(d) : d.toLocaleString('en-GB');
   }
 
+  let dtfDate = null;
+  let dtfClock = null;
+  try {
+    dtfDate = new Intl.DateTimeFormat('fa-IR', {
+      numberingSystem: 'latn', year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    dtfClock = new Intl.DateTimeFormat('fa-IR', {
+      numberingSystem: 'latn', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  } catch (e) {
+    dtfDate = null;
+    dtfClock = null;
+  }
+
+  function fmtStamp(iso) {
+    const d = parseTime(iso);
+    if (!d) return iso ? String(iso) : '—';
+    const date = dtfDate ? dtfDate.format(d) : d.toLocaleDateString('en-GB');
+    const time = dtfClock ? dtfClock.format(d) : d.toLocaleTimeString('en-GB', { hour12: false });
+    return h('span', { class: 'tn-stamp', dir: 'ltr' },
+      h('span', { class: 'tn-stamp-date' }, date),
+      h('span', { class: 'tn-stamp-time' }, time));
+  }
+
+  function tnSpec(label, value, wide) {
+    return h('div', { class: wide ? 'tn-spec is-wide' : 'tn-spec' },
+      h('span', { class: 'tn-spec-k' }, label),
+      h('div', { class: 'tn-spec-v' }, value == null || value === '' ? '—' : value));
+  }
+
+  function tnCode(text) {
+    const shown = text == null || text === '' ? '—' : String(text);
+    return h('code', { dir: 'ltr', title: shown }, shown);
+  }
+
+  function tnPair(leftLabel, leftValue, rightLabel, rightValue) {
+    const row = (label, value) => h('div', { class: 'tn-iface' },
+      h('span', null, label),
+      tnCode(value));
+    return h('div', { class: 'tn-ifaces' }, row(leftLabel, leftValue), row(rightLabel, rightValue));
+  }
+
+  function tnPorts(v) {
+    const raw = fmtPorts(v);
+    if (!raw || raw === '—') return '—';
+    const parts = String(raw).split(/[،,]/).map((s) => s.trim()).filter(Boolean);
+    if (!parts.length) return '—';
+    return h('div', { class: 'tn-ports' }, parts.map((p) => h('span', { dir: 'ltr' }, p)));
+  }
+
   const fmtNum = (n) => (nf ? nf.format(n) : String(n));
 
   function fmtDuration(start, end) {
@@ -1276,44 +1326,63 @@
       });
     });
 
+    const toKharej = !t.direct && t.users !== 'kharej';
+    const flow = t.direct
+      ? 'مستقیم — کلاینت روی دستگاه کاربر'
+      : (t.users === 'kharej' ? 'کاربران روی خارج — مسیر به ایران' : 'کاربران روی ایران — مسیر به خارج');
+    const route = t.direct
+      ? h('div', { class: 'tn-route is-direct' },
+        h('div', { class: 'tn-end role-kharej' },
+          h('span', { class: 'tn-end-role' }, 'مستقیم'),
+          h('strong', { class: 'tn-end-name' }, t.kharej_name || '—')))
+      : h('div', { class: `tn-route${toKharej ? '' : ' is-reverse'}` },
+        h('div', { class: 'tn-end role-iran' },
+          h('span', { class: 'tn-end-role' }, 'ایران'),
+          h('strong', { class: 'tn-end-name' }, t.iran_name || '—')),
+        h('span', { class: 'tn-arrow', 'aria-hidden': 'true' }),
+        h('div', { class: 'tn-end role-kharej' },
+          h('span', { class: 'tn-end-role' }, 'خارج'),
+          h('strong', { class: 'tn-end-name' }, t.kharej_name || '—')));
+    const facts = xr ? [
+      tnSpec('انتقال', ltr(xr.net || 'tcp')),
+      tnSpec('پورت کنترل', xr.ctrl_port ? ltr(String(xr.ctrl_port)) : 'خودکار'),
+      tnSpec('پورت‌های Xray', tnPorts(xr.ports), true),
+    ] : dt ? [
+      tnSpec('دامنه', ltr(dt.domain || '—'), true),
+      tnSpec('Resolver', ltr(`${dt.resolver_mode || 'doh'} ${dt.resolver || ''}`.trim()), true),
+    ] : ic ? [
+      tnSpec('حامل', 'ICMP echo + ChaCha20', true),
+    ] : sp ? [
+      tnSpec('IP جعلی', tnPair('ایران', sp.iran_spoof_ip, 'خارج', sp.kharej_spoof_ip), true),
+      tnSpec('رفت', ltr(`${sp.up_transport || '—'}:${sp.up_port || '—'}`)),
+      tnSpec('برگشت', ltr(`${sp.down_transport || '—'}:${sp.down_port || '—'}`)),
+    ] : [
+      tnSpec('IP تانل ایران', ltr(t.tun_iran_ip)),
+      tnSpec('IP تانل خارج', ltr(t.tun_kharej_ip)),
+      tnSpec('اینترفیس‌ها', tnPair('ایران', t.iran_iface, 'خارج', t.kharej_iface), true),
+    ];
+    facts.push(tnSpec('فوروارد', tnPorts(t.forward_ports)));
+    facts.push(tnSpec('آخرین بررسی', lc ? fmtStamp(lc.at) : '—'));
+    facts.push(tnSpec('زمان ساخت', fmtStamp(t.created_at), true));
+    const checkText = lc && lc.info ? infoText(lc.info) : '';
+
     return h('article', { class: 'card tunnel-card' },
-      h('div', { class: 'card-head' },
-        h('div', null,
-          h('h4', { class: 'card-title' }, mi ? mi.label : t.mode, ownerChip(t)),
-          h('span', { class: 'mode-chip', dir: 'ltr' }, t.mode)),
+      h('div', { class: 'card-head tn-head' },
+        h('div', { class: 'tn-id' },
+          h('h4', { class: 'card-title' }, mi ? mi.label : t.mode),
+          h('span', { class: 'mode-chip', dir: 'ltr' }, t.mode),
+          ownerChip(t)),
         badge(kind, label, transient)),
-      h('div', { class: 'route' },
-        t.direct
-          ? h('span', { class: 'route-end role-kharej' }, h('small', null, 'مستقیم / خارج'), t.kharej_name || '—')
-          : h('span', { class: 'route-end role-iran' }, h('small', null, 'ایران'), t.iran_name || '—'),
-        t.direct ? null : h('span', { class: 'route-link', 'aria-hidden': 'true' }),
-        t.direct ? null : h('span', { class: 'route-end role-kharej' }, h('small', null, 'خارج'), t.kharej_name || '—')),
-      t.direct ? null : h('p', { class: 'hint' },
-        t.users === 'kharej' ? 'کاربران روی خارج — تانل خارج → ایران' : 'کاربران روی ایران — تانل ایران → خارج'),
-      h('dl', { class: 'kv' },
-        ...(xr ? [
-          kv('انتقال Xray', ltr(xr.net || 'tcp')),
-          kv('پورت کنترل', xr.ctrl_port ? ltr(xr.ctrl_port) : 'خودکار'),
-          kv('پورت‌های Xray', ltr(xr.ports || '')),
-        ] : dt ? [
-          kv('دامنه DNSTT', ltr(dt.domain || '—')),
-          kv('Resolver', ltr(`${dt.resolver_mode || 'doh'} ${dt.resolver || ''}`)),
-        ] : ic ? [
-          kv('حامل', 'ICMP echo + ChaCha20 (pingtunnel)'),
-        ] : sp ? [
-          kv('IP جعلی ایران / خارج', ltr(`${sp.iran_spoof_ip || '—'} / ${sp.kharej_spoof_ip || '—'}`)),
-          kv('پروتکل رفت / برگشت', ltr(`${sp.up_transport || '—'}:${sp.up_port || '—'} / ${sp.down_transport || '—'}:${sp.down_port || '—'}`)),
-        ] : [
-          kv('IP تانل ایران', ltr(t.tun_iran_ip)),
-          kv('IP تانل خارج', ltr(t.tun_kharej_ip)),
-          kv('اینترفیس‌ها', ltr(`${t.iran_iface || '—'} / ${t.kharej_iface || '—'}`)),
-        ]),
-        ...(t.direct ? [kv('حالت', 'مستقیم — کلاینت روی دستگاه کاربر')] : []),
-        kv('پورت‌های فوروارد', ltr(fmtPorts(t.forward_ports))),
-        kv('آخرین بررسی', lc ? fmtTime(lc.at) : '—'),
-        kv('زمان ساخت', fmtTime(t.created_at))),
-      lc && lc.info ? h('p', { class: `check-info${lc.ok ? '' : ' is-err'}` }, infoText(lc.info)) : null,
-      h('div', { class: 'card-actions' }, verifyBtn, outboundBtn, redeployBtn, bootBtn, logBtn, delBtn));
+      route,
+      h('p', { class: 'tn-flow' }, flow),
+      h('div', { class: 'tn-specs' }, facts),
+      checkText
+        ? h('p', {
+          class: `check-info tn-check${lc.ok ? '' : ' is-err'}`,
+          dir: /[\u0600-\u06FF]/.test(checkText) ? null : 'ltr',
+        }, checkText)
+        : null,
+      h('div', { class: 'card-actions tn-actions' }, verifyBtn, outboundBtn, redeployBtn, bootBtn, logBtn, delBtn));
   }
 
   function liveStatusBadge(st) {
@@ -1432,74 +1501,250 @@
     return lists.servers.data.find((s) => s.id === id) || null;
   }
 
-  function outboundGuide(t) {
-    const mi = modeInfo(t.mode);
-    const onKharej = !!(t.direct || t.users === 'kharej');
-    const srv = serverById(onKharej ? t.kharej_id : t.iran_id);
-    const panel = {
-      name: onKharej ? (t.kharej_name || 'سرور خارج') : (t.iran_name || 'سرور ایران'),
-      host: srv ? srv.host : '',
-      role: onKharej ? 'خارج' : 'ایران',
-      sendThrough: onKharej ? t.tun_kharej_ip : t.tun_iran_ip,
-      peer: onKharej ? t.tun_iran_ip : t.tun_kharej_ip,
-    };
-    if (t.direct) return { kind: 'direct', t, mi, panel };
-    if (XRAY_TUNNEL_MODES.has(t.mode)) return { kind: 'xray', t, mi, panel };
-    if (!panel.sendThrough) return { kind: 'noip', t, mi, panel };
-    return { kind: 'freedom', t, mi, panel, tag: `jojonet-${t.id}` };
+  const realityCache = new Map();
+  let obRender = 0;
+
+  function jsonText(value) {
+    return JSON.stringify(value, null, 2);
   }
 
-  function outboundCopyRow(title, value) {
-    const copy = h('button', { type: 'button', class: 'btn btn-sm btn-ghost' }, 'کپی');
-    copy.addEventListener('click', () => copyVpnField(value));
-    return h('div', { class: 'vpn-creds-row' },
-      h('span', { class: 'vpn-creds-k' }, title),
-      h('span', { dir: 'ltr', class: 'vpn-creds-value' }, value),
+  function downloadText(filename, text) {
+    const body = String(text).endsWith('\n') ? String(text) : `${text}\n`;
+    const blob = new Blob([body], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function downloadJson(filename, value) {
+    downloadText(filename, jsonText(value));
+  }
+
+  const editorDrafts = new Map();
+
+  function escapeHtml(src) {
+    return String(src).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function highlightJson(src) {
+    const re = /"(?:\\.|[^"\\])*"\s*:|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
+    let html = '';
+    let last = 0;
+    for (const m of String(src).matchAll(re)) {
+      html += escapeHtml(src.slice(last, m.index));
+      const tok = m[0];
+      if (tok[0] === '"') {
+        const key = /:\s*$/.test(tok);
+        const body = key ? tok.replace(/\s*:\s*$/, '') : tok;
+        const tail = key ? tok.slice(body.length) : '';
+        html += `<span class="${key ? 'tok-key' : 'tok-str'}">${escapeHtml(body)}</span>${escapeHtml(tail)}`;
+      } else if (tok === 'true' || tok === 'false' || tok === 'null') {
+        html += `<span class="tok-kw">${tok}</span>`;
+      } else {
+        html += `<span class="tok-num">${escapeHtml(tok)}</span>`;
+      }
+      last = m.index + tok.length;
+    }
+    html += escapeHtml(src.slice(last));
+    return html || ' ';
+  }
+
+  function codeEditor(filename, draftKey, initial) {
+    const start = editorDrafts.has(draftKey) ? editorDrafts.get(draftKey) : initial;
+    const status = h('span', { class: 'code-edit-status' }, 'JSON معتبر');
+    const gutter = h('pre', { class: 'code-edit-gutter', 'aria-hidden': 'true' });
+    const highlight = h('pre', { class: 'code-edit-highlight', 'aria-hidden': 'true' });
+    const input = h('textarea', {
+      class: 'code-edit-input',
+      spellcheck: 'false',
+      autocomplete: 'off',
+      autocapitalize: 'off',
+      wrap: 'off',
+      'aria-label': `ویرایش ${filename}`,
+    });
+    input.value = start;
+    const formatBtn = h('button', { type: 'button', class: 'code-edit-tool' }, 'قالب‌بندی');
+    const root = h('div', { class: 'code-edit', dir: 'ltr' },
+      h('div', { class: 'code-edit-bar' },
+        h('span', { class: 'code-edit-lights', 'aria-hidden': 'true' },
+          h('i'), h('i'), h('i')),
+        h('span', { class: 'code-edit-name' }, filename),
+        formatBtn,
+        status),
+      h('div', { class: 'code-edit-body' },
+        gutter,
+        h('div', { class: 'code-edit-stage' }, highlight, input)));
+
+    function paint() {
+      const text = input.value;
+      highlight.innerHTML = highlightJson(text);
+      const lines = text.split('\n');
+      gutter.textContent = lines.map((_, i) => String(i + 1)).join('\n');
+      input.style.height = '0px';
+      input.style.height = `${input.scrollHeight}px`;
+      try {
+        JSON.parse(text);
+        status.textContent = 'JSON معتبر';
+        status.classList.remove('is-bad');
+      } catch (err) {
+        status.textContent = 'JSON نامعتبر';
+        status.classList.add('is-bad');
+      }
+    }
+
+    input.addEventListener('input', () => {
+      editorDrafts.set(draftKey, input.value);
+      paint();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab') return;
+      e.preventDefault();
+      const startAt = input.selectionStart;
+      const endAt = input.selectionEnd;
+      input.setRangeText('  ', startAt, endAt, 'end');
+      editorDrafts.set(draftKey, input.value);
+      paint();
+    });
+    formatBtn.addEventListener('click', () => {
+      try {
+        input.value = JSON.stringify(JSON.parse(input.value), null, 2);
+        editorDrafts.set(draftKey, input.value);
+        paint();
+        input.focus();
+      } catch (err) {
+        status.textContent = 'JSON نامعتبر';
+        status.classList.add('is-bad');
+      }
+    });
+    paint();
+    requestAnimationFrame(() => {
+      if (input.isConnected) paint();
+    });
+    return { root, text: () => input.value };
+  }
+
+  function obButton(label, onClick) {
+    const btn = h('button', { type: 'button', class: 'btn btn-sm' }, label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function obFact(label, value) {
+    const shown = value == null || value === '' ? '—' : String(value);
+    const copy = obButton('کپی', () => copyVpnField(shown));
+    if (shown === '—') copy.disabled = true;
+    return h('div', { class: 'ob-fact' },
+      h('span', { class: 'ob-fact-k' }, label),
+      h('code', { dir: 'ltr', title: shown }, shown),
       copy);
   }
 
-  function renderOutboundCard(t) {
-    const g = outboundGuide(t);
-    const label = g.mi ? g.mi.label : t.mode;
-    const pair = t.direct
-      ? `تانل مستقیم روی «${t.kharej_name || 'خارج'}»`
-      : `تانل ${label} بین «${t.iran_name || 'ایران'}» و «${t.kharej_name || 'خارج'}»`;
-    let body;
-    if (g.kind === 'direct') {
-      body = h('p', { class: 'muted' }, 'این تانل مستقیم است؛ کلاینت روی دستگاه کاربر اجرا می‌شود و اوتباند X-UI لازم نیست.');
-    } else if (g.kind === 'xray') {
-      body = h('p', { class: 'muted' }, 'این تانل خودش Xray است. در 3x-ui / X-UI اوتباند Freedom جدا برایش نگذارید.');
-    } else if (g.kind === 'noip') {
-      body = h('p', { class: 'muted' }, 'IP تانل این نوع هنوز آماده نیست یا این حالت overlay کلاسیک ندارد. بعد از سبز شدن تانل دوباره همین صفحه را باز کنید.');
-    } else {
-      const where = g.panel.host
-        ? `پنل X-UI را روی سرور ${g.panel.role} «${g.panel.name}» (${g.panel.host}) باز کنید و این outbound را آنجا بگذارید.`
-        : `پنل X-UI را روی سرور ${g.panel.role} «${g.panel.name}» باز کنید و این outbound را آنجا بگذارید.`;
-      body = [
-        h('p', { class: 'outbound-where' }, where),
-        h('div', { class: 'vpn-creds-fields' },
-          outboundCopyRow('پروتکل', 'Freedom'),
-          outboundCopyRow('تگ', g.tag),
-          outboundCopyRow('Send Through', g.panel.sendThrough),
-          g.panel.peer ? outboundCopyRow('پینگ سمت مقابل', g.panel.peer) : null),
-        h('ol', { class: 'outbound-steps' },
-          h('li', null, 'وارد 3x-ui یا X-UI همان سرور شوید.'),
-          h('li', null, 'Xray Settings ← Outbounds ← Add Outbound.'),
-          h('li', null, `پروتکل Freedom، تگ ${g.tag}، فیلد Send Through را ${g.panel.sendThrough} بگذارید.`),
-          h('li', null, `در Routing همین تگ را outbound پیش‌فرض کنید، ذخیره کنید و Xray را ری‌استارت کنید.`),
-          h('li', null, 'اگر درست باشد IP خروجی کاربر می‌شود IP سرور خارج.')),
-      ];
-    }
-    return h('article', { class: 'card outbound-card', id: `outbound-${t.id}` },
-      h('div', { class: 'card-head' },
-        h('div', null,
-          h('h4', { class: 'card-title' }, pair),
-          h('span', { class: 'mode-chip', dir: 'ltr' }, t.mode)),
-        badge(t.status === 'ok' ? 'ok' : (t.status === 'failed' ? 'err' : 'muted'), t.status === 'ok' ? 'تانل آماده' : 'تانل')),
-      body);
+  function realitySig(t) {
+    const iran = serverById(t.iran_id);
+    const kh = serverById(t.kharej_id);
+    return [t.mode, t.direct, t.users, t.tun_iran_ip, t.tun_kharej_ip, t.forward_ports, iran && iran.host, kh && kh.host].join('|');
   }
 
-  function renderOutbounds() {
+  async function loadReality(t) {
+    const sig = realitySig(t);
+    const hit = realityCache.get(t.id);
+    if (hit && hit.sig === sig) return hit.pack;
+    const pack = await api('GET', `/api/tunnels/${enc(t.id)}/reality`);
+    realityCache.set(t.id, { sig, pack });
+    return pack;
+  }
+
+  function renderOutboundCard(t, pack) {
+    const mi = modeInfo(t.mode);
+    const label = mi ? mi.label : t.mode;
+    const pair = t.direct
+      ? `مستقیم · ${t.kharej_name || 'خارج'}`
+      : `${t.iran_name || 'ایران'} → ${t.kharej_name || 'خارج'}`;
+    const head = h('div', { class: 'card-head tn-head' },
+      h('div', { class: 'tn-id' },
+        h('h4', { class: 'card-title' }, label),
+        h('span', { class: 'mode-chip', dir: 'ltr' }, t.mode)),
+      badge(t.status === 'ok' ? 'ok' : (t.status === 'failed' ? 'err' : 'muted'), t.status === 'ok' ? 'تانل آماده' : 'تانل'));
+    let body;
+    if (!pack || pack.error) {
+      body = h('p', { class: 'ob-note' }, (pack && pack.error) || 'خواندن کانفیگ ناموفق بود.');
+    } else if (pack.kind === 'direct') {
+      body = h('p', { class: 'ob-note' }, 'این تانل مستقیم است. کلاینت روی دستگاه کاربر اجرا می‌شود و اوتباند 3x-ui لازم نیست.');
+    } else if (pack.kind === 'xray') {
+      body = h('p', { class: 'ob-note' }, 'این تانل خودش Xray است. اوتباند و کانفیگ Reality جدا برایش نگذارید.');
+    } else if (pack.kind === 'noip') {
+      body = h('p', { class: 'ob-note' }, 'IP تانل هنوز ثبت نشده. بعد از آماده شدن تانل، فایل اوتباند و کانفیگ Reality اینجا ساخته می‌شود.');
+    } else {
+      const file = `jojonet-${t.id}`;
+      const where = pack.panel_host
+        ? `فایل اوتباند را در 3x-ui سرور ${pack.panel_role} «${pack.panel_name}» (${pack.panel_host}) اضافه کنید.`
+        : `فایل اوتباند را در 3x-ui سرور ${pack.panel_role} «${pack.panel_name}» اضافه کنید.`;
+      const outboundEdit = codeEditor(`${file}-outbound.json`, `out:${t.id}`, jsonText(pack.outbound));
+      body = [
+        h('p', { class: 'tn-flow' }, pair),
+        h('section', { class: 'ob-block' },
+          h('div', { class: 'ob-block-head' },
+            h('h5', null, 'اوتباند تانل'),
+            h('span', { class: 'mode-chip', dir: 'ltr' }, 'Freedom')),
+          h('p', { class: 'ob-note' }, `${where} JSON را همین‌جا ویرایش کنید؛ کپی و دانلود همین متن را می‌فرستند.`),
+          h('div', { class: 'ob-facts' },
+            obFact('Send Through', pack.send_through),
+            obFact('تگ', pack.tag),
+            pack.peer ? obFact('پینگ سمت مقابل', pack.peer) : null),
+          outboundEdit.root,
+          h('div', { class: 'ob-actions' },
+            obButton('کپی JSON اوتباند', () => copyVpnField(outboundEdit.text())),
+            obButton('دانلود اوتباند', () => downloadText(`${file}-outbound.json`, outboundEdit.text())))),
+      ];
+      if (pack.link && pack.client && pack.inbound) {
+        const routeEdit = codeEditor(`${file}-routing.json`, `route:${t.id}`, jsonText(pack.routing));
+        body.push(
+          h('section', { class: 'ob-block' },
+            h('div', { class: 'ob-block-head' },
+              h('h5', null, 'کانفیگ Reality'),
+              h('span', { class: 'mode-chip', dir: 'ltr' }, 'VLESS')),
+            h('p', { class: 'ob-note' }, pack.port === 443
+              ? 'همین مقادیر باید در اینباند 3x-ui و در کانفیگ کاربر یکی باشد.'
+              : `پورت ۴۴۳ روی فوروارد تانل است، پس Reality روی پورت ${pack.port} ساخته شده است.`),
+            h('div', { class: 'ob-facts' },
+              obFact('آدرس', `${pack.address}:${pack.port}`),
+              obFact('SNI', pack.sni),
+              obFact('UUID', pack.uuid),
+              obFact('Short ID', pack.short_id),
+              obFact('کلید عمومی', pack.public_key),
+              obFact('کلید خصوصی', pack.private_key)),
+            h('pre', { class: 'ob-json ob-link', dir: 'ltr' }, pack.link),
+            h('div', { class: 'ob-actions' },
+              obButton('کپی لینک Reality', () => copyVpnField(pack.link)),
+              obButton('دانلود کانفیگ کلاینت', () => downloadJson(`${file}-reality.json`, pack.client)),
+              obButton('دانلود اینباند 3x-ui', () => downloadJson(`${file}-inbound.json`, [pack.inbound])))),
+          h('section', { class: 'ob-block' },
+            h('div', { class: 'ob-block-head' }, h('h5', null, 'مسیریابی')),
+            h('p', { class: 'ob-note' }, 'بدون این قانون Reality وصل می‌شود، ولی ترافیک از تانل خارج نمی‌شود.'),
+            h('div', { class: 'ob-facts ob-facts-2' },
+              obFact('Inbound tag', pack.inbound_tag),
+              obFact('Outbound tag', pack.tag)),
+            routeEdit.root,
+            h('div', { class: 'ob-actions' },
+              obButton('کپی قانون', () => copyVpnField(routeEdit.text())))),
+          h('ol', { class: 'outbound-steps' },
+            h('li', null, 'در 3x-ui همان سرور بروید به Xray Settings، بعد Outbounds، و JSON اوتباند را اضافه کنید.'),
+            h('li', null, 'یک Inbound از نوع VLESS و Reality با همین پورت، UUID، کلید خصوصی و Short ID بسازید، یا فایل اینباند را Import کنید.'),
+            h('li', null, `در Routing تگ ${pack.inbound_tag} را به ${pack.tag} بفرستید و Xray را ری‌استارت کنید.`),
+            h('li', null, 'لینک Reality را در v2rayNG یا Hiddify وارد کنید. IP خروجی باید IP سرور خارج باشد.')));
+      } else {
+        body.push(h('p', { class: 'ob-note' }, 'IP عمومی سرور پنل مشخص نیست، برای همین فایل Reality ساخته نشد.'));
+      }
+    }
+    return h('article', { class: 'card outbound-card', id: `outbound-${t.id}` }, head, body);
+  }
+
+  async function renderOutbounds() {
     const box = $('#outbounds-list');
     if (!box) return;
     if (!lists.tunnels.loaded) {
@@ -1510,11 +1755,30 @@
     if (!data.length) {
       box.replaceChildren(emptyState(
         'هنوز تانلی ساخته نشده است.',
-        'اول از تب تانل‌ها یک تانل بسازید؛ بعد اینجا می‌گوید اوتباند X-UI را روی کدام سرور و با چه مقادیری بگذارید.',
+        'اول از تب تانل‌ها یک تانل بسازید. بعد فایل اوتباند و کانفیگ Reality اینجا آماده می‌شود.',
       ));
       return;
     }
-    box.replaceChildren(...data.map(renderOutboundCard));
+    const gen = ++obRender;
+    const cached = data.every((t) => {
+      const hit = realityCache.get(t.id);
+      return hit && hit.sig === realitySig(t);
+    });
+    if (!cached && !box.querySelector('.outbound-card')) box.replaceChildren(loadingState());
+    try {
+      const packs = await Promise.all(data.map(async (t) => {
+        try {
+          return await loadReality(t);
+        } catch (err) {
+          return { error: err.message || NET_ERR };
+        }
+      }));
+      if (gen !== obRender || !state.loggedIn) return;
+      box.replaceChildren(...data.map((t, i) => renderOutboundCard(t, packs[i])));
+    } catch (err) {
+      if (gen !== obRender || (err && err.status === 401)) return;
+      box.replaceChildren(errorState(err.message || NET_ERR, () => renderOutbounds()));
+    }
   }
 
   /* ---------- relays ---------- */
