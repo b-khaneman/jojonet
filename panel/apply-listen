@@ -78,9 +78,15 @@ case "$host" in
     *) stream="${host}:${port}" ;;
 esac
 socket="/etc/systemd/system/jojonet-panel.socket"
-if [[ -f "$socket" ]] && grep -q '^ListenStream=' "$socket"; then
+current=""
+if [[ -f "$socket" ]]; then
+    current="$(sed -n 's/^ListenStream=//p' "$socket" | head -n 1)"
+fi
+if [[ -n "$current" && "$current" != "$stream" ]]; then
     sed -i "s|^ListenStream=.*|ListenStream=${stream}|" "$socket"
     systemctl daemon-reload
     systemctl restart jojonet-panel.socket
+else
+    # The port is already open. Restarting only the service keeps the page reachable.
+    systemctl restart "$SERVICE"
 fi
-systemctl restart "$SERVICE"

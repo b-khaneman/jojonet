@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.38
+- An update reloads the panel process without closing the listen port, and the page retries a short network gap instead of looking disconnected.
+
 ## 1.6.0 / panel 1.3.37
 - The owner can issue a Let's Encrypt certificate from the panel by entering a domain. The secure panel address is shown in a copyable card.
 

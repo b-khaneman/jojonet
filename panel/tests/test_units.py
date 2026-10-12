@@ -350,6 +350,8 @@ def test_installer_socket_activation_and_rollback():
     assert "1 <= port <= 65535" in apply
     assert "jojonet-panel-ssl.path" in text
     assert "apply-ssl" in text
+    assert "without closing the port" in text
+    assert "socket_listen_now" in text
     ssl = (REPO / "panel" / "apply-ssl").read_text(encoding="utf-8")
     assert "certbot certonly" in ssl
     assert "flock -n 9" in ssl

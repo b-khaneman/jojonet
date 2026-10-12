@@ -1211,10 +1211,18 @@ panel_answers() {
     return 1
 }
 
+socket_listen_now() {
+    # Captured before daemon-reload, so this is the address that is actually open.
+    systemctl show jojonet-panel.socket -p Listen --value 2>/dev/null \
+        | head -n 1 \
+        | sed -E 's/[[:space:]]+\([^)]*\)//'
+}
+
 start_service() {
     step "Starting $SERVICE"
-    systemctl stop "$SERVICE" >/dev/null 2>&1 || true
-    systemctl stop jojonet-panel.socket >/dev/null 2>&1 || true
+    local want have
+    want="$(listen_stream)"
+    have="$(socket_listen_now)"
     systemctl daemon-reload
     systemctl enable "$SERVICE" >/dev/null 2>&1 || warn "systemctl enable failed"
     systemctl enable jojonet-panel.socket >/dev/null 2>&1 || warn "could not enable the listen socket"
@@ -1226,13 +1234,24 @@ start_service() {
         systemctl enable jojonet-panel-ssl.path >/dev/null 2>&1 || warn "could not enable the TLS watcher"
         systemctl restart jojonet-panel-ssl.path >/dev/null 2>&1 || true
     fi
-    if ! systemctl restart jojonet-panel.socket; then
-        journalctl -u jojonet-panel.socket -n 40 --no-pager >&2 || true
-        die "The listen socket failed to start on port $PORT."
-    fi
-    if ! systemctl restart "$SERVICE"; then
-        journalctl -u "$SERVICE" -n 50 --no-pager >&2 || true
-        die "The panel service failed to start."
+    # Same port: restart only the process. The socket stays open and queues connections.
+    if [[ -n "$have" && "$have" == "$want" ]] && systemctl is-active --quiet jojonet-panel.socket; then
+        info "Reloading the panel without closing the port ($want)."
+        if ! systemctl restart "$SERVICE"; then
+            journalctl -u "$SERVICE" -n 50 --no-pager >&2 || true
+            die "The panel service failed to start."
+        fi
+    else
+        systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+        systemctl stop jojonet-panel.socket >/dev/null 2>&1 || true
+        if ! systemctl restart jojonet-panel.socket; then
+            journalctl -u jojonet-panel.socket -n 40 --no-pager >&2 || true
+            die "The listen socket failed to start on port $PORT."
+        fi
+        if ! systemctl restart "$SERVICE"; then
+            journalctl -u "$SERVICE" -n 50 --no-pager >&2 || true
+            die "The panel service failed to start."
+        fi
     fi
     local i
     for ((i = 0; i < 30; i++)); do

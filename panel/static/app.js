@@ -298,7 +298,26 @@
     return `خطای ناشناخته (کد ${s}).`;
   }
 
+  function transientStatus(status) {
+    return !status || status === 502 || status === 503 || status === 504;
+  }
+
   async function api(method, path, body) {
+    const attempts = (method === 'GET' || method === 'HEAD') ? 5 : 1;
+    let last;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await apiOnce(method, path, body);
+      } catch (err) {
+        last = err;
+        if (!transientStatus(err.status) || i === attempts - 1) throw err;
+        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+      }
+    }
+    throw last;
+  }
+
+  async function apiOnce(method, path, body) {
     const headers = { Accept: 'application/json' };
     const opts = { method, credentials: 'same-origin', cache: 'no-store', headers };
     if (body !== undefined) {
@@ -686,8 +705,10 @@
       if (!state.loggedIn || document.hidden) return;
       load('jobs', true);
       renderOverview();
-      const transient = lists.tunnels.data.some((t) => t.status === 'deploying' || t.status === 'deleting')
-        || (lists.relays.data || []).some((t) => t.status === 'deploying' || t.status === 'deleting');
+      const tunnels = lists.tunnels.data || [];
+      const relays = lists.relays.data || [];
+      const transient = tunnels.some((t) => t.status === 'deploying' || t.status === 'deleting')
+        || relays.some((t) => t.status === 'deploying' || t.status === 'deleting');
       if (transient) {
         load('tunnels', true);
         load('relays', true);
