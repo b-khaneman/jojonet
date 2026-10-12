@@ -411,6 +411,29 @@ def test_ssl_domain_view_and_certificate(tmp_path):
     assert (data / "ssl.request").is_file()
 
 
+def test_guide_sanitize_and_store(tmp_path):
+    from app.guide import delete_guide_article, guide_public_view, sanitize_html, write_guide_article
+
+    clean = sanitize_html('<b style="font-size: 18px; font-family: Vazirmatn">سلام</b><script>x</script>', 200)
+    assert "<b" in clean and "18px" in clean and "script" not in clean.lower()
+    stripped = sanitize_html('<span style="color: red; font-size: 16px">x</span>', 200)
+    assert "red" not in stripped and "16px" in stripped
+    item = write_guide_article(tmp_path, {
+        "id": "gre",
+        "group": "تانل‌ها",
+        "title": "GRE",
+        "lead": 'متن <span style="font-size: 16px; font-family: Tahoma">ویژه</span>',
+        "note": "",
+        "steps": [{"h": "یک", "p": "دو"}],
+        "style": {"fontFamily": "Tahoma", "fontSize": "16px", "titleSize": "20px"},
+    })
+    assert item["style"]["fontFamily"] == "Tahoma"
+    view = guide_public_view(tmp_path)
+    assert view["articles"]["gre"]["title"] == "GRE"
+    assert delete_guide_article(tmp_path, "gre") is True
+    assert guide_public_view(tmp_path)["articles"] == {}
+
+
 def test_checksums_match_lf_sources():
     import hashlib
 

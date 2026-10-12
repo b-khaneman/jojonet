@@ -4260,3 +4260,92 @@ html[data-theme="night"] .code-edit-input:focus {
     max-height: 14rem;
   }
 }
+
+.guide-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 .85rem;
+  padding: .7rem .85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.guide-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem .55rem;
+  align-items: center;
+}
+
+.guide-tool-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.guide-toolbar select,
+.guide-toolbar input[type="color"] {
+  min-height: 2rem;
+  padding: .2rem .45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.guide-toolbar input[type="color"] {
+  width: 2.4rem;
+  padding: .15rem;
+  cursor: pointer;
+}
+
+.guide-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+}
+
+.guide-body.is-editing {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  outline-offset: 2px;
+}
+
+.guide-body.is-editing [contenteditable="true"] {
+  border-radius: 6px;
+  outline: 1px dashed transparent;
+  transition: outline-color .15s ease, background .15s ease;
+}
+
+.guide-body.is-editing [contenteditable="true"]:hover,
+.guide-body.is-editing [contenteditable="true"]:focus {
+  outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.guide-body .guide-title {
+  font-size: var(--guide-title-size, 1.35rem);
+}
+
+.guide-body .guide-lead,
+.guide-body .guide-note {
+  font-size: var(--guide-lead-size, .95rem);
+}
+
+.guide-body .guide-steps p,
+.guide-body .guide-steps h3 {
+  font-size: var(--guide-step-size, inherit);
+}
+
+.guide-step-del {
+  margin-top: .45rem;
+}
+
+.guide-body.is-editing .guide-steps li {
+  padding-bottom: .95rem;
+}

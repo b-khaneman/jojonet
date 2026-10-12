@@ -615,6 +615,19 @@
     if ((state.tab === 'panels' || state.tab === 'outbounds') && !can('allow_vpn')) switchTab('servers');
     paintHeader();
     applyTermUI();
+    if (typeof window.jojoGuideRefresh === 'function') window.jojoGuideRefresh();
+  }
+
+  async function mountGuide() {
+    if (typeof window.jojoMountGuide !== 'function') return;
+    await window.jojoMountGuide({
+      owner: () => isOwner(),
+      load: () => api('GET', '/api/guide'),
+      save: (payload) => api('PUT', '/api/guide', payload),
+      reset: (id) => api('DELETE', `/api/guide/${enc(id)}`),
+      toast,
+      confirm: confirmDialog,
+    });
   }
 
   function paintHeader() {
@@ -3244,6 +3257,7 @@
     setVersions(state.me.panel_version, state.me.jojonet_version);
     resetLists();
     updateTunnelForm();
+    await mountGuide();
     const hashTab = (location.hash || '').slice(1);
     const startTab = TABS.includes(hashTab) && !$(`#tabbtn-${hashTab}`).hidden ? hashTab : 'overview';
     switchTab(startTab);
@@ -3856,7 +3870,6 @@
   }
 
   function bindStatic() {
-    if (typeof window.jojoMountGuide === 'function') window.jojoMountGuide();
     bindTheme();
     bindHxTerms();
     bindListen();

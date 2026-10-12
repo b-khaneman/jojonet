@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.40
+- The owner can edit each guide article in the panel, including font family, size, color, and step text, and can reset it to the default.
+
 ## 1.6.0 / panel 1.3.39
 - The panel has an آموزش tab: a right-aligned, step-by-step guide for every tunnel type, then the VPN panel, Reality outbound, and relay.
 

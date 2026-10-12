@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import socket
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import PANEL_VERSION
 from .config import PanelEntry, Settings, load_settings, normalize_base_path, write_listen
+from .guide import delete_guide_article, guide_public_view, write_guide_article
 from .tlsinfo import build_ssl_view, normalize_domain, normalize_email, write_ssl_request
 from .db import Database, utcnow
 from .jobs import JobManager
@@ -575,6 +577,34 @@ class SslIn(BaseModel):
     email: str | None = Field(default=None, max_length=254)
 
 
+class GuideStepIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    h: str = Field(default="", max_length=20000)
+    p: str = Field(default="", max_length=20000)
+
+
+class GuideStyleIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    fontFamily: str | None = None
+    fontSize: str | None = None
+    titleSize: str | None = None
+    leadSize: str | None = None
+    stepSize: str | None = None
+    lineHeight: str | None = None
+
+
+class GuideArticleIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(min_length=1, max_length=32)
+    group: str = Field(default="", max_length=40)
+    nav: str = Field(default="", max_length=20000)
+    title: str = Field(min_length=1, max_length=20000)
+    lead: str = Field(default="", max_length=20000)
+    note: str = Field(default="", max_length=20000)
+    steps: list[GuideStepIn] = Field(default_factory=list, max_length=40)
+    style: GuideStyleIn | None = None
+
+
 class UserPasswordIn(BaseModel):
     password: str | None = Field(default=None, max_length=256)
 
@@ -1094,6 +1124,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except OSError as exc:
             raise HTTPException(500, "ذخیرهٔ درخواست گواهی ممکن نشد") from exc
         return ssl_view()
+
+    @app.get("/api/guide")
+    async def get_guide(_: dict = Depends(require_auth)) -> dict[str, Any]:
+        return guide_public_view(settings.data_dir)
+
+    @app.put("/api/guide")
+    async def put_guide(data: GuideArticleIn, _: dict = Depends(require_owner)) -> dict[str, Any]:
+        payload = data.model_dump()
+        try:
+            item = write_guide_article(settings.data_dir, payload)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except OSError as exc:
+            raise HTTPException(500, "ذخیرهٔ آموزش ممکن نشد") from exc
+        return {"ok": True, "article": item}
+
+    @app.delete("/api/guide/{article_id}")
+    async def reset_guide(article_id: str, _: dict = Depends(require_owner)) -> dict[str, Any]:
+        if not re.fullmatch(r"^[a-z][a-z0-9_]{0,31}$", article_id or ""):
+            raise HTTPException(422, "شناسه آموزش نامعتبر است")
+        try:
+            deleted = delete_guide_article(settings.data_dir, article_id)
+        except OSError as exc:
+            raise HTTPException(500, "بازنشانی آموزش ممکن نشد") from exc
+        return {"ok": True, "reset": deleted}
 
     @app.get("/api/users")
     async def list_users(_: dict = Depends(require_owner)) -> list[dict[str, Any]]:

@@ -326,11 +326,26 @@
     },
   ];
 
+  const DEFAULT_NOTE = 'اگر تانل را فقط روی خارج ساخته‌اید، کلاینت روی دستگاه کاربر است و نصب پنل VPN روی سرور ایران لازم نیست. رله را همچنان می‌توانید روی همان سرور خارج بسازید.';
+  const FONTS = ['Vazirmatn', 'Tahoma', 'Segoe UI', 'Arial', 'Georgia', 'Times New Roman', 'Courier New', 'Consolas'];
+  const SIZES = ['12px', '14px', '16px', '18px', '20px', '22px', '24px', '28px'];
+
+  let api = null;
+  let overrides = {};
+  let fonts = FONTS.slice();
+  let currentId = 'start';
+  let editing = false;
+  let dirty = false;
+
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
     if (text) node.textContent = text;
     return node;
+  }
+
+  function isOwner() {
+    return !!(api && typeof api.owner === 'function' && api.owner());
   }
 
   function stepsOf(article) {
@@ -345,40 +360,422 @@
     return list;
   }
 
+  function baseArticle(id) {
+    const src = ARTICLES.find((a) => a.id === id) || ARTICLES[0];
+    const note = (src.id === 'dnstt' || src.id === 'icmp') ? DEFAULT_NOTE : (src.note || '');
+    return {
+      id: src.id,
+      group: src.group,
+      nav: src.title,
+      title: src.title,
+      lead: src.lead,
+      note,
+      steps: stepsOf(src).map((s) => ({ h: s.h, p: s.p })),
+      style: {},
+      custom: false,
+    };
+  }
+
+  function resolved(id) {
+    const base = baseArticle(id);
+    const ov = overrides[base.id];
+    if (!ov) return base;
+    return {
+      id: base.id,
+      group: ov.group || base.group,
+      nav: ov.nav || ov.title || base.nav,
+      title: ov.title || base.title,
+      lead: ov.lead != null ? ov.lead : base.lead,
+      note: ov.note != null ? ov.note : base.note,
+      steps: Array.isArray(ov.steps) && ov.steps.length ? ov.steps.map((s) => ({ h: s.h || '', p: s.p || '' })) : base.steps,
+      style: ov.style && typeof ov.style === 'object' ? ov.style : {},
+      custom: true,
+    };
+  }
+
+  function setHtml(node, html) {
+    const value = html || '';
+    if (/<[a-z/!]/i.test(value)) node.innerHTML = value;
+    else node.textContent = value;
+  }
+
+  function applyStyle(body, style) {
+    body.style.fontFamily = style.fontFamily || '';
+    body.style.fontSize = style.fontSize || '';
+    body.style.lineHeight = style.lineHeight || '';
+    body.style.setProperty('--guide-title-size', style.titleSize || '');
+    body.style.setProperty('--guide-lead-size', style.leadSize || '');
+    body.style.setProperty('--guide-step-size', style.stepSize || '');
+  }
+
+  function fillSelect(sel, items, value) {
+    sel.replaceChildren();
+    items.forEach((item) => {
+      const opt = document.createElement('option');
+      opt.value = item;
+      opt.textContent = item;
+      sel.append(opt);
+    });
+    if (value && items.includes(value)) sel.value = value;
+  }
+
+  function wrapSelection(styles) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    const root = document.getElementById('guide-body');
+    if (!root || !root.contains(range.commonAncestorContainer)) return;
+    const span = document.createElement('span');
+    Object.keys(styles).forEach((k) => { span.style[k] = styles[k]; });
+    try {
+      range.surroundContents(span);
+    } catch (_err) {
+      const frag = range.extractContents();
+      span.append(frag);
+      range.insertNode(span);
+    }
+    sel.removeAllRanges();
+    const next = document.createRange();
+    next.selectNodeContents(span);
+    next.collapse(false);
+    sel.addRange(next);
+    dirty = true;
+  }
+
+  function toolbar() {
+    let bar = document.getElementById('guide-toolbar');
+    if (bar) return bar;
+    bar = el('div', 'guide-toolbar');
+    bar.id = 'guide-toolbar';
+    bar.hidden = true;
+
+    const font = document.createElement('select');
+    font.id = 'guide-font';
+    font.setAttribute('aria-label', 'فونت');
+    fillSelect(font, fonts, 'Vazirmatn');
+    font.addEventListener('change', () => {
+      if (editing) wrapSelection({ fontFamily: font.value });
+      const body = document.getElementById('guide-body');
+      if (body && editing) {
+        body.style.fontFamily = font.value;
+        dirty = true;
+      }
+    });
+
+    const size = document.createElement('select');
+    size.id = 'guide-size';
+    size.setAttribute('aria-label', 'اندازه فونت');
+    fillSelect(size, SIZES, '16px');
+    size.addEventListener('change', () => {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && editing) wrapSelection({ fontSize: size.value });
+      else if (editing) {
+        const body = document.getElementById('guide-body');
+        if (body) {
+          body.style.fontSize = size.value;
+          dirty = true;
+        }
+      }
+    });
+
+    const titleSize = document.createElement('select');
+    titleSize.id = 'guide-title-size';
+    titleSize.setAttribute('aria-label', 'اندازه عنوان');
+    fillSelect(titleSize, SIZES, '20px');
+    titleSize.addEventListener('change', () => {
+      const body = document.getElementById('guide-body');
+      if (body && editing) {
+        body.style.setProperty('--guide-title-size', titleSize.value);
+        dirty = true;
+      }
+    });
+
+    const color = document.createElement('input');
+    color.type = 'color';
+    color.id = 'guide-color';
+    color.value = '#0b7f96';
+    color.setAttribute('aria-label', 'رنگ متن');
+    color.addEventListener('input', () => {
+      if (editing) wrapSelection({ color: color.value });
+    });
+
+    function cmd(label, action) {
+      const btn = el('button', 'btn btn-sm', label);
+      btn.type = 'button';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        action();
+        dirty = true;
+      });
+      return btn;
+    }
+
+    const tools = el('div', 'guide-tools');
+    tools.append(
+      el('label', 'guide-tool-label', 'فونت'),
+      font,
+      el('label', 'guide-tool-label', 'اندازه'),
+      size,
+      el('label', 'guide-tool-label', 'عنوان'),
+      titleSize,
+      el('label', 'guide-tool-label', 'رنگ'),
+      color,
+      cmd('ضخیم', () => document.execCommand('bold')),
+      cmd('کج', () => document.execCommand('italic')),
+      cmd('زیرخط', () => document.execCommand('underline')),
+      cmd('+ مرحله', () => addStep()),
+    );
+
+    const actions = el('div', 'guide-edit-actions');
+    const save = el('button', 'btn btn-primary btn-sm', 'ذخیره');
+    save.type = 'button';
+    save.id = 'guide-save';
+    save.addEventListener('click', () => saveArticle());
+    const cancel = el('button', 'btn btn-sm', 'انصراف');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      editing = false;
+      dirty = false;
+      paint(currentId);
+    });
+    const reset = el('button', 'btn btn-ghost btn-sm', 'بازگشت به پیش‌فرض');
+    reset.type = 'button';
+    reset.id = 'guide-reset';
+    reset.addEventListener('click', () => resetArticle());
+    actions.append(save, cancel, reset);
+
+    bar.append(tools, actions);
+    const section = document.getElementById('tab-guide');
+    const guide = section && section.querySelector('.guide');
+    if (guide) section.insertBefore(bar, guide);
+    else if (section) section.append(bar);
+    return bar;
+  }
+
+  function ownerActions() {
+    let box = document.getElementById('guide-owner-actions');
+    if (box) return box;
+    const head = document.querySelector('#tab-guide .section-head');
+    if (!head) return null;
+    box = el('div', 'section-actions');
+    box.id = 'guide-owner-actions';
+    box.hidden = true;
+    const edit = el('button', 'btn btn-sm', 'ویرایش این آموزش');
+    edit.type = 'button';
+    edit.id = 'guide-edit-btn';
+    edit.addEventListener('click', () => startEdit());
+    box.append(edit);
+    head.append(box);
+    return box;
+  }
+
+  function markDirty() {
+    dirty = true;
+  }
+
+  function makeEditable(node) {
+    node.contentEditable = 'true';
+    node.spellcheck = true;
+    node.addEventListener('input', markDirty);
+  }
+
+  function addStep() {
+    const ol = document.querySelector('#guide-body .guide-steps');
+    if (!ol || !editing) return;
+    const li = document.createElement('li');
+    const h = el('h3', null, 'عنوان مرحله');
+    const p = el('p', null, 'متن مرحله را اینجا بنویسید.');
+    makeEditable(h);
+    makeEditable(p);
+    const del = el('button', 'btn btn-ghost btn-sm guide-step-del', 'حذف مرحله');
+    del.type = 'button';
+    del.addEventListener('click', () => {
+      li.remove();
+      dirty = true;
+    });
+    li.append(h, p, del);
+    ol.append(li);
+    dirty = true;
+    h.focus();
+  }
+
+  function readStyle() {
+    const body = document.getElementById('guide-body');
+    const font = document.getElementById('guide-font');
+    const titleSize = document.getElementById('guide-title-size');
+    const style = {};
+    if (font && font.value) style.fontFamily = font.value;
+    if (body && body.style.fontSize) style.fontSize = body.style.fontSize;
+    if (titleSize && titleSize.value) style.titleSize = titleSize.value;
+    const lead = body && body.style.getPropertyValue('--guide-lead-size');
+    const step = body && body.style.getPropertyValue('--guide-step-size');
+    const line = body && body.style.lineHeight;
+    if (lead) style.leadSize = lead;
+    if (step) style.stepSize = step;
+    if (line) style.lineHeight = line;
+    return style;
+  }
+
+  function collectArticle() {
+    const body = document.getElementById('guide-body');
+    const title = body.querySelector('.guide-title');
+    const lead = body.querySelector('.guide-lead');
+    const note = body.querySelector('.guide-note');
+    const kicker = body.querySelector('.guide-kicker');
+    const steps = [];
+    body.querySelectorAll('.guide-steps li').forEach((li) => {
+      const h = li.querySelector('h3');
+      const p = li.querySelector('p');
+      steps.push({ h: h ? h.innerHTML.trim() : '', p: p ? p.innerHTML.trim() : '' });
+    });
+    return {
+      id: currentId,
+      group: kicker ? kicker.textContent.trim() : '',
+      nav: title ? title.textContent.trim() : '',
+      title: title ? title.innerHTML.trim() : '',
+      lead: lead ? lead.innerHTML.trim() : '',
+      note: note ? note.innerHTML.trim() : '',
+      steps,
+      style: readStyle(),
+    };
+  }
+
+  async function saveArticle() {
+    if (!api || !api.save) return;
+    const payload = collectArticle();
+    const btn = document.getElementById('guide-save');
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api.save(payload);
+      if (r && r.article) overrides[r.article.id] = r.article;
+      editing = false;
+      dirty = false;
+      if (api.toast) api.toast('آموزش ذخیره شد.', 'success');
+      paint(currentId);
+    } catch (err) {
+      if (api.toast) api.toast((err && err.message) || 'ذخیره نشد.', 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function resetArticle() {
+    if (!api || !api.reset) return;
+    const ok = api.confirm
+      ? await api.confirm({ title: 'بازگشت به پیش‌فرض', message: 'متن ویرایش‌شده این آموزش پاک شود و نسخه پیش‌فرض برگردد؟', okText: 'بازگشت به پیش‌فرض' })
+      : window.confirm('بازگشت به پیش‌فرض؟');
+    if (!ok) return;
+    try {
+      await api.reset(currentId);
+      delete overrides[currentId];
+      editing = false;
+      dirty = false;
+      if (api.toast) api.toast('آموزش به متن پیش‌فرض برگشت.', 'success');
+      paint(currentId);
+    } catch (err) {
+      if (api.toast) api.toast((err && err.message) || 'بازنشانی نشد.', 'error');
+    }
+  }
+
+  function startEdit() {
+    if (!isOwner()) return;
+    editing = true;
+    dirty = false;
+    paint(currentId);
+  }
+
+  function syncOwnerUi(article) {
+    const actions = ownerActions();
+    const bar = toolbar();
+    const editBtn = document.getElementById('guide-edit-btn');
+    if (actions) actions.hidden = !isOwner() || editing;
+    if (bar) bar.hidden = !editing;
+    if (editBtn) editBtn.textContent = article.custom ? 'ویرایش دوباره' : 'ویرایش این آموزش';
+  }
+
   function paint(id) {
+    if (editing && dirty && id !== currentId) {
+      if (!window.confirm('تغییرات ذخیره نشده‌اند. ادامه بدون ذخیره؟')) return;
+      editing = false;
+      dirty = false;
+    }
+    currentId = id || currentId;
     const body = document.getElementById('guide-body');
     const nav = document.getElementById('guide-nav');
     if (!body || !nav) return;
-    const article = ARTICLES.find((a) => a.id === id) || ARTICLES[0];
+    const article = resolved(currentId);
     nav.querySelectorAll('.guide-link').forEach((btn) => {
       const on = btn.dataset.guide === article.id;
       btn.classList.toggle('is-on', on);
       if (on) btn.setAttribute('aria-current', 'true');
       else btn.removeAttribute('aria-current');
+      const ov = overrides[btn.dataset.guide];
+      const src = ARTICLES.find((a) => a.id === btn.dataset.guide);
+      btn.textContent = (ov && (ov.nav || ov.title)) || (src && src.title) || btn.dataset.guide;
     });
     body.replaceChildren();
-    body.append(
-      el('p', 'guide-kicker', article.group),
-      el('h2', 'guide-title', article.title),
-      el('p', 'guide-lead', article.lead)
-    );
+    body.classList.toggle('is-editing', editing);
+    applyStyle(body, article.style || {});
+
+    const kicker = el('p', 'guide-kicker', article.group);
+    const title = el('h2', 'guide-title');
+    setHtml(title, article.title);
+    const lead = el('p', 'guide-lead');
+    setHtml(lead, article.lead);
+    body.append(kicker, title, lead);
+
     const ol = document.createElement('ol');
     ol.className = 'guide-steps';
-    stepsOf(article).forEach((step) => {
+    article.steps.forEach((step) => {
       const li = document.createElement('li');
-      li.append(el('h3', null, step.h), el('p', null, step.p));
+      const h = el('h3');
+      const p = el('p');
+      setHtml(h, step.h);
+      setHtml(p, step.p);
+      li.append(h, p);
+      if (editing) {
+        makeEditable(h);
+        makeEditable(p);
+        const del = el('button', 'btn btn-ghost btn-sm guide-step-del', 'حذف مرحله');
+        del.type = 'button';
+        del.addEventListener('click', () => {
+          li.remove();
+          dirty = true;
+        });
+        li.append(del);
+      }
       ol.append(li);
     });
     body.append(ol);
-    if (article.id === 'dnstt' || article.id === 'icmp') {
-      body.append(el('p', 'guide-note', 'اگر تانل را فقط روی خارج ساخته‌اید، کلاینت روی دستگاه کاربر است و نصب پنل VPN روی سرور ایران لازم نیست. رله را همچنان می‌توانید روی همان سرور خارج بسازید.'));
+
+    if (article.note || editing) {
+      const note = el('p', 'guide-note');
+      setHtml(note, article.note || '');
+      if (editing && !article.note) note.textContent = '';
+      body.append(note);
+      if (editing) makeEditable(note);
     }
+
+    if (editing) {
+      makeEditable(title);
+      makeEditable(lead);
+      makeEditable(kicker);
+      const font = document.getElementById('guide-font');
+      const size = document.getElementById('guide-size');
+      const titleSize = document.getElementById('guide-title-size');
+      if (font) fillSelect(font, fonts, article.style.fontFamily || 'Vazirmatn');
+      if (size) size.value = article.style.fontSize || '16px';
+      if (titleSize) titleSize.value = article.style.titleSize || '20px';
+      if (article.style.fontSize) body.style.fontSize = article.style.fontSize;
+    }
+
+    syncOwnerUi(article);
   }
 
-  window.jojoMountGuide = function () {
+  function buildNav() {
     const nav = document.getElementById('guide-nav');
-    if (!nav || nav.dataset.ready === '1') return;
-    nav.dataset.ready = '1';
+    if (!nav) return;
+    nav.replaceChildren();
     let group = '';
     ARTICLES.forEach((article) => {
       if (article.group !== group) {
@@ -389,10 +786,40 @@
       btn.type = 'button';
       btn.className = 'guide-link';
       btn.dataset.guide = article.id;
-      btn.textContent = article.title;
+      const ov = overrides[article.id];
+      btn.textContent = (ov && (ov.nav || ov.title)) || article.title;
       btn.addEventListener('click', () => paint(article.id));
       nav.append(btn);
     });
-    paint('start');
+  }
+
+  async function loadOverrides() {
+    if (!api || !api.load) return;
+    try {
+      const data = await api.load();
+      overrides = (data && data.articles) || {};
+      if (Array.isArray(data && data.fonts) && data.fonts.length) fonts = data.fonts.slice();
+    } catch (_err) {
+      overrides = {};
+    }
+  }
+
+  window.jojoMountGuide = async function (opts) {
+    api = opts || api || {};
+    ownerActions();
+    toolbar();
+    const nav = document.getElementById('guide-nav');
+    if (!nav) return;
+    await loadOverrides();
+    buildNav();
+    paint(currentId || 'start');
+  };
+
+  window.jojoGuideRefresh = async function () {
+    if (!api) return;
+    const wasEditing = editing;
+    if (!wasEditing) await loadOverrides();
+    syncOwnerUi(resolved(currentId));
+    if (!wasEditing) paint(currentId);
   };
 })();

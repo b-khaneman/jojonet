@@ -579,6 +579,33 @@ def test_owner_requests_panel_certificate(client, admin, settings):
     assert again.status_code == 409
 
 
+def test_owner_edits_guide_article(client, admin, settings):
+    assert client.get("/api/guide").status_code == 401
+    logged = client.post("/api/login", json={"username": admin[0], "password": admin[1]})
+    assert logged.status_code == 200, logged.text
+    auth = {"X-CSRF-Token": logged.json()["csrf"]}
+    empty = client.get("/api/guide", headers=auth)
+    assert empty.status_code == 200 and empty.json()["articles"] == {}
+    payload = {
+        "id": "gre",
+        "group": "تانل‌ها",
+        "title": "GRE سفارشی",
+        "lead": '<span style="font-size: 18px; font-family: Vazirmatn">متن مالک</span>',
+        "note": "",
+        "steps": [{"h": "قدم یک", "p": "توضیح یک"}],
+        "style": {"fontFamily": "Vazirmatn", "fontSize": "16px", "titleSize": "22px"},
+    }
+    saved = client.put("/api/guide", json=payload, headers=auth)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["article"]["title"] == "GRE سفارشی"
+    assert (settings.data_dir / "guide.json").is_file()
+    got = client.get("/api/guide", headers=auth)
+    assert got.json()["articles"]["gre"]["style"]["titleSize"] == "22px"
+    reset = client.delete("/api/guide/gre", headers=auth)
+    assert reset.status_code == 200 and reset.json()["reset"] is True
+    assert client.get("/api/guide", headers=auth).json()["articles"] == {}
+
+
 def test_cli_set_admin_and_has_admin(settings, monkeypatch, capsys):
     from app import cli
 
