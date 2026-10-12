@@ -6,7 +6,7 @@ import os
 import sys
 
 from . import PANEL_VERSION
-from .config import load_settings
+from .config import load_settings, saved_listen_port
 from .db import Database, utcnow
 from .security import Vault, hash_password, random_password
 from .validators import USER_RE
@@ -76,7 +76,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     settings = load_settings()
     host = args.host or settings.host
-    port = args.port or settings.port
+    port = saved_listen_port(settings.data_dir) or args.port or settings.port
     cert = args.cert if args.cert is not None else settings.cert
     key = args.key if args.key is not None else settings.key
     if bool(cert) != bool(key):

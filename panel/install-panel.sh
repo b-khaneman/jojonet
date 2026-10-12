@@ -26,6 +26,9 @@ readonly DATA_DIR="/var/lib/jojonet-panel"
 readonly UNIT_FILE="/etc/systemd/system/jojonet-panel.service"
 readonly WRAPPER="/usr/local/bin/jojonet-panel"
 readonly DEFAULT_PORT="2053"
+readonly DEFAULT_PANEL_PATH="/jojonet-panel-entry"
+readonly APPLY_UNIT="/etc/systemd/system/jojonet-panel-apply.service"
+readonly APPLY_PATH_UNIT="/etc/systemd/system/jojonet-panel-apply.path"
 readonly DEFAULT_HOST="0.0.0.0"
 readonly ACME_HOOK="/etc/letsencrypt/renewal-hooks/deploy/jojonet-panel.sh"
 readonly REPO_SLUG="b-khaneman/jojonet"
@@ -415,6 +418,9 @@ copy_files() {
     find "$INSTALL_DIR/app" -type d -name '__pycache__' -prune -exec rm -rf {} +
     install -m 0644 "$PANEL_SRC/requirements.txt" "$INSTALL_DIR/requirements.txt"
     install -m 0755 "$PANEL_SRC/uninstall-panel.sh" "$INSTALL_DIR/uninstall-panel.sh"
+    if [[ -f "$PANEL_SRC/apply-listen" ]]; then
+        install -m 0755 "$PANEL_SRC/apply-listen" "$INSTALL_DIR/apply-listen"
+    fi
 
     install -d -m 0755 "$BUNDLE_DIR"
     local f
@@ -656,16 +662,25 @@ set_env_default() {
 }
 
 ensure_panel_path() {
-    local cur seg
-    cur="$(env_value JOJONET_PANEL_PATH)"
-    cur="${cur%/}"
-    if [[ "$cur" =~ ^/[A-Za-z0-9][A-Za-z0-9_-]{15,63}$ ]]; then
-        PANEL_WEB_PATH="$cur"
-        return 0
+    local cur saved
+    saved=""
+    if [[ -f "$DATA_DIR/web.path" ]]; then
+        saved="$(tr -d '[:space:]' < "$DATA_DIR/web.path")"
+        saved="${saved%/}"
     fi
-    seg="$(openssl rand -hex 12)"
-    set_env_var JOJONET_PANEL_PATH "/$seg"
-    PANEL_WEB_PATH="/$seg"
+    cur="${saved:-$(env_value JOJONET_PANEL_PATH)}"
+    cur="${cur%/}"
+    # Keep a chosen path. Replace an empty or old random hex path with the fixed entry.
+    if [[ "$cur" =~ ^/[A-Za-z0-9][A-Za-z0-9_-]{15,63}$ && ! "$cur" =~ ^/[0-9a-f]{24}$ ]]; then
+        PANEL_WEB_PATH="$cur"
+    else
+        PANEL_WEB_PATH="$DEFAULT_PANEL_PATH"
+    fi
+    set_env_var JOJONET_PANEL_PATH "$PANEL_WEB_PATH"
+    install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$DATA_DIR"
+    printf '%s\n' "$PANEL_WEB_PATH" >"$DATA_DIR/web.path"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR/web.path"
+    chmod 0600 "$DATA_DIR/web.path"
 }
 
 write_env() {
@@ -754,6 +769,28 @@ EOF
     chmod 0644 "$UNIT_FILE.tmp"
     mv -f -- "$UNIT_FILE.tmp" "$UNIT_FILE"
     log "Wrote $UNIT_FILE"
+    cat >"$APPLY_UNIT" <<EOF
+[Unit]
+Description=Apply JojoNet Panel path and port
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$INSTALL_DIR/apply-listen
+EOF
+    cat >"$APPLY_PATH_UNIT" <<EOF
+[Unit]
+Description=Watch JojoNet Panel listen settings
+
+[Path]
+PathChanged=$DATA_DIR/listen.json
+Unit=jojonet-panel-apply.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 0644 "$APPLY_UNIT" "$APPLY_PATH_UNIT"
+    log "Wrote $APPLY_PATH_UNIT"
 }
 
 write_wrapper() {
@@ -859,16 +896,21 @@ cmd_url() {
         esac
         if [[ "$addr" == *:* && "$addr" != \[* ]]; then addr="[$addr]"; fi
     fi
-    local webpath data
-    webpath="$(env_value JOJONET_PANEL_PATH)"
-    webpath="${webpath%/}"
+    local webpath data listen_port
+    data="$(env_value JOJONET_PANEL_DATA)"
+    data="${data:-/var/lib/jojonet-panel}"
+    webpath=""
+    if [[ -f "$data/web.path" ]]; then
+        webpath="$(tr -d '[:space:]' < "$data/web.path")"
+        webpath="${webpath%/}"
+    fi
     if [[ -z "$webpath" ]]; then
-        data="$(env_value JOJONET_PANEL_DATA)"
-        data="${data:-/var/lib/jojonet-panel}"
-        if [[ -f "$data/web.path" ]]; then
-            webpath="$(tr -d '[:space:]' < "$data/web.path")"
-            webpath="${webpath%/}"
-        fi
+        webpath="$(env_value JOJONET_PANEL_PATH)"
+        webpath="${webpath%/}"
+    fi
+    if [[ -f "$data/listen.json" ]]; then
+        listen_port="$(sed -n 's/.*"port":\([0-9][0-9]*\).*/\1/p' "$data/listen.json" | head -n 1)"
+        if [[ "$listen_port" =~ ^[0-9]+$ ]]; then port="$listen_port"; fi
     fi
     if [[ "$port" == 443 ]]; then printf 'https://%s%s/\n' "$addr" "$webpath"; else printf 'https://%s:%s%s/\n' "$addr" "$port" "$webpath"; fi
 }
@@ -933,6 +975,7 @@ main() {
         start|stop|restart) systemctl "$cmd" "$SERVICE" ;;
         logs) cmd_logs "$@" ;;
         url) cmd_url ;;
+        apply-listen) exec "$INSTALL_DIR/apply-listen" ;;
         update) cmd_update "$@" ;;
         uninstall)
             [[ -f "$INSTALL_DIR/uninstall-panel.sh" ]] || die "uninstaller not found in $INSTALL_DIR"
@@ -999,6 +1042,10 @@ start_service() {
     step "Starting $SERVICE"
     systemctl daemon-reload
     systemctl enable "$SERVICE" >/dev/null 2>&1 || warn "systemctl enable failed"
+    if [[ -f "$APPLY_PATH_UNIT" && -x "$INSTALL_DIR/apply-listen" ]]; then
+        systemctl enable jojonet-panel-apply.path >/dev/null 2>&1 || warn "could not enable listen watcher"
+        systemctl restart jojonet-panel-apply.path >/dev/null 2>&1 || true
+    fi
     if ! systemctl restart "$SERVICE"; then
         journalctl -u "$SERVICE" -n 50 --no-pager >&2 || true
         die "The panel service failed to start."

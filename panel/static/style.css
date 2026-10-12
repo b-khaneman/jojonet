@@ -2537,8 +2537,8 @@ textarea::placeholder {
   pointer-events: auto;
 }
 
-.hx-dock-left { right: 0; left: auto; transform: translateX(105%); }
-.hx-dock-right { left: 0; right: auto; transform: translateX(-105%); }
+.hx-dock-left { left: 0; right: auto; transform: translateX(-105%); }
+.hx-dock-right { right: 0; left: auto; transform: translateX(105%); }
 .hx-dock.is-open { transform: none; }
 
 .hx-chrome {
@@ -2557,13 +2557,13 @@ textarea::placeholder {
 }
 
 .hx-dock-left .hx-chrome {
-  border-right: 0;
-  border-radius: 12px 0 0 0;
+  border-left: 0;
+  border-radius: 0 12px 0 0;
 }
 
 .hx-dock-right .hx-chrome {
-  border-left: 0;
-  border-radius: 0 12px 0 0;
+  border-right: 0;
+  border-radius: 12px 0 0 0;
 }
 
 .hx-chrome::before {

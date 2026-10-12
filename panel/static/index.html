@@ -99,8 +99,8 @@
         <button type="button" class="theme-btn" role="radio" data-theme-set="day" aria-checked="false">روز</button>
         <button type="button" class="theme-btn" role="radio" data-theme-set="night" aria-checked="true">شب</button>
       </div>
-      <button id="hx-toggle-left" class="hx-fab" type="button" aria-label="ترمینال چپ" aria-pressed="false" title="ترمینال چپ">ترمینال چپ</button>
       <button id="hx-toggle-right" class="hx-fab" type="button" aria-label="ترمینال راست" aria-pressed="false" title="ترمینال راست">ترمینال راست</button>
+      <button id="hx-toggle-left" class="hx-fab" type="button" aria-label="ترمینال چپ" aria-pressed="false" title="ترمینال چپ">ترمینال چپ</button>
       <button id="btn-password" class="btn btn-ghost btn-sm" type="button">تغییر رمز عبور</button>
       <button id="btn-logout" class="btn btn-ghost btn-sm" type="button">خروج</button>
     </div>
@@ -483,6 +483,27 @@
         <div class="section-actions">
           <button id="btn-refresh-users" class="btn btn-sm" type="button">بروزرسانی</button>
         </div>
+      </div>
+      <div class="card create-card" id="listen-card">
+        <h3 class="card-title">آدرس ورود پنل</h3>
+        <p class="muted">IP خالی پنل را باز نمی‌کند. مسیر ثابت پیش‌فرض <span dir="ltr">jojonet-panel-entry</span> است. بعد از ذخیره، پنل چند ثانیه قطع می‌شود و با آدرس جدید بالا می‌آید.</p>
+        <form id="listen-form" class="form" novalidate>
+          <div id="listen-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="listen-path">مسیر</label>
+              <input id="listen-path" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="64" placeholder="jojonet-panel-entry">
+            </div>
+            <div class="field">
+              <label for="listen-port">پورت</label>
+              <input id="listen-port" type="number" dir="ltr" min="1024" max="65535" required value="2053">
+            </div>
+          </div>
+          <p class="hint" dir="ltr" id="listen-url"></p>
+          <div class="form-actions">
+            <button id="listen-submit" class="btn btn-primary" type="submit">ذخیره آدرس</button>
+          </div>
+        </form>
       </div>
       <div class="card create-card" id="term-policy-card">
         <h3 class="card-title">ترمینال صفحه اصلی</h3>

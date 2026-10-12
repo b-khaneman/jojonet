@@ -538,6 +538,7 @@
     const outboundBtn = $('#tabbtn-outbounds');
     if (outboundBtn) outboundBtn.hidden = !can('allow_vpn');
     if (state.tab === 'users' && !owner) switchTab('servers');
+    if (owner) loadListen();
     if (state.tab === 'relays' && !can('allow_relay')) switchTab('servers');
     if ((state.tab === 'panels' || state.tab === 'outbounds') && !can('allow_vpn')) switchTab('servers');
     paintHeader();
@@ -2999,9 +3000,79 @@
     });
   }
 
+  function listenAddress(path, port) {
+    const clean = String(path || '').trim().replace(/^\/+|\/+$/g, '');
+    const segment = clean ? '/' + clean : '';
+    const number = Number(port) || 2053;
+    const https = location.protocol === 'https:';
+    const bare = (https && number === 443) || (!https && number === 80);
+    const host = bare ? location.hostname : location.hostname + ':' + number;
+    return location.protocol + '//' + host + segment + '/';
+  }
+
+  async function loadListen() {
+    const pathEl = $('#listen-path');
+    const portEl = $('#listen-port');
+    if (!pathEl || !portEl || !isOwner()) return;
+    try {
+      const row = await api('GET', '/api/listen');
+      pathEl.value = String(row.path || '').replace(/^\//, '');
+      portEl.value = row.port || 2053;
+      const url = $('#listen-url');
+      if (url) url.textContent = row.url || listenAddress(pathEl.value, portEl.value);
+    } catch (err) {
+      if (err.status && err.status !== 401) {
+        const box = $('#listen-error');
+        if (box) { box.hidden = false; box.textContent = err.message || NET_ERR; }
+      }
+    }
+  }
+
+  function bindListen() {
+    const form = $('#listen-form');
+    if (!form) return;
+    const pathEl = $('#listen-path');
+    const portEl = $('#listen-port');
+    const preview = () => {
+      const url = $('#listen-url');
+      if (url && pathEl && portEl) url.textContent = listenAddress(pathEl.value, portEl.value);
+    };
+    pathEl.addEventListener('input', preview);
+    portEl.addEventListener('input', preview);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!isOwner()) return;
+      const box = $('#listen-error');
+      if (box) box.hidden = true;
+      const nextUrl = listenAddress(pathEl.value, portEl.value);
+      const btn = $('#listen-submit');
+      if (btn) btn.disabled = true;
+      try {
+        const row = await api('PUT', '/api/listen', { path: pathEl.value.trim(), port: Number(portEl.value) });
+        if (state.me) {
+          state.me.base_path = row.path;
+          state.me.panel_port = row.port;
+        }
+        paintHeader();
+        toast('آدرس ذخیره شد. چند ثانیه دیگر پنل روی آدرس جدید بالا می‌آید.', 'success');
+        setTimeout(() => { location.href = row.url || nextUrl; }, 4000);
+      } catch (err) {
+        if (!err.status) {
+          toast('پنل در حال بالا آمدن روی آدرس جدید است…', 'success');
+          setTimeout(() => { location.href = nextUrl; }, 4000);
+          return;
+        }
+        if (box) { box.hidden = false; box.textContent = err.message || NET_ERR; }
+        else toast(err.message || NET_ERR, 'error');
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
   function bindStatic() {
     bindTheme();
     bindHxTerms();
+    bindListen();
     const termPolicy = $('#set-terms-enabled');
     if (termPolicy) {
       termPolicy.addEventListener('change', async () => {

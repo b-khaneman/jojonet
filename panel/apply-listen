@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Apply the path and port saved from the admin UI, then restart the panel.
+# Installed as root and started by jojonet-panel-apply.path — the panel user cannot restart systemd itself.
+set -Eeuo pipefail
+
+DATA_DIR="/var/lib/jojonet-panel"
+ENV_FILE="/etc/jojonet-panel/panel.env"
+SERVICE="jojonet-panel"
+FILE="$DATA_DIR/listen.json"
+
+[[ -f "$FILE" ]] || exit 0
+# The save request must finish before this process is replaced.
+sleep 2
+
+parsed="$(python3 - "$FILE" <<'PY'
+import json, re, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+path = str(data.get("path") or "").strip().rstrip("/")
+if path and not path.startswith("/"):
+    path = "/" + path
+if not re.fullmatch(r"/[A-Za-z0-9][A-Za-z0-9_-]{15,63}", path):
+    raise SystemExit(2)
+port = int(data["port"])
+if not 1024 <= port <= 65535:
+    raise SystemExit(2)
+print(path)
+print(port)
+PY
+)" || exit 0
+
+path="${parsed%%$'\n'*}"
+port="${parsed##*$'\n'}"
+[[ "$port" =~ ^[0-9]+$ ]] || exit 0
+
+old_port=""
+if [[ -f "$ENV_FILE" ]]; then
+    old_port="$(sed -n 's/^JOJONET_PANEL_PORT=//p' "$ENV_FILE" | head -n 1)"
+fi
+
+set_env() {
+    local k="$1" v="$2"
+    if [[ -f "$ENV_FILE" ]] && grep -q "^${k}=" "$ENV_FILE"; then
+        sed -i "s|^${k}=.*|${k}=${v}|" "$ENV_FILE"
+    else
+        printf '%s=%s\n' "$k" "$v" >>"$ENV_FILE"
+    fi
+}
+
+install -d -m 0750 /etc/jojonet-panel
+touch "$ENV_FILE"
+set_env JOJONET_PANEL_PATH "$path"
+set_env JOJONET_PANEL_PORT "$port"
+printf '%s\n' "$path" >"$DATA_DIR/web.path"
+chown jojonet-panel:jojonet-panel "$DATA_DIR/web.path" 2>/dev/null || true
+chmod 0600 "$DATA_DIR/web.path" || true
+
+if [[ -n "$old_port" && "$old_port" != "$port" ]]; then
+    if command -v ufw >/dev/null 2>&1; then
+        st="$(ufw status 2>/dev/null || true)"
+        if [[ "$st" == *"Status: active"* ]]; then
+            ufw delete allow "$old_port/tcp" >/dev/null 2>&1 || true
+            ufw allow "$port/tcp" comment jojonet-panel >/dev/null 2>&1 || true
+        fi
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        firewall-cmd --permanent --remove-port="$old_port/tcp" >/dev/null 2>&1 || true
+        firewall-cmd --permanent --add-port="$port/tcp" >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+fi
+
+systemctl restart "$SERVICE"

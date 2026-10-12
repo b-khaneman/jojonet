@@ -227,6 +227,7 @@ def test_term_policy_global_and_per_user(client, auth):
     with client.websocket_connect("/ws/term?server_id=1") as ws:
         assert "غیرفعال" in ws.receive_json()["m"]
     assert client.patch("/api/settings", json={"terms_enabled": False}, headers=hdr).status_code == 403
+    assert client.put("/api/listen", json={"path": "jojonet-panel-entry", "port": 2053}, headers=hdr).status_code == 403
     client.post("/api/logout", headers=hdr)
     owner = login_as(client, "admin", "correct-horse-1")
     r = client.patch(f"/api/users/{created['user']['id']}", json={"allow_term": True}, headers=owner)

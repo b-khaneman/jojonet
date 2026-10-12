@@ -19,16 +19,24 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def test_secret_panel_path(tmp_path):
-    from app.config import normalize_base_path, resolve_base_path
+    from app.config import DEFAULT_BASE_PATH, normalize_base_path, resolve_base_path, write_listen
 
     assert normalize_base_path("jnsecretpath1234") == "/jnsecretpath1234"
+    assert normalize_base_path("jojonet-panel-entry") == DEFAULT_BASE_PATH
     for bad in ("/", "/short", "/has/extra-segment-here", "/../jnsecretpath1234", ""):
         with pytest.raises(ValueError):
             normalize_base_path(bad)
-    first = resolve_base_path(tmp_path, "")
-    assert first.startswith("/") and len(first) >= 17
-    assert resolve_base_path(tmp_path, "") == first
-    assert resolve_base_path(tmp_path, "/jnsecretpath1234") == "/jnsecretpath1234"
+    assert resolve_base_path(tmp_path, "") == DEFAULT_BASE_PATH
+    assert resolve_base_path(tmp_path, "") == DEFAULT_BASE_PATH
+    # An old random hex path is replaced. A saved web.path is kept over the env value.
+    fresh = tmp_path / "fresh"
+    assert resolve_base_path(fresh, "/0123456789abcdef01234567") == DEFAULT_BASE_PATH
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    (chosen / "web.path").write_text("/custompath1234567\n", encoding="utf-8")
+    assert resolve_base_path(chosen, "/jnsecretpath1234") == "/custompath1234567"
+    write_listen(tmp_path, "jojonet-panel-entry", 2053)
+    assert (tmp_path / "listen.json").read_text(encoding="utf-8").strip() == '{"path":"/jojonet-panel-entry","port":2053}'
 
 
 def test_password_hash_roundtrip():

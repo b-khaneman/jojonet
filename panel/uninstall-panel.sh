@@ -89,7 +89,9 @@ remove_service() {
         systemctl stop "$SERVICE" >/dev/null 2>&1 || true
         systemctl disable "$SERVICE" >/dev/null 2>&1 || true
     fi
-    rm -f -- "$UNIT_FILE"
+    systemctl disable jojonet-panel-apply.path >/dev/null 2>&1 || true
+    systemctl stop jojonet-panel-apply.path >/dev/null 2>&1 || true
+    rm -f -- "$UNIT_FILE" /etc/systemd/system/jojonet-panel-apply.service /etc/systemd/system/jojonet-panel-apply.path
     rm -rf -- "$UNIT_DROPIN_DIR"
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || true

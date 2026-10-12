@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import socket
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
@@ -19,7 +20,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import PANEL_VERSION
-from .config import Settings, load_settings
+from .config import PanelEntry, Settings, load_settings, normalize_base_path, write_listen
 from .db import Database, utcnow
 from .jobs import JobManager
 from .orchestrator import (
@@ -102,12 +103,12 @@ class SelectiveGZip:
 class SecretPathGate:
     """Drop every request that is not under the secret panel path. Bare IP returns an empty 404."""
 
-    def __init__(self, app: ASGIApp, base_path: str) -> None:
+    def __init__(self, app: ASGIApp, entry: PanelEntry) -> None:
         self.app = app
-        self.base = base_path
+        self.entry = entry
 
     def _allowed(self, path: str) -> bool:
-        base = self.base
+        base = self.entry.path
         if len(path) < len(base):
             return False
         head = path[: len(base)]
@@ -121,16 +122,17 @@ class SecretPathGate:
             return
         path = scope.get("path") or "/"
         raw = path.lower()
+        base = self.entry.path
         if ".." in path or "\\" in path or "%2e" in raw or "%2f" in raw or not self._allowed(path):
             await self._deny(scope, send)
             return
-        rest = path[len(self.base) :] or "/"
+        rest = path[len(base) :] or "/"
         if not rest.startswith("/"):
             rest = "/" + rest
         forwarded = dict(scope)
         forwarded["path"] = rest
         raw_path = scope.get("raw_path") or b""
-        base_bytes = self.base.encode("ascii")
+        base_bytes = base.encode("ascii")
         if raw_path.startswith(base_bytes):
             forwarded["raw_path"] = raw_path[len(base_bytes) :] or b"/"
         await self.app(forwarded, receive, send)
@@ -549,6 +551,11 @@ class PanelSettingsIn(BaseModel):
     terms_enabled: bool
 
 
+class ListenIn(BaseModel):
+    path: str = Field(min_length=1, max_length=80)
+    port: int = Field(ge=1024, le=65535)
+
+
 class UserPasswordIn(BaseModel):
     password: str | None = Field(default=None, max_length=256)
 
@@ -578,7 +585,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     vault = Vault(settings.vault_key_path)
     jobs = JobManager(db)
     orch = Orchestrator(db, vault, settings, jobs)
+    entry = PanelEntry(settings.base_path, settings.port)
     app.state.settings, app.state.db, app.state.vault, app.state.jobs, app.state.orch = settings, db, vault, jobs, orch
+    app.state.entry = entry
 
     index_path = settings.static_dir / "index.html"
 
@@ -612,7 +621,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return assets["version"]
 
     def cookie_path() -> str:
-        return settings.base_path + "/"
+        return app.state.entry.path + "/"
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -886,7 +895,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "allow_term": bool(sess.get("allow_term", 1)),
             "terms_enabled": terms_globally_on(),
             "can_term": term_allowed(sess),
-            "base_path": settings.base_path,
+            "base_path": app.state.entry.path,
+            "panel_port": app.state.entry.port,
         }
 
     def tunnel_busy(row: dict[str, Any]) -> None:
@@ -899,7 +909,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         refresh_assets()
         if assets["html"] is None:
             raise HTTPException(500, "فایل‌های رابط کاربری پیدا نشد")
-        html = assets["html"].replace("__BASE__", settings.base_path)
+        html = assets["html"].replace("__BASE__", app.state.entry.path)
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/health")
@@ -974,6 +984,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("1" if data.terms_enabled else "0",),
         )
         return {"terms_enabled": terms_globally_on()}
+
+    def panel_public_url(request: Request, path: str, port: int) -> str:
+        host = request.headers.get("host") or request.url.hostname or "127.0.0.1"
+        if host.startswith("["):
+            hostname = host.split("]", 1)[0] + "]"
+        else:
+            host_name, sep, host_port = host.rpartition(":")
+            hostname = host_name if sep and host_port.isdigit() else host
+        scheme = "https" if settings.secure_cookies else (request.url.scheme or "https")
+        if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+            return f"{scheme}://{hostname}{path}/"
+        return f"{scheme}://{hostname}:{port}{path}/"
+
+    def listen_out(request: Request) -> dict[str, Any]:
+        path = app.state.entry.path
+        port = app.state.entry.port
+        return {"path": path, "port": port, "url": panel_public_url(request, path, port)}
+
+    def port_is_free(port: int) -> bool:
+        if port == app.state.entry.port:
+            return True
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+        finally:
+            sock.close()
+        return True
+
+    @app.get("/api/listen")
+    async def get_listen(request: Request, _: dict = Depends(require_owner)) -> dict[str, Any]:
+        return listen_out(request)
+
+    @app.put("/api/listen")
+    async def put_listen(data: ListenIn, request: Request, _: dict = Depends(require_owner)) -> dict[str, Any]:
+        try:
+            path = normalize_base_path(data.path)
+        except ValueError:
+            raise HTTPException(422, "مسیر باید یک بخش ۱۶ تا ۶۴ نویسه‌ای از حروف انگلیسی، عدد، _ یا - باشد") from None
+        if not port_is_free(data.port):
+            raise HTTPException(409, "این پورت الان آزاد نیست")
+        if path != app.state.entry.path or data.port != app.state.entry.port:
+            try:
+                write_listen(settings.data_dir, path, data.port)
+            except OSError as exc:
+                raise HTTPException(500, "ذخیرهٔ مسیر پنل ممکن نشد") from exc
+            app.state.entry.path = path
+            app.state.entry.port = data.port
+        return listen_out(request)
 
     @app.get("/api/users")
     async def list_users(_: dict = Depends(require_owner)) -> list[dict[str, Any]]:
@@ -1654,5 +1714,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.mount("/static", VersionedStaticFiles(directory=str(settings.static_dir), check_dir=False, version=asset_version), name="static")
     app.add_middleware(SelectiveGZip)
-    app.add_middleware(SecretPathGate, base_path=settings.base_path)
+    app.add_middleware(SecretPathGate, entry=entry)
     return app

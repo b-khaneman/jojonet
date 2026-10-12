@@ -33,6 +33,27 @@ def test_bare_ip_does_not_open_panel(client):
     assert f'data-base="{client.prefix}"' in page.text
 
 
+def test_owner_can_change_panel_path(client, admin):
+    assert client.get("/api/listen").status_code == 401
+    logged = client.post("/api/login", json={"username": admin[0], "password": admin[1]})
+    assert logged.status_code == 200, logged.text
+    auth = {"X-CSRF-Token": logged.json()["csrf"]}
+    current = client.get("/api/listen", headers=auth)
+    assert current.status_code == 200
+    assert current.json()["path"] == client.prefix and current.json()["port"] == 2053
+    assert client.put("/api/listen", json={"path": "short", "port": 2053}, headers=auth).status_code == 422
+    assert client.put("/api/listen", json={"path": "jojonet-panel-entry", "port": 80}, headers=auth).status_code == 422
+    saved = client.put("/api/listen", json={"path": "my-fixed-entry-path", "port": 2053}, headers=auth)
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["path"] == "/my-fixed-entry-path" and body["port"] == 2053
+    assert body["url"].endswith(":2053/my-fixed-entry-path/")
+    assert client.raw.get("/my-fixed-entry-path/api/health").status_code == 200
+    assert client.raw.get(client.prefix + "/api/health").status_code == 404
+    page = client.raw.get("/my-fixed-entry-path/")
+    assert page.status_code == 200 and 'data-base="/my-fixed-entry-path"' in page.text
+
+
 def test_health_and_headers(client):
     r = client.get("/api/health")
     assert r.status_code == 200 and r.json()["ok"] is True
