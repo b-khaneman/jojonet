@@ -1,10 +1,7 @@
 # Changelog
 
-## 1.6.0 / panel 1.3.42
-- Customers can top up a wallet by sending a card/crypto deposit request like a ticket; the owner approves to credit balance. Selling tunnels charges the mode price once on create (or order fulfill). Registration can be toggled, and the owner can view full customer status and adjust wallets.
-
 ## 1.6.0 / panel 1.3.41
-- VPN panel login labels are bold, accent-colored, and end with a colon so address, username, and password stand out.
+- Tunnel type selection is a searchable technical picker with grouped protocols, stack badges, and a clear deployment brief.
 
 ## 1.6.0 / panel 1.3.40
 - The owner can edit each guide article in the panel, including font family, size, color, and step text, and can reset it to the default.
