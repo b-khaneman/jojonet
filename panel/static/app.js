@@ -553,8 +553,6 @@
     if (nameEl) nameEl.textContent = me.username || '';
     if (roleEl) roleEl.textContent = me.role === 'owner' ? 'مالک' : (me.role === 'customer' ? 'مشتری' : '');
     if (btn) btn.classList.toggle('is-owner', me.role === 'owner');
-    const entryEl = $('#hdr-entry');
-    if (entryEl) entryEl.textContent = me.base_path || '';
     const quotaEl = $('#hdr-quota');
     if (!quotaEl) return;
     if (me.role === 'owner') {
@@ -2663,6 +2661,9 @@
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeAccountMenu();
+    });
+    panel.addEventListener('click', (e) => {
+      if (e.target.closest('.account-item')) closeAccountMenu();
     });
   }
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.32
+- The header brand is only the mark and the name. Version, entry path, and the Telegram handle are no longer beside the title.
+
 ## 1.6.0 / panel 1.3.31
 - The header account control is a menu: profile, username, password, and logout. The username text in the bar is a mark, and the signed-in account can rename itself.
 
