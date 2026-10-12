@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.44
+- Main tabs follow the workflow order: status, servers, tunnels, relays, panels, outbound, monitor, guides, orders, wallet, support, management.
+
 ## 1.6.0 / panel 1.3.43
 - With a Let's Encrypt certificate on port 443, HTTP on port 80 permanently redirects to the HTTPS panel URL so browsers no longer show "Not secure".
 - Visiting `https://domain/` redirects to the panel entry path when the SSL domain is configured.

@@ -12,7 +12,7 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['overview', 'guide', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'orders', 'tickets', 'wallet', 'jobs', 'users'];
+  const TABS = ['overview', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'guide', 'orders', 'wallet', 'tickets', 'users'];
   const ORDER_STATUS = {
     pending: ['warn', 'در انتظار'],
     approved: ['info', 'تأیید شده'],
