@@ -5296,28 +5296,38 @@
     }
   }
 
+  function sslFact(label, value, opts = {}) {
+    return h('div', { class: 'ssl-fact' + (opts.wide ? ' is-wide' : '') },
+      h('span', { class: 'ssl-fact-label' }, label + ':'),
+      h(opts.code ? 'code' : 'span', {
+        class: 'ssl-fact-value' + (opts.code ? ' is-code' : ''),
+        dir: opts.ltr ? 'ltr' : 'rtl',
+      }, value || '—'));
+  }
+
   function sslSlip(row, kicker) {
-    const lines = ['آدرس ورود پنل', row.url];
-    if (row.not_after) lines.push('معتبر تا ' + fmtTime(row.not_after));
-    if (row.issuer) lines.push(row.issuer);
+    const lines = ['آدرس امن ورود', row.url];
+    if (row.not_after) lines.push('تاریخ انقضا: ' + fmtTime(row.not_after));
+    if (row.issuer) lines.push('مرجع صدور: ' + row.issuer);
     return h('div', { class: 'ssl-slip' },
       h('div', { class: 'ssl-slip-head' },
         h('div', { class: 'ssl-slip-copy' },
-          h('p', { class: 'ssl-kicker' }, kicker || 'آدرس امن پنل'),
+          h('p', { class: 'ssl-kicker' }, (kicker || 'وضعیت گواهی') + ':'),
           h('p', { class: 'ssl-domain', dir: 'ltr' }, row.domain || '—')),
         h('div', { class: 'ssl-slip-tags' },
-          h('span', { class: 'ssl-chip' }, 'SSL'),
+          h('span', { class: 'ssl-chip' }, 'HTTPS'),
           h('span', { class: 'ssl-chip is-ok' }, 'فعال'))),
+      h('div', { class: 'ssl-facts' },
+        sslFact('دامنهٔ فعال', row.domain || '—', { ltr: true }),
+        sslFact('مرجع صدور', row.issuer || "Let's Encrypt", { ltr: true }),
+        row.not_after ? sslFact('تاریخ انقضا', fmtTime(row.not_after)) : null,
+        sslFact('آدرس امن ورود', row.url, { ltr: true, code: true, wide: true })),
       h('div', { class: 'ssl-urlrow' },
-        h('code', { class: 'ssl-url', dir: 'ltr' }, row.url),
         h('button', {
           type: 'button',
           class: 'btn btn-primary ssl-copy-btn',
           onclick: () => copySsl(row.url || lines.join('\n')),
-        }, 'کپی')),
-      h('div', { class: 'ssl-meta' },
-        h('span', {}, 'صادرکننده ', h('b', { dir: 'ltr' }, row.issuer || "Let's Encrypt")),
-        row.not_after ? h('span', {}, 'معتبر تا ', h('b', {}, fmtTime(row.not_after))) : null));
+        }, 'کپی آدرس')));
   }
 
   function paintSsl(row) {
@@ -5335,9 +5345,11 @@
       parts.push(h('div', { class: 'ssl-slip is-busy', role: 'status' },
         h('div', { class: 'ssl-slip-head' },
           h('div', { class: 'ssl-slip-copy' },
-            h('p', { class: 'ssl-kicker' }, 'در حال دریافت گواهی'),
-            h('p', { class: 'ssl-domain', dir: 'ltr' }, row.domain || '—')),
+            h('p', { class: 'ssl-kicker' }, 'وضعیت درخواست:'),
+            h('p', { class: 'ssl-domain' }, 'در حال دریافت گواهی')),
           h('span', { class: 'ssl-chip is-busy' }, 'صبر کنید')),
+        h('div', { class: 'ssl-facts' },
+          sslFact('دامنهٔ هدف', row.domain || '—', { ltr: true })),
         h('p', { class: 'ssl-wait' }, 'رکورد دامنه بررسی می‌شود و گواهی نصب می‌شود. این صفحه را نبندید.'),
         h('span', { class: 'ssl-bar', 'aria-hidden': 'true' })));
     }
@@ -5345,15 +5357,16 @@
       parts.push(h('div', { class: 'ssl-slip is-bad' },
         h('div', { class: 'ssl-slip-head' },
           h('div', { class: 'ssl-slip-copy' },
-            h('p', { class: 'ssl-kicker' }, 'گواهی صادر نشد'),
-            h('p', { class: 'ssl-domain' }, 'خطا در صدور')),
+            h('p', { class: 'ssl-kicker' }, 'نتیجهٔ صدور:'),
+            h('p', { class: 'ssl-domain' }, 'گواهی صادر نشد')),
           h('span', { class: 'ssl-chip is-bad' }, 'ناموفق')),
-        h('pre', { class: 'ssl-error' }, row.error),
+        h('div', { class: 'ssl-facts' },
+          sslFact('متن خطا', row.error, { wide: true })),
         h('div', { class: 'ssl-urlrow' },
-          h('button', { type: 'button', class: 'btn', onclick: () => copySsl(row.error) }, 'کپی متن'))));
+          h('button', { type: 'button', class: 'btn', onclick: () => copySsl(row.error) }, 'کپی متن خطا'))));
     }
-    if (row.url && row.state !== 'running') parts.push(sslSlip(row, row.state === 'error' ? 'گواهی فعلی' : 'آدرس امن پنل'));
-    else if (row.url && row.state === 'running') parts.push(sslSlip(row, 'گواهی فعلی'));
+    if (row.url && row.state !== 'running') parts.push(sslSlip(row, row.state === 'error' ? 'گواهی فعلی روی سرور' : 'گواهی فعال روی سرور'));
+    else if (row.url && row.state === 'running') parts.push(sslSlip(row, 'گواهی فعلی روی سرور'));
     out.replaceChildren(...parts);
   }
 

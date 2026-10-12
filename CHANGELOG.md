@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.47
+- SSL labels are larger, amber-colored, and end with a colon so domain, issuer, expiry, and secure URL stay distinct.
+
 ## 1.6.0 / panel 1.3.46
 - The SSL status card no longer overlaps the domain badge; the secure URL row and form fields are clearer on desktop and mobile.
 
