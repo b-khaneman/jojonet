@@ -134,6 +134,7 @@ class Settings:
     secure_cookies: bool
     trusted_proxy: bool
     base_path: str
+    domain: str = ""
     session_hours: int = 12
     ssh_connect_timeout: int = 15
     command_timeout: int = 900
@@ -167,4 +168,5 @@ def load_settings() -> Settings:
         secure_cookies=_bool("JOJONET_PANEL_SECURE_COOKIES", True),
         trusted_proxy=_bool("JOJONET_PANEL_TRUSTED_PROXY", False),
         base_path=resolve_base_path(data_dir, os.environ.get("JOJONET_PANEL_PATH", "")),
+        domain=os.environ.get("JOJONET_PANEL_DOMAIN", "").strip().lower().rstrip("."),
     )

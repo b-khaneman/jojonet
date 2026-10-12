@@ -33,6 +33,35 @@ def test_bare_ip_does_not_open_panel(client):
     assert f'data-base="{client.prefix}"' in page.text
 
 
+def test_ssl_domain_root_redirects_to_panel_path(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from conftest import PANEL_BASE, PANEL_DIR, REPO_DIR
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        bundle_dir=REPO_DIR,
+        static_dir=PANEL_DIR / "static",
+        host="127.0.0.1",
+        port=443,
+        cert="",
+        key="",
+        secure_cookies=True,
+        trusted_proxy=False,
+        base_path=PANEL_BASE,
+        domain="net.example.com",
+    )
+    app = create_app(settings)
+    raw = TestClient(app)
+    bounced = raw.get("/", headers={"Host": "net.example.com"}, follow_redirects=False)
+    assert bounced.status_code == 301
+    assert bounced.headers["location"] == f"https://net.example.com{PANEL_BASE}/"
+    still_hidden = raw.get("/", headers={"Host": "1.2.3.4"}, follow_redirects=False)
+    assert still_hidden.status_code == 404
+
+
 def test_owner_can_change_panel_path(client, admin):
     assert client.get("/api/listen").status_code == 401
     logged = client.post("/api/login", json={"username": admin[0], "password": admin[1]})

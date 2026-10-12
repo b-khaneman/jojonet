@@ -93,9 +93,13 @@ remove_service() {
     systemctl stop jojonet-panel-apply.path >/dev/null 2>&1 || true
     systemctl disable jojonet-panel-ssl.path >/dev/null 2>&1 || true
     systemctl stop jojonet-panel-ssl.path >/dev/null 2>&1 || true
+    systemctl disable jojonet-panel-http.service >/dev/null 2>&1 || true
+    systemctl stop jojonet-panel-http.service >/dev/null 2>&1 || true
     rm -f -- "$UNIT_FILE" /etc/systemd/system/jojonet-panel.socket \
         /etc/systemd/system/jojonet-panel-apply.service /etc/systemd/system/jojonet-panel-apply.path \
-        /etc/systemd/system/jojonet-panel-ssl.service /etc/systemd/system/jojonet-panel-ssl.path
+        /etc/systemd/system/jojonet-panel-ssl.service /etc/systemd/system/jojonet-panel-ssl.path \
+        /etc/systemd/system/jojonet-panel-http.service \
+        /etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh
     rm -rf -- "$UNIT_DROPIN_DIR"
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$SERVICE" jojonet-panel.socket >/dev/null 2>&1 || true

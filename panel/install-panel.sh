@@ -454,6 +454,9 @@ copy_files() {
     if [[ -f "$PANEL_SRC/apply-ssl" ]]; then
         install -m 0755 "$PANEL_SRC/apply-ssl" "$INSTALL_DIR/apply-ssl"
     fi
+    if [[ -f "$PANEL_SRC/http-redirect.py" ]]; then
+        install -m 0755 "$PANEL_SRC/http-redirect.py" "$INSTALL_DIR/http-redirect.py"
+    fi
 
     install -d -m 0755 "$BUNDLE_DIR"
     local f
@@ -1218,6 +1221,59 @@ socket_listen_now() {
         | sed -E 's/[[:space:]]+\([^)]*\)//'
 }
 
+ensure_http_redirect() {
+    # When TLS is live on 443, keep :80 as a permanent redirect to https://domain/path/
+    # so browsers never show the plain "Not secure" http:// address.
+    local domain port webpath redirect_py
+    domain="$(env_value JOJONET_PANEL_DOMAIN "$ENV_FILE")"
+    port="$(env_value JOJONET_PANEL_PORT "$ENV_FILE")"
+    [[ "$port" == "443" && -n "$domain" ]] || return 0
+    [[ -s "$TLS_DIR/cert.pem" && -s "$TLS_DIR/key.pem" ]] || return 0
+    redirect_py="$INSTALL_DIR/http-redirect.py"
+    [[ -f "$redirect_py" ]] || return 0
+    webpath="$(env_value JOJONET_PANEL_WEB_PATH "$ENV_FILE")"
+    if [[ -z "$webpath" ]]; then
+        webpath="$(env_value JOJONET_PANEL_PATH "$ENV_FILE")"
+    fi
+    webpath="${webpath:-/jojonet-panel-entry}"
+    [[ "$webpath" == /* ]] || webpath="/$webpath"
+    set_env_var JOJONET_PANEL_WEB_PATH "$webpath"
+    cat >/etc/systemd/system/jojonet-panel-http.service <<EOF
+[Unit]
+Description=JojoNet Panel HTTP→HTTPS redirect
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$ENV_FILE
+ExecStart=/usr/bin/python3 $redirect_py
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 0644 /etc/systemd/system/jojonet-panel-http.service
+    install -d -m 0755 /etc/letsencrypt/renewal-hooks/pre
+    cat >/etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh <<'EOF'
+#!/bin/sh
+systemctl stop jojonet-panel-http.service >/dev/null 2>&1 || true
+EOF
+    chmod 0755 /etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh
+    if command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null || true)" == *"Status: active"* ]]; then
+        ufw allow 80/tcp comment jojonet-panel-http >/dev/null 2>&1 || true
+    fi
+    systemctl daemon-reload
+    systemctl enable jojonet-panel-http.service >/dev/null 2>&1 || true
+    if systemctl restart jojonet-panel-http.service >/dev/null 2>&1; then
+        log "HTTP→HTTPS redirect is active on port 80."
+    else
+        warn "Could not start the HTTP→HTTPS redirect on port 80 (is the port free?)."
+    fi
+}
+
 start_service() {
     step "Starting $SERVICE"
     local want have
@@ -1258,6 +1314,7 @@ start_service() {
         if systemctl is-active --quiet "$SERVICE" && panel_answers; then
             NEW_PANEL_OK=1
             log "Panel is answering HTTPS on port $PORT."
+            ensure_http_redirect
             return 0
         fi
         sleep 1

@@ -133,6 +133,16 @@ if command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null || true)" == *
 fi
 
 install -d -m 0755 "$(dirname "$HOOK")"
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/pre
+cat >"/etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh.tmp" <<'EOF'
+#!/bin/sh
+# Free TCP/80 so certbot --standalone can renew.
+systemctl stop jojonet-panel-http.service >/dev/null 2>&1 || true
+EOF
+chmod 0755 "/etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh.tmp"
+mv -f -- "/etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh.tmp" \
+    "/etc/letsencrypt/renewal-hooks/pre/jojonet-panel-http.sh"
+
 cat >"$HOOK.tmp" <<'EOF'
 #!/bin/sh
 set -eu
@@ -154,6 +164,8 @@ mv -f /etc/jojonet-panel/tls/cert.pem.new /etc/jojonet-panel/tls/cert.pem
 if [ -z "${JOJONET_PANEL_HOOK_NO_RESTART:-}" ]; then
     systemctl try-restart jojonet-panel.service || true
 fi
+# Put the HTTP→HTTPS redirect back after standalone renew freed port 80.
+systemctl start jojonet-panel-http.service >/dev/null 2>&1 || true
 EOF
 chmod 0755 "$HOOK.tmp"
 mv -f -- "$HOOK.tmp" "$HOOK"
@@ -299,6 +311,54 @@ url="$(printf '%s\n' "$meta" | sed -n '1p')"
 org="$(printf '%s\n' "$meta" | sed -n '2p')"
 not_after="$(printf '%s\n' "$meta" | sed -n '3p')"
 publish "ok" "$url" "$org" "$not_after" ""
+
+# HTTP→HTTPS redirect on :80 so browsers never stay on "Not secure" http://domain
+if [[ "$port" == "443" ]]; then
+    redirect_py="/opt/jojonet-panel/http-redirect.py"
+    if [[ -f "$redirect_py" ]]; then
+        python3 - "$ENV_FILE" "$panel_path" <<'PY'
+import os, sys
+env, path = sys.argv[1:]
+lines = open(env, encoding="utf-8").read().splitlines() if os.path.exists(env) else []
+found = False
+out = []
+for row in lines:
+    if row.startswith("JOJONET_PANEL_WEB_PATH="):
+        out.append(f"JOJONET_PANEL_WEB_PATH={path}")
+        found = True
+    else:
+        out.append(row)
+if not found:
+    out.append(f"JOJONET_PANEL_WEB_PATH={path}")
+open(env, "w", encoding="utf-8").write("\n".join(out) + "\n")
+os.chmod(env, 0o640)
+PY
+        cat >/etc/systemd/system/jojonet-panel-http.service <<EOF
+[Unit]
+Description=JojoNet Panel HTTP→HTTPS redirect
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$ENV_FILE
+ExecStart=/usr/bin/python3 $redirect_py
+Restart=on-failure
+RestartSec=2
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        chmod 0644 /etc/systemd/system/jojonet-panel-http.service
+        if command -v ufw >/dev/null 2>&1 && [[ "$(ufw status 2>/dev/null || true)" == *"Status: active"* ]]; then
+            ufw allow 80/tcp comment jojonet-panel-http >/dev/null 2>&1 || true
+        fi
+        systemctl daemon-reload
+        systemctl enable jojonet-panel-http.service >/dev/null 2>&1 || true
+        systemctl restart jojonet-panel-http.service >/dev/null 2>&1 || true
+    fi
+fi
 
 released=0
 systemctl restart jojonet-panel.service

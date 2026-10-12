@@ -366,9 +366,14 @@ def test_installer_socket_activation_and_rollback():
     assert "apply-ssl" in text
     assert "without closing the port" in text
     assert "socket_listen_now" in text
+    assert "ensure_http_redirect" in text
+    assert "http-redirect.py" in text
     ssl = (REPO / "panel" / "apply-ssl").read_text(encoding="utf-8")
     assert "certbot certonly" in ssl
     assert "flock -n 9" in ssl
+    assert "jojonet-panel-http.service" in ssl
+    redirect = (REPO / "panel" / "http-redirect.py").read_text(encoding="utf-8")
+    assert "Moved permanently" in redirect and "JOJONET_PANEL_DOMAIN" in redirect
 
 
 def test_ssl_domain_view_and_certificate(tmp_path):

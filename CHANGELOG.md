@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0 / panel 1.3.43
+- With a Let's Encrypt certificate on port 443, HTTP on port 80 permanently redirects to the HTTPS panel URL so browsers no longer show "Not secure".
+- Visiting `https://domain/` redirects to the panel entry path when the SSL domain is configured.
+
 ## 1.6.0 / panel 1.3.42
 - Failed paid tunnel deploys refund the wallet charge; deposit approval is transactional.
 - Order fulfill lets the owner supply SSH secrets and mode options (Spoof, DNSTT, Xray, ICMP).

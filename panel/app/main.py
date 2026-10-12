@@ -107,9 +107,10 @@ class SelectiveGZip:
 class SecretPathGate:
     """Drop every request that is not under the secret panel path. Bare IP returns an empty 404."""
 
-    def __init__(self, app: ASGIApp, entry: PanelEntry) -> None:
+    def __init__(self, app: ASGIApp, entry: PanelEntry, domain: str = "") -> None:
         self.app = app
         self.entry = entry
+        self.domain = (domain or "").strip().lower().rstrip(".")
 
     def _allowed(self, path: str) -> bool:
         base = self.entry.path
@@ -120,6 +121,16 @@ class SecretPathGate:
             return False
         return len(path) == len(base) or path[len(base)] == "/"
 
+    def _request_host(self, scope: Scope) -> str:
+        for key, value in scope.get("headers") or []:
+            if key == b"host":
+                host = value.decode("latin-1", "ignore").strip().lower()
+                if host.startswith("["):
+                    return host.split("]", 1)[0] + "]"
+                name, sep, port = host.rpartition(":")
+                return name if sep and port.isdigit() else host
+        return ""
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
@@ -128,6 +139,14 @@ class SecretPathGate:
         raw = path.lower()
         base = self.entry.path
         if ".." in path or "\\" in path or "%2e" in raw or "%2f" in raw or not self._allowed(path):
+            if (
+                scope["type"] == "http"
+                and self.domain
+                and path in ("/", "")
+                and self._request_host(scope) == self.domain
+            ):
+                await self._redirect_root(scope, send)
+                return
             await self._deny(scope, send)
             return
         rest = path[len(base) :] or "/"
@@ -140,6 +159,22 @@ class SecretPathGate:
         if raw_path.startswith(base_bytes):
             forwarded["raw_path"] = raw_path[len(base_bytes) :] or b"/"
         await self.app(forwarded, receive, send)
+
+    async def _redirect_root(self, scope: Scope, send: Send) -> None:
+        loc = f"https://{self.domain}{self.entry.path}/".encode("ascii", "replace")
+        await send({
+            "type": "http.response.start",
+            "status": 301,
+            "headers": [
+                (b"location", loc),
+                (b"content-length", b"0"),
+                (b"cache-control", b"no-store"),
+                (b"strict-transport-security", b"max-age=31536000; includeSubDomains"),
+                (b"x-content-type-options", b"nosniff"),
+                (b"x-robots-tag", b"noindex, nofollow"),
+            ],
+        })
+        await send({"type": "http.response.body", "body": b""})
 
     async def _deny(self, scope: Scope, send: Send) -> None:
         if scope["type"] == "websocket":
@@ -2905,5 +2940,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.mount("/static", VersionedStaticFiles(directory=str(settings.static_dir), check_dir=False, version=asset_version), name="static")
     app.add_middleware(SelectiveGZip)
-    app.add_middleware(SecretPathGate, entry=entry)
+    app.add_middleware(SecretPathGate, entry=entry, domain=settings.domain)
     return app
