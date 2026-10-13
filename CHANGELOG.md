@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.4 / panel 1.3.53
+- **Wstunnel**: post-start runtime check accepts the userspace process / active unit (was wrongly requiring a TUN iface like GRE, so panel deploys rolled back a healthy service).
+
 ## 1.6.3 / panel 1.3.52
 - **Hysteria2**: pin amd64 SHA-256 for `app/v2.13.0` so non-interactive panel deploys accept the download.
 

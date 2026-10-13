@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.3"
+readonly JOJONET_VERSION="1.6.4"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -3902,6 +3902,11 @@ EOF
         elif [[ "$tunnel_mode" == "rathole" ]]; then
             pgrep -f "rathole.*${ins_name}\\.toml" >/dev/null 2>&1 && iface_ok=1
             [[ -f "${rh_toml:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
+        elif [[ "$tunnel_mode" == "wstunnel" ]]; then
+            # Userspace reverse WS — no TUN/iface; accept process or active unit + cmd file.
+            pgrep -x wstunnel >/dev/null 2>&1 && iface_ok=1
+            pgrep -f "wstunnel.*${ins_name}" >/dev/null 2>&1 && iface_ok=1
+            [[ -f "${ws_cmd:-}" ]] && systemctl is-active --quiet "$svc_unit" && iface_ok=1
         elif xray_mode "$tunnel_mode"; then
             xray_process_running "$ins_name" && iface_ok=1
         elif stream_mode "$tunnel_mode"; then
