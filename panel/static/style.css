@@ -6894,17 +6894,31 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
 
 .cust-wallet {
   display: inline-flex;
-  align-items: center;
+  flex-direction: row;
+  align-items: baseline;
   justify-content: center;
+  gap: .35rem;
   min-width: 5.5rem;
-  padding: .4rem .65rem;
+  padding: .4rem .7rem;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   background: color-mix(in srgb, var(--bg) 70%, var(--surface));
   font-size: .92rem;
   font-weight: 800;
+}
+
+.cust-wallet-n {
   font-variant-numeric: tabular-nums;
   font-family: var(--mono);
+  font-weight: 800;
+  order: 0;
+}
+
+.cust-wallet-cur {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+  order: 0;
 }
 
 .cust-col-perms {

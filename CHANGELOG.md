@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.24 / panel 1.3.77
+- **Customers wallet**: show amount on the right and currency (تومان) on the left in RTL.
+
 ## 1.6.23 / panel 1.3.76
 - **Customers access/actions**: permissions become a fixed 2×2 toggle grid; actions become a stacked Edit + Wallet/More bar so rows stay aligned.
 

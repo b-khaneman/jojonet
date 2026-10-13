@@ -3405,7 +3405,9 @@
       h('div', { class: 'cust-td cust-col-wallet', role: 'cell', 'data-label': 'کیف پول' },
         owner
           ? h('span', { class: 'muted' }, '—')
-          : h('span', { class: 'cust-wallet', dir: 'ltr' }, fmtMoney(u.wallet_balance || 0))),
+          : h('span', { class: 'cust-wallet', title: fmtMoney(u.wallet_balance || 0) },
+              h('span', { class: 'cust-wallet-n', dir: 'ltr' }, fmtNum(u.wallet_balance || 0)),
+              h('span', { class: 'cust-wallet-cur' }, currencyLabel()))),
       h('div', { class: 'cust-td cust-col-perms', role: 'cell', 'data-label': 'دسترسی' },
         h('div', { class: 'cust-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
           permBtn('allow_vpn', !!u.allow_vpn, 'VPN'),
