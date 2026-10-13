@@ -1,8 +1,13 @@
 * text=auto eol=lf
 jojonet text eol=lf
 *.sh text eol=lf
+*.md text eol=lf
 panel/apply-listen text eol=lf
 panel/apply-ssl text eol=lf
 *.py text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
 *.pdf binary
 *.zip binary
+*.woff2 binary

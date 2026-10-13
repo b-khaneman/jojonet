@@ -3154,10 +3154,14 @@
     });
   }
 
+  function quotaIsClosed(max) {
+    return max != null && max !== '' && Number(max) === 0;
+  }
+
   function userIsPending(u) {
     if (!u || u.role === 'owner') return false;
     const capsOff = !u.allow_vpn && !u.allow_relay && !u.allow_os_update && !u.allow_term;
-    const quotasLocked = Number(u.max_servers) === 0 && Number(u.max_tunnels) === 0 && Number(u.max_relays) === 0;
+    const quotasLocked = quotaIsClosed(u.max_servers) && quotaIsClosed(u.max_tunnels) && quotaIsClosed(u.max_relays);
     return capsOff && quotasLocked;
   }
 
@@ -3260,9 +3264,9 @@
 
     const quotaTile = (kind, label, mark, usedRaw, maxRaw) => {
       const used = Number(usedRaw) || 0;
+      const closed = quotaIsClosed(maxRaw);
       const hasCap = !(maxRaw == null || maxRaw === '');
       const max = hasCap ? Number(maxRaw) : null;
-      const closed = hasCap && max === 0;
       const unlimited = !hasCap;
       let tone = 'ok';
       let pct = 0;
@@ -3329,14 +3333,14 @@
         }, label);
         item.addEventListener('click', () => {
           closeUserMenus();
-          onClick();
+          onClick(item);
         });
         panel.appendChild(item);
       };
       addItem('وضعیت کامل', () => openUserOverview(u));
       addItem('تمدید اشتراک', () => openExtendUser(u));
-      addItem(u.enabled ? 'غیرفعال کردن' : 'فعال کردن', () => {
-        act(primary, async () => {
+      addItem(u.enabled ? 'غیرفعال کردن' : 'فعال کردن', (btn) => {
+        act(btn, async () => {
           await api('PATCH', `/api/users/${enc(u.id)}`, { enabled: !u.enabled });
           toast(u.enabled ? `حساب «${u.username}» غیرفعال شد.` : `حساب «${u.username}» فعال شد.`, 'success');
           await load('users');
@@ -4513,7 +4517,7 @@
   }
 
   function closeOrdersCustomer() {
-    if (state.ordersCustomerId == null && !state.ordersCustomerName) return;
+    if (state.ordersCustomerId == null && state.ordersCustomerName == null) return;
     state.ordersCustomerId = null;
     state.ordersCustomerName = null;
     renderOrders();
@@ -4594,11 +4598,16 @@
     }
 
     const rows = filteredOrders();
+    const filtered = !!(state.ordersQuery || '').trim() || (state.ordersStatus && state.ordersStatus !== 'all');
     if (summary) {
-      const actionN = (lists.orders.data || []).filter(orderNeedsAction).length;
-      summary.textContent = state.ordersCustomerId != null
-        ? `${fmtNum(rows.length)} سفارش این مشتری`
-        : `${fmtNum(orderCustomerGroups(rows).length)} مشتری · ${fmtNum(rows.length)} سفارش${actionN ? ` · ${fmtNum(actionN)} نیازمند اقدام` : ''}`;
+      const actionN = all.filter(orderNeedsAction).length;
+      if (state.ordersCustomerId != null) {
+        summary.textContent = `${fmtNum(rows.length)} سفارش این مشتری`;
+      } else if (filtered) {
+        summary.textContent = `${fmtNum(orderCustomerGroups(rows).length)} مشتری در فیلتر · ${fmtNum(rows.length)} سفارش${actionN ? ` · ${fmtNum(actionN)} نیازمند اقدام` : ''}`;
+      } else {
+        summary.textContent = `${fmtNum(orderCustomerGroups(all).length)} مشتری · ${fmtNum(all.length)} سفارش${actionN ? ` · ${fmtNum(actionN)} نیازمند اقدام` : ''}`;
+      }
       summary.hidden = !all.length;
     }
 
@@ -4619,7 +4628,9 @@
       return;
     }
 
-    const groups = orderCustomerGroups(rows);
+    // Directory cards keep full per-customer totals; only visibility follows the active filter.
+    const hitIds = new Set(rows.map((o) => o.customer_id));
+    const groups = orderCustomerGroups(all).filter((g) => !filtered || hitIds.has(g.id));
     box.replaceChildren();
     if (!groups.length) {
       if (customersBox) {

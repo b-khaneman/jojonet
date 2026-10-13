@@ -5144,11 +5144,13 @@ html[data-theme="day"] .ssl-fact-label { color: #b45309; }
 }
 .ord-panel.is-iran {
   border-color: color-mix(in srgb, var(--chip-iran) 42%, var(--border));
-  box-shadow: inset -.2rem 0 0 color-mix(in srgb, var(--chip-iran) 75%, transparent);
+  border-inline-start: .2rem solid color-mix(in srgb, var(--chip-iran) 75%, transparent);
+  box-shadow: none;
 }
 .ord-panel.is-kharej {
   border-color: color-mix(in srgb, var(--chip-kharej) 42%, var(--border));
-  box-shadow: inset -.2rem 0 0 color-mix(in srgb, var(--chip-kharej) 75%, transparent);
+  border-inline-start: .2rem solid color-mix(in srgb, var(--chip-kharej) 75%, transparent);
+  box-shadow: none;
 }
 .ord-panel-h {
   display: flex;
@@ -6507,7 +6509,7 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 10px 28px rgba(0, 0, 0, .05);
 }
 
@@ -6628,7 +6630,8 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
 }
 
 .cust-row.is-pending {
-  box-shadow: inset -.2rem 0 0 color-mix(in srgb, var(--warn, #c9892e) 70%, transparent);
+  box-shadow: none;
+  border-inline-start: .2rem solid color-mix(in srgb, var(--warn, #c9892e) 75%, transparent);
 }
 
 .cust-row.is-off {
@@ -6787,12 +6790,15 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
 }
 
 .cust-qtile-v {
+  min-width: 0;
   font-size: .78rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   font-family: var(--mono);
   line-height: 1.15;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cust-qtile-bar {
@@ -7073,12 +7079,13 @@ button.perm-btn:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cust-list-area {
+  /* Avoid a nested scrollport that clips action menus / sticky header. */
+  .cust-list-wrap {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
 
-  .cust-table {
+  .cust-panel {
     min-width: 60rem;
   }
 }
@@ -7125,7 +7132,15 @@ button.perm-btn:hover {
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
     margin: .65rem .75rem;
-    overflow: hidden;
+    overflow: visible;
+  }
+
+  .cust-panel {
+    min-width: 0;
+  }
+
+  .cust-list-wrap {
+    overflow: visible;
   }
 
   .cust-tr + .cust-tr {

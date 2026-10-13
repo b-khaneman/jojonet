@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.21 / panel 1.3.74
+- **Debug pass**: normalize `jojonet` to LF (fixes broken bundle tar); pending customers no longer treat unlimited quotas as locked; orders directory keeps full customer totals under filters; customer action menus no longer clip; RTL accent borders use logical edges.
+
 ## 1.6.20 / panel 1.3.73
 - **Customers table**: true grid look with vertical column rules so each section (account, status, quota, wallet, access, actions) is visually separated.
 
