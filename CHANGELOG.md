@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.18 / panel 1.3.71
+- **Orders**: when drilling into a username, show a clear close/back bar and Escape to return to the customer list (back control no longer scrolls out of view).
+
 ## 1.6.17 / panel 1.3.70
 - **Customers list**: replace scattered cards with a dense aligned table (account, status, quota, wallet, access, actions); sticky header, search/filter toolbar, and stacked mobile rows.
 

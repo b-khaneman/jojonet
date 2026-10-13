@@ -4453,12 +4453,12 @@
     if (crumb) {
       crumb.hidden = !viewing;
       if (viewing) {
-        const back = h('button', { type: 'button', class: 'ord-crumb-link' }, 'همه مشتریان');
-        back.addEventListener('click', () => {
-          state.ordersCustomerId = null;
-          state.ordersCustomerName = null;
-          renderOrders();
-        });
+        const back = h('button', {
+          type: 'button',
+          class: 'ord-crumb-link',
+          title: 'بازگشت به فهرست مشتریان',
+        }, 'همه مشتریان');
+        back.addEventListener('click', () => closeOrdersCustomer());
         crumb.replaceChildren(
           back,
           h('span', { class: 'ord-crumb-sep', 'aria-hidden': 'true' }, '/'),
@@ -4473,12 +4473,43 @@
     }
   }
 
+  function closeOrdersCustomer() {
+    if (state.ordersCustomerId == null && !state.ordersCustomerName) return;
+    state.ordersCustomerId = null;
+    state.ordersCustomerName = null;
+    renderOrders();
+    const shell = $('#orders-admin-shell');
+    if (shell) shell.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function openOrdersCustomer(g) {
     state.ordersCustomerId = g.id;
     state.ordersCustomerName = g.username;
     renderOrders();
-    const list = $('#orders-list');
-    if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const shell = $('#orders-admin-shell');
+    if (shell) shell.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function ordersCustomerBar() {
+    const name = state.ordersCustomerName || 'مشتری';
+    const back = h('button', {
+      type: 'button',
+      class: 'btn btn-sm ord-back-btn',
+      title: 'بستن و بازگشت به فهرست مشتریان',
+    }, 'بازگشت به مشتریان');
+    back.addEventListener('click', () => closeOrdersCustomer());
+    const close = h('button', {
+      type: 'button',
+      class: 'btn btn-sm ord-close-btn',
+      'aria-label': 'بستن',
+      title: 'بستن',
+    }, 'بستن');
+    close.addEventListener('click', () => closeOrdersCustomer());
+    return h('div', { class: 'ord-focus-bar', role: 'status' },
+      h('div', { class: 'ord-focus-text' },
+        h('span', { class: 'ord-focus-kicker' }, 'در حال مشاهده'),
+        h('strong', { class: 'ord-focus-name', dir: 'ltr' }, name)),
+      h('div', { class: 'ord-focus-actions' }, back, close));
   }
 
   function orderCustomerCard(g) {
@@ -4540,11 +4571,12 @@
 
     if (state.ordersCustomerId != null) {
       if (customersBox) { customersBox.hidden = true; customersBox.replaceChildren(); }
+      const bar = ordersCustomerBar();
       if (!rows.length) {
-        box.replaceChildren(emptyState('سفارشی با این فیلتر نیست.', 'جستجو یا دسته وضعیت را عوض کنید.'));
+        box.replaceChildren(bar, emptyState('سفارشی با این فیلتر نیست.', 'جستجو یا دسته وضعیت را عوض کنید.'));
         return;
       }
-      box.replaceChildren(...rows.map(orderCard));
+      box.replaceChildren(bar, ...rows.map(orderCard));
       return;
     }
 
@@ -6912,6 +6944,14 @@
         renderOrders();
       });
     }
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (state.tab !== 'orders' || !isOwner()) return;
+      if (state.ordersCustomerId == null) return;
+      if (document.querySelector('.modal-root, .modal-backdrop, dialog[open]')) return;
+      e.preventDefault();
+      closeOrdersCustomer();
+    });
     const orderForm = $('#order-form');
     if (orderForm) {
       orderForm.addEventListener('submit', onCreateOrder);

@@ -5335,6 +5335,51 @@ html[data-theme="day"] .ssl-fact-label { color: #b45309; }
   text-underline-offset: .18em;
 }
 
+.ord-focus-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem .85rem;
+  padding: .75rem .9rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border-strong));
+  border-radius: var(--radius);
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--primary) 10%, transparent), transparent 55%),
+    var(--surface);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .04);
+}
+
+.ord-focus-text {
+  display: flex;
+  flex-direction: column;
+  gap: .12rem;
+  min-width: 0;
+}
+
+.ord-focus-kicker {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.ord-focus-name {
+  font-size: 1rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.ord-focus-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem;
+}
+
+.ord-close-btn {
+  font-weight: 800;
+}
+
 .ord-crumb-sep {
   color: var(--muted);
 }
