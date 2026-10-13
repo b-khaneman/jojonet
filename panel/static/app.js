@@ -3243,17 +3243,22 @@
       : (u.expires_at ? `${fmtTime(u.expires_at)}${days != null ? ` · ${fmtNum(days)} روز` : ''}` : 'بدون انقضا');
 
     const permBtn = (key, on, label) => {
+      const kids = [
+        h('span', { class: 'cust-perm-dot', 'aria-hidden': 'true' }),
+        h('span', { class: 'cust-perm-label' }, label),
+        h('span', { class: 'cust-perm-state' }, on ? 'روشن' : 'خاموش'),
+      ];
       if (owner) {
         return h('span', {
-          class: on ? 'cust-perm is-on' : 'cust-perm',
+          class: on ? 'cust-perm is-on' : 'cust-perm is-off',
           title: `${label}: ${on ? 'روشن' : 'خاموش'}`,
-        }, label);
+        }, ...kids);
       }
       const btn = h('button', {
         type: 'button',
-        class: on ? 'cust-perm is-on' : 'cust-perm',
+        class: on ? 'cust-perm is-on' : 'cust-perm is-off',
         title: on ? `خاموش کردن ${label}` : `روشن کردن ${label}`,
-      }, label);
+      }, ...kids);
       btn.addEventListener('click', () => act(btn, async () => {
         await api('PATCH', `/api/users/${enc(u.id)}`, { [key]: !on });
         toast(`${label} «${u.username}» ${on ? 'خاموش' : 'روشن'} شد.`, 'success');
@@ -3367,7 +3372,9 @@
         toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
       menu.append(toggle, panel);
-      actions = h('div', { class: 'cust-row-actions' }, primary, walletBtn, menu);
+      actions = h('div', { class: 'cust-row-actions' },
+        h('div', { class: 'cust-act-main' }, primary),
+        h('div', { class: 'cust-act-side' }, walletBtn, menu));
     }
 
     return h('article', {

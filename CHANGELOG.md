@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.23 / panel 1.3.76
+- **Customers access/actions**: permissions become a fixed 2×2 toggle grid; actions become a stacked Edit + Wallet/More bar so rows stay aligned.
+
 ## 1.6.22 / panel 1.3.75
 - **Customers panel**: larger equal-width header and table, clearer column rules, roomier cells, and a fuller search toolbar aligned to the grid.
 
