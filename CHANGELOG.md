@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.15 / panel 1.3.68
+- **Customers list**: card layout instead of cramped table; primary Edit/Wallet actions with overflow menu for the rest; clearer usage and permission rows.
+
 ## 1.6.14 / panel 1.3.67
 - **Owner orders**: search, status categories, customer directory; click a username to open that user's order cards in the same layout.
 

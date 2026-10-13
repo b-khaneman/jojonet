@@ -3193,11 +3193,21 @@
     el.hidden = !all.length;
   }
 
+  function closeUserMenus(except) {
+    document.querySelectorAll('.cust-menu.is-open').forEach((el) => {
+      if (except && el === except) return;
+      el.classList.remove('is-open');
+      const t = el.querySelector('.cust-menu-toggle');
+      if (t) t.setAttribute('aria-expanded', 'false');
+    });
+  }
+
   function renderUsers() {
     const box = $(lists.users.el);
     const all = lists.users.data || [];
     const data = filteredUsers();
     paintUsersSummary(all, data);
+    closeUserMenus();
     if (!all.length) {
       box.replaceChildren(emptyState('هنوز مشتری‌ای نیست.', 'از فرم بالا بسازید یا ثبت‌نام عمومی را باز کنید.'));
       return;
@@ -3206,16 +3216,8 @@
       box.replaceChildren(emptyState('نتیجه‌ای پیدا نشد.', 'جستجو یا فیلتر را عوض کنید.'));
       return;
     }
-    box.replaceChildren(h('div', { class: 'cust-board' },
-      h('div', { class: 'cust-table', role: 'table', 'aria-label': 'فهرست مشتریان' },
-        h('div', { class: 'cust-tr cust-th', role: 'row' },
-          h('div', { class: 'cust-td', role: 'columnheader' }, 'حساب'),
-          h('div', { class: 'cust-td', role: 'columnheader' }, 'وضعیت'),
-          h('div', { class: 'cust-td', role: 'columnheader' }, 'مصرف'),
-          h('div', { class: 'cust-td', role: 'columnheader' }, 'انقضا / ایمیل'),
-          h('div', { class: 'cust-td', role: 'columnheader' }, 'دسترسی'),
-          h('div', { class: 'cust-td', role: 'columnheader' }, 'عملیات')),
-        ...data.map(userCard))));
+    box.replaceChildren(h('div', { class: 'cust-stack', role: 'list', 'aria-label': 'فهرست مشتریان' },
+      ...data.map(userCard)));
   }
 
   function userCard(u) {
@@ -3224,52 +3226,21 @@
     const days = u.days_left;
     const pending = userIsPending(u);
     const status = userStatusInfo(u);
-
-    const editBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, pending ? 'تخصیص دسترسی' : 'ویرایش');
-    if (editBtn) editBtn.addEventListener('click', () => openEditUser(u));
-    const walletBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'کیف پول');
-    if (walletBtn) walletBtn.addEventListener('click', () => openWalletAdjust(u));
-    const overviewBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'وضعیت');
-    if (overviewBtn) overviewBtn.addEventListener('click', () => openUserOverview(u));
-    const extendBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'تمدید');
-    if (extendBtn) extendBtn.addEventListener('click', () => openExtendUser(u));
-
-    const toggleBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, u.enabled ? 'غیرفعال' : 'فعال');
-    if (toggleBtn) toggleBtn.addEventListener('click', () => act(toggleBtn, async () => {
-      await api('PATCH', `/api/users/${enc(u.id)}`, { enabled: !u.enabled });
-      toast(u.enabled ? `حساب «${u.username}» غیرفعال شد.` : `حساب «${u.username}» فعال شد.`, 'success');
-      await load('users');
-    }));
-
-    const pwBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'رمز');
-    if (pwBtn) pwBtn.addEventListener('click', () => openResetUserPassword(u));
-
-    const delBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'حذف');
-    if (delBtn) delBtn.addEventListener('click', async () => {
-      const ok = await confirmDialog({
-        title: 'حذف مشتری',
-        message: `حساب «${u.username}» حذف شود؟ نشست‌ها قطع می‌شوند.`,
-        okText: 'حذف',
-        danger: true,
-      });
-      if (!ok) return;
-      act(delBtn, async () => {
-        await api('DELETE', `/api/users/${enc(u.id)}`);
-        toast(`حساب «${u.username}» حذف شد.`, 'success');
-        await load('users');
-      });
-    });
-
+    const signup = !!(u.note && String(u.note).includes('ثبت‌نام عمومی'));
     const expiry = owner
       ? 'بدون انقضا'
-      : (u.expires_at ? `${fmtTime(u.expires_at)}${days != null ? ` (${fmtNum(days)} روز)` : ''}` : 'بدون انقضا');
+      : (u.expires_at ? `${fmtTime(u.expires_at)}${days != null ? ` · ${fmtNum(days)} روز` : ''}` : 'بدون انقضا');
+
     const permBtn = (key, on, label) => {
       if (owner) {
-        return h('span', { class: on ? 'perm is-on' : 'perm', title: `${label}: ${on ? 'روشن' : 'خاموش'}` }, label);
+        return h('span', {
+          class: on ? 'cust-perm is-on' : 'cust-perm',
+          title: `${label}: ${on ? 'روشن' : 'خاموش'}`,
+        }, label);
       }
       const btn = h('button', {
         type: 'button',
-        class: on ? 'perm is-on perm-btn' : 'perm perm-btn',
+        class: on ? 'cust-perm is-on' : 'cust-perm',
         title: on ? `خاموش کردن ${label}` : `روشن کردن ${label}`,
       }, label);
       btn.addEventListener('click', () => act(btn, async () => {
@@ -3279,18 +3250,81 @@
       }));
       return btn;
     };
-    const metric = (label, value) => h('div', { class: 'cust-metric' },
-      h('span', { class: 'cust-metric-k' }, label),
-      h('span', { class: 'cust-metric-v', dir: 'ltr' }, value));
 
-    const actions = [editBtn, overviewBtn, walletBtn, extendBtn, toggleBtn, pwBtn, delBtn].filter(Boolean);
-    const signup = !!(u.note && String(u.note).includes('ثبت‌نام عمومی'));
+    const stat = (label, value) => h('div', { class: 'cust-stat' },
+      h('span', { class: 'cust-stat-k' }, label),
+      h('strong', { class: 'cust-stat-v', dir: 'ltr' }, value));
+
+    let actions = null;
+    if (!owner) {
+      const primary = h('button', {
+        type: 'button',
+        class: 'btn btn-sm btn-primary',
+      }, pending ? 'تخصیص دسترسی' : 'ویرایش');
+      primary.addEventListener('click', () => openEditUser(u));
+
+      const walletBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'کیف پول');
+      walletBtn.addEventListener('click', () => openWalletAdjust(u));
+
+      const menu = h('div', { class: 'cust-menu' });
+      const toggle = h('button', {
+        type: 'button',
+        class: 'btn btn-sm cust-menu-toggle',
+        'aria-haspopup': 'menu',
+        'aria-expanded': 'false',
+        title: 'بیشتر',
+      }, '⋯');
+      const panel = h('div', { class: 'cust-menu-panel', role: 'menu' });
+      const addItem = (label, onClick, danger) => {
+        const item = h('button', {
+          type: 'button',
+          class: danger ? 'cust-menu-item is-danger' : 'cust-menu-item',
+          role: 'menuitem',
+        }, label);
+        item.addEventListener('click', () => {
+          closeUserMenus();
+          onClick();
+        });
+        panel.appendChild(item);
+      };
+      addItem('وضعیت کامل', () => openUserOverview(u));
+      addItem('تمدید اشتراک', () => openExtendUser(u));
+      addItem(u.enabled ? 'غیرفعال کردن' : 'فعال کردن', () => {
+        act(primary, async () => {
+          await api('PATCH', `/api/users/${enc(u.id)}`, { enabled: !u.enabled });
+          toast(u.enabled ? `حساب «${u.username}» غیرفعال شد.` : `حساب «${u.username}» فعال شد.`, 'success');
+          await load('users');
+        });
+      });
+      addItem('بازنشانی رمز', () => openResetUserPassword(u));
+      addItem('حذف حساب', async () => {
+        const ok = await confirmDialog({
+          title: 'حذف مشتری',
+          message: `حساب «${u.username}» حذف شود؟ نشست‌ها قطع می‌شوند.`,
+          okText: 'حذف',
+          danger: true,
+        });
+        if (!ok) return;
+        await api('DELETE', `/api/users/${enc(u.id)}`);
+        toast(`حساب «${u.username}» حذف شد.`, 'success');
+        await load('users');
+      }, true);
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = !menu.classList.contains('is-open');
+        closeUserMenus(menu);
+        menu.classList.toggle('is-open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      menu.append(toggle, panel);
+      actions = h('div', { class: 'cust-card-actions' }, primary, walletBtn, menu);
+    }
 
     return h('article', {
-      class: `cust-tr cust-row${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}${pending ? ' is-pending' : ''}`,
-      role: 'row',
+      class: `cust-card${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}${pending ? ' is-pending' : ''}`,
+      role: 'listitem',
     },
-      h('div', { class: 'cust-td cust-td-user', role: 'cell', 'data-label': 'حساب' },
+      h('div', { class: 'cust-card-top' },
         h('div', { class: 'cust-user' },
           h('span', { class: 'cust-avatar', 'aria-hidden': 'true' }, (u.username || '?').slice(0, 1).toUpperCase()),
           h('div', { class: 'cust-user-text' },
@@ -3299,30 +3333,25 @@
               h('span', { class: owner ? 'role-chip role-owner' : 'role-chip' }, owner ? 'مالک' : 'مشتری'),
               signup ? h('span', { class: 'role-chip role-signup' }, 'ثبت‌نام') : null,
               pending ? h('span', { class: 'role-chip role-pending' }, 'بدون دسترسی') : null),
-            u.note ? h('p', { class: 'cust-note' }, u.note) : null))),
-      h('div', { class: 'cust-td cust-td-status', role: 'cell', 'data-label': 'وضعیت' }, badge(status[0], status[1])),
-      h('div', { class: 'cust-td cust-td-usage', role: 'cell', 'data-label': 'مصرف' },
-        h('div', { class: 'cust-metrics' },
-          metric('سرور', limitText(usage.servers || 0, u.max_servers, '')),
-          metric('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
-          metric('رله', limitText(usage.relays || 0, u.max_relays, '')),
-          owner ? null : metric('کیف', fmtNum(u.wallet_balance || 0)))),
-      h('div', { class: 'cust-td cust-td-meta', role: 'cell', 'data-label': 'انقضا / ایمیل' },
-        h('div', { class: 'cust-meta' },
-          h('div', { class: 'cust-meta-row' },
-            h('span', { class: 'cust-meta-k' }, 'انقضا'),
-            h('span', { class: 'cust-meta-v' }, expiry)),
-          h('div', { class: 'cust-meta-row' },
-            h('span', { class: 'cust-meta-k' }, 'ایمیل'),
-            h('span', { class: 'cust-meta-v', dir: 'ltr' }, u.email || '—')))),
-      h('div', { class: 'cust-td cust-td-perms', role: 'cell', 'data-label': 'دسترسی' },
-        h('div', { class: 'user-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
+            u.note ? h('p', { class: 'cust-note' }, u.note) : null,
+            h('p', { class: 'cust-submeta' },
+              h('span', null, expiry),
+              h('span', { class: 'cust-dot', 'aria-hidden': 'true' }, '·'),
+              h('span', { dir: 'ltr' }, u.email || 'بدون ایمیل')))),
+        h('div', { class: 'cust-card-side' },
+          badge(status[0], status[1]),
+          owner ? null : h('span', { class: 'cust-wallet', dir: 'ltr' }, fmtMoney(u.wallet_balance || 0)))),
+      h('div', { class: 'cust-card-mid' },
+        h('div', { class: 'cust-stats', 'aria-label': 'مصرف' },
+          stat('سرور', limitText(usage.servers || 0, u.max_servers, '')),
+          stat('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
+          stat('رله', limitText(usage.relays || 0, u.max_relays, ''))),
+        h('div', { class: 'cust-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
           permBtn('allow_vpn', !!u.allow_vpn, 'VPN'),
           permBtn('allow_relay', !!u.allow_relay, 'رله'),
           permBtn('allow_os_update', !!u.allow_os_update, 'آپدیت'),
           permBtn('allow_term', !!u.allow_term, 'ترمینال'))),
-      h('div', { class: 'cust-td cust-td-actions', role: 'cell', 'data-label': 'عملیات' },
-        actions.length ? h('div', { class: 'cust-actions' }, ...actions) : h('span', { class: 'muted' }, '—')));
+      actions ? h('div', { class: 'cust-card-bottom' }, actions) : null);
   }
 
   function resetUserCreateForm() {
@@ -6843,6 +6872,7 @@
         renderUsers();
       });
     }
+    document.addEventListener('click', () => closeUserMenus());
     const ordersSearch = $('#orders-search');
     if (ordersSearch) {
       ordersSearch.addEventListener('input', () => {
