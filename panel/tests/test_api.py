@@ -740,6 +740,7 @@ def test_customer_orders_and_owner_decide_fulfill(client, admin, monkeypatch):
     assert created.status_code == 200, created.text
     order = created.json()
     assert order["status"] == "pending" and order["mode"] == "gre"
+    assert order["payment_status"] == "none" and order["payment_ready"] is True
     assert order["iran"]["has_access"] is True and "password" not in order["iran"]
 
     mine = client.get("/api/orders", headers=cauth)
@@ -793,6 +794,103 @@ def test_customer_orders_and_owner_decide_fulfill(client, admin, monkeypatch):
     assert cancelled_src.status_code == 200
     cid = cancelled_src.json()["id"]
     assert client.post(f"/api/orders/{cid}/cancel", headers=cauth).json()["status"] == "cancelled"
+
+
+def test_order_requires_invoice_payment_then_owner_confirms(client, admin, monkeypatch):
+    from test_tenants import add_customer, login_as
+
+    owner_auth = login_as(client, admin[0], admin[1])
+    add_customer(client, owner_auth, username="buyerpay", password="customer-pass-1", max_servers=4, max_tunnels=4)
+    sett = client.patch("/api/settings", json={
+        "sell_tunnels_enabled": True,
+        "payment_card": "6037-9999-8888-7777",
+        "payment_note": "به نام جو جو",
+        "wallet_currency": "تومان",
+        "tunnel_prices": {"gre": 75000},
+    }, headers=owner_auth)
+    assert sett.status_code == 200, sett.text
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "buyerpay", "customer-pass-1")
+
+    base = {
+        "mode": "gre",
+        "message": "سفارش پولی",
+        "iran": {
+            "name": "IR-PayOrd", "host": "10.8.1.1", "port": 22, "username": "root",
+            "auth_type": "password", "include_access": True, "password": "iran-pay-1",
+        },
+        "kharej": {
+            "name": "DE-PayOrd", "host": "10.8.2.2", "port": 22, "username": "root",
+            "auth_type": "password", "include_access": True, "password": "kharej-pay-1",
+        },
+    }
+    blocked = client.post("/api/orders", json=base, headers=cauth)
+    assert blocked.status_code == 402, blocked.text
+
+    created = client.post("/api/orders", json={
+        **base,
+        "payment": {
+            "method": "card",
+            "tracking_code": "ORD-TRK-99",
+            "amount": 75000,
+            "note": "واریز کارت",
+        },
+    }, headers=cauth)
+    assert created.status_code == 200, created.text
+    order = created.json()
+    assert order["payment_status"] == "awaiting"
+    assert order["payment_ready"] is False
+    assert order["price"] == 75000
+    assert order["payment_tracking"] == "ORD-TRK-99"
+    assert order["deposit_id"]
+    oid = order["id"]
+
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    assert client.post(f"/api/orders/{oid}/decide", json={"action": "approve"}, headers=owner_auth).status_code == 409
+    assert client.post(f"/api/orders/{oid}/fulfill", json={}, headers=owner_auth).status_code == 402
+
+    confirmed = client.post(f"/api/orders/{oid}/confirm-payment", json={"action": "approve"}, headers=owner_auth)
+    assert confirmed.status_code == 200, confirmed.text
+    body = confirmed.json()
+    assert body["order"]["payment_status"] == "confirmed"
+    assert body["order"]["payment_ready"] is True
+    assert body["wallet_balance"] == 75000
+
+    async def deploy(job, tunnel_id):
+        await job.start(0)
+        await job.ok(0)
+        client.app.state.db.update("tunnels", tunnel_id, {"status": "ok"})
+
+    monkeypatch.setattr(client.app.state.orch, "job_deploy", deploy)
+    done = client.post(f"/api/orders/{oid}/fulfill", json={}, headers=owner_auth)
+    assert done.status_code == 200, done.text
+    assert done.json()["order"]["status"] == "done"
+    assert done.json()["charged"] == 75000
+    assert wait_job(client, done.json()["job_id"])["status"] == "ok"
+
+    # Second order paid from wallet balance after topping up again
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "buyerpay", "customer-pass-1")
+    # balance was charged to 0; deposit again via wallet then order with wallet path
+    dep = client.post("/api/wallet/deposits", json={
+        "amount": 80000, "method": "card", "tracking_code": "WAL-1", "note": "شارژ",
+    }, headers=cauth)
+    assert dep.status_code == 200
+    did = dep.json()["deposit"]["id"]
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    assert client.post(f"/api/wallet/deposits/{did}/decide", json={"action": "approve"}, headers=owner_auth).status_code == 200
+    client.post("/api/logout", headers=owner_auth)
+    cauth = login_as(client, "buyerpay", "customer-pass-1")
+    wallet_order = client.post("/api/orders", json={
+        **base,
+        "iran": {**base["iran"], "host": "10.8.3.3", "name": "IR-Pay2"},
+        "kharej": {**base["kharej"], "host": "10.8.4.4", "name": "DE-Pay2"},
+    }, headers=cauth)
+    assert wallet_order.status_code == 200, wallet_order.text
+    assert wallet_order.json()["payment_status"] == "wallet"
+    assert wallet_order.json()["payment_ready"] is True
 
 
 def test_support_tickets_with_optional_access(client, admin):

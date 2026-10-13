@@ -20,6 +20,12 @@
     done: ['ok', 'انجام شد'],
     cancelled: ['muted', 'لغو شده'],
   };
+  const ORDER_PAY_STATUS = {
+    none: ['muted', 'رایگان'],
+    wallet: ['ok', 'از کیف پول'],
+    awaiting: ['warn', 'منتظر تأیید واریز'],
+    confirmed: ['ok', 'واریز تأیید شد'],
+  };
   const TICKET_STATUS = {
     open: ['warn', 'باز'],
     answered: ['info', 'پاسخ‌داده‌شده'],
@@ -145,12 +151,22 @@
   const THEMES = ['jojo', 'day', 'night'];
   const THEME_DEFAULT = 'night';
 
+  const MGMT_PANES = ['customers', 'commerce', 'access', 'policies', 'mail'];
+  const MGMT_LEAD = {
+    customers: 'ساخت مشتری، سقف اشتراک و فهرست حساب‌ها.',
+    commerce: 'فروش تانل، کارت/ولت، قیمت‌ها و تأیید واریز.',
+    access: 'آدرس ورود پنل و گواهی SSL خود سرور مالک.',
+    policies: 'ثبت‌نام عمومی و نمایش ترمینال صفحه اصلی.',
+    mail: 'SMTP برای بازیابی رمز عبور مشتریان.',
+  };
+
   const state = {
     csrf: '',
     me: null,
     info: null,
     loggedIn: false,
     tab: 'servers',
+    mgmtPane: 'customers',
     pollTimer: null,
     jobView: null,
     vpnMon: null,
@@ -682,17 +698,17 @@
     const ordersLead = $('#orders-lead');
     if (ordersLead) {
       ordersLead.textContent = owner
-        ? 'سفارش‌های مشتریان را ببینید، تأیید یا رد کنید و بعد از تأیید تانل را انجام دهید.'
-        : 'مشخصات سرورها را بفرستید تا مالک بعد از تأیید، تانل را برایتان بزند.';
+        ? 'واریز فاکتور را تأیید کنید، بعد سفارش را تأیید یا انجام دهید.'
+        : 'فاکتور را بپردازید (کیف پول یا کارت)، بعد سفارش را بفرستید تا مالک واریز را تأیید و تانل را بزند.';
     }
+    updateOrderInvoice();
     const depCard = $('#deposit-card');
     if (depCard) depCard.hidden = owner;
-    const commerceCard = $('#commerce-card');
-    if (commerceCard) commerceCard.hidden = !owner;
     if (state.tab === 'users' && !owner) switchTab('servers');
     if (owner) {
       loadListen();
       loadSsl();
+      if (state.tab === 'users') switchMgmtPane(state.mgmtPane || 'customers', true);
     }
     if (state.tab === 'relays' && !can('allow_relay')) switchTab('servers');
     if ((state.tab === 'panels' || state.tab === 'outbounds') && !can('allow_vpn')) switchTab('servers');
@@ -3317,6 +3333,62 @@
     const modes = (state.info && Array.isArray(state.info.modes)) ? state.info.modes : [];
     fillSelect(sel, modes.map((m) => ({ value: m.id, label: m.label || m.id })), 'انتخاب نوع تانل…');
     syncModePicker(sel);
+    updateOrderInvoice();
+  }
+
+  function updateOrderInvoice() {
+    const box = $('#of-invoice');
+    if (!box) return;
+    const mode = $('#of-mode') && $('#of-mode').value;
+    const price = mode ? modePrice(mode) : 0;
+    const sell = !!commerce().sell_tunnels_enabled;
+    if (!mode || !sell || price <= 0 || isOwner()) {
+      box.hidden = true;
+      const payFields = $('#of-pay-fields');
+      if (payFields) payFields.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    const bal = (state.me && state.me.wallet_balance) || 0;
+    const amountEl = $('#of-invoice-amount');
+    if (amountEl) amountEl.textContent = fmtMoney(price);
+    const balEl = $('#of-invoice-balance');
+    if (balEl) {
+      balEl.textContent = bal >= price
+        ? `موجودی کیف پول کافی است (${fmtMoney(bal)}) — با ارسال سفارش از موجودی کسر می‌شود.`
+        : `موجودی فعلی: ${fmtMoney(bal)} — باید ${fmtMoney(price)} به کارت/ولت واریز کنید و کد پیگیری را بفرستید.`;
+    }
+    const pay = commerce().payment || {};
+    const payInfo = $('#of-invoice-payinfo');
+    if (payInfo) {
+      const bits = [];
+      if (pay.card) bits.push(`کارت: ${pay.card}`);
+      if (pay.wallet_address) bits.push(`ولت: ${pay.wallet_address}`);
+      if (pay.note) bits.push(pay.note);
+      payInfo.textContent = bits.join(' — ');
+    }
+    const hint = $('#of-invoice-hint');
+    const needPay = bal < price;
+    if (hint) {
+      hint.textContent = needPay
+        ? 'اول واریز کنید، بعد کد پیگیری را اینجا بزنید و سفارش را بفرستید. مالک باید واریز را تأیید کند تا سفارش انجام شود.'
+        : 'نیازی به واریز جدید نیست؛ مالک می‌تواند مستقیم سفارش را انجام دهد.';
+    }
+    const payFields = $('#of-pay-fields');
+    if (payFields) payFields.hidden = !needPay;
+    const amountInp = $('#of-pay-amount');
+    if (amountInp && needPay && !amountInp.value) amountInp.value = String(price);
+    const methodSel = $('#of-pay-method');
+    if (methodSel) {
+      const cardOk = !!pay.card;
+      const cryptoOk = !!pay.wallet_address;
+      for (const opt of methodSel.options) {
+        if (opt.value === 'card') opt.disabled = !cardOk;
+        if (opt.value === 'crypto') opt.disabled = !cryptoOk;
+      }
+      if (methodSel.value === 'card' && !cardOk && cryptoOk) methodSel.value = 'crypto';
+      if (methodSel.value === 'crypto' && !cryptoOk && cardOk) methodSel.value = 'card';
+    }
   }
 
   function orderServerPayload(prefix) {
@@ -3422,6 +3494,7 @@
         renderWallet();
         paintWalletChip();
         updateModePriceHint();
+        updateOrderInvoice();
         if (isOwner()) renderOwnerDeposits(data);
       } catch (err) {
         if (err.status === 401) return;
@@ -3493,7 +3566,12 @@
       okBtn.addEventListener('click', () => act(okBtn, async () => {
         await api('POST', `/api/wallet/deposits/${enc(d.id)}/decide`, { action: 'approve' });
         toast(`واریز #${d.id} تأیید و موجودی شارژ شد.`, 'success');
-        await Promise.all([loadWallet(), isOwner() ? loadOwnerDeposits() : Promise.resolve(), load('users')]);
+        await Promise.all([
+          loadWallet(),
+          isOwner() ? loadOwnerDeposits() : Promise.resolve(),
+          load('users'),
+          d.order_id ? load('orders') : Promise.resolve(),
+        ]);
         await refreshMe();
       }));
       noBtn.addEventListener('click', async () => {
@@ -3501,7 +3579,11 @@
         act(noBtn, async () => {
           await api('POST', `/api/wallet/deposits/${enc(d.id)}/decide`, { action: 'reject', note });
           toast(`واریز #${d.id} رد شد.`, 'info');
-          await Promise.all([loadWallet(), loadOwnerDeposits()]);
+          await Promise.all([
+            loadWallet(),
+            loadOwnerDeposits(),
+            d.order_id ? load('orders') : Promise.resolve(),
+          ]);
         });
       });
       actions.push(okBtn, noBtn);
@@ -3515,7 +3597,8 @@
             h('span', null, 'روش: ', h('b', null, method)),
             h('span', null, 'کد: ', h('b', { dir: 'ltr' }, d.tracking_code || '—')),
             isOwner() ? h('span', null, 'مشتری: ', h('b', { dir: 'ltr' }, d.username || '—')) : null,
-            mode ? h('span', null, 'تانل: ', h('b', null, mode)) : null)),
+            mode ? h('span', null, 'تانل: ', h('b', null, mode)) : null,
+            d.order_id ? h('span', null, 'سفارش: ', h('b', { dir: 'ltr' }, `#${d.order_id}`)) : null)),
         badge(st[0], st[1])),
       d.note ? h('p', { class: 'svc-msg' }, d.note) : null,
       d.owner_note ? h('p', { class: 'svc-msg' }, `یادداشت مالک: ${d.owner_note}`) : null,
@@ -4036,9 +4119,51 @@
       h('div', { style: 'display:grid;gap:.45rem;margin-top:.35rem' }, ...facts));
   }
 
+  function orderPaymentBlock(o) {
+    const price = Number(o.price) || 0;
+    const paySt = o.payment_status || (price > 0 ? 'awaiting' : 'none');
+    const [pk, pl] = ORDER_PAY_STATUS[paySt] || ['muted', paySt];
+    const cur = o.currency || currencyLabel();
+    const facts = [
+      h('div', { class: 'svc-fact' },
+        h('span', { class: 'svc-fact-k' }, 'فاکتور'),
+        h('span', { class: 'svc-fact-v' }, price > 0 ? `${fmtNum(price)} ${cur}` : 'رایگان')),
+      h('div', { class: 'svc-fact' },
+        h('span', { class: 'svc-fact-k' }, 'پرداخت'),
+        h('span', { class: 'svc-fact-v order-pay-badge' }, badge(pk, pl))),
+    ];
+    if (o.payment_method) {
+      facts.push(h('div', { class: 'svc-fact' },
+        h('span', { class: 'svc-fact-k' }, 'روش'),
+        h('span', { class: 'svc-fact-v' }, o.payment_method === 'crypto' ? 'ولت / رمزارز' : 'کارت به کارت')));
+    }
+    if (o.payment_tracking) {
+      facts.push(secretFact('کد پیگیری', o.payment_tracking, true));
+    }
+    if (o.payment_amount && Number(o.payment_amount) !== price) {
+      facts.push(h('div', { class: 'svc-fact' },
+        h('span', { class: 'svc-fact-k' }, 'مبلغ اعلام‌شده'),
+        h('span', { class: 'svc-fact-v' }, `${fmtNum(o.payment_amount)} ${cur}`)));
+    }
+    if (isOwner() && price > 0) {
+      if (o.payment_card) facts.push(secretFact('کارت شما', o.payment_card, true));
+      if (o.payment_wallet_address) facts.push(secretFact('ولت شما', o.payment_wallet_address, true));
+    }
+    if (o.deposit_id) {
+      facts.push(h('div', { class: 'svc-fact' },
+        h('span', { class: 'svc-fact-k' }, 'واریز'),
+        h('span', { class: 'svc-fact-v', dir: 'ltr' }, `#${o.deposit_id}`)));
+    }
+    return h('div', { class: 'svc-fact' },
+      h('span', { class: 'svc-fact-k' }, 'صورتحساب'),
+      h('div', { style: 'display:grid;gap:.45rem;margin-top:.35rem' }, ...facts));
+  }
+
   function orderCard(o) {
     const [kind, label] = ORDER_STATUS[o.status] || ['muted', o.status || '?'];
     const tone = orderTone(o.status);
+    const paySt = o.payment_status || 'none';
+    const payReady = o.payment_ready !== false && paySt !== 'awaiting';
     const actions = [];
     if (!isOwner() && o.status === 'pending') {
       const cancelBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'لغو');
@@ -4049,7 +4174,45 @@
       }));
       actions.push(cancelBtn);
     }
-    if (isOwner() && o.status === 'pending') {
+    if (isOwner() && o.status === 'pending' && paySt === 'awaiting') {
+      const payOk = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'تأیید واریز');
+      const payMark = h('button', { type: 'button', class: 'btn btn-sm' }, 'واریزی انجام شده');
+      const payNo = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'رد واریز');
+      payOk.addEventListener('click', () => act(payOk, async () => {
+        await api('POST', `/api/orders/${enc(o.id)}/confirm-payment`, { action: 'approve' });
+        toast('واریز تأیید و موجودی مشتری شارژ شد.', 'success');
+        await Promise.all([load('orders'), loadWallet(true), load('users')]);
+      }));
+      payMark.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'تأیید دستی واریز',
+          message: `واریز سفارش #${o.id} را بدون بررسی جداگانه تأیید می‌کنید؟`,
+          okText: 'بله، واریز شده',
+        });
+        if (!ok) return;
+        act(payMark, async () => {
+          await api('POST', `/api/orders/${enc(o.id)}/confirm-payment`, { action: 'mark_received' });
+          toast('واریز سفارش تأیید شد.', 'success');
+          await Promise.all([load('orders'), loadWallet(true), load('users')]);
+        });
+      });
+      payNo.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'رد واریز',
+          message: `واریز و سفارش #${o.id} رد شود؟`,
+          okText: 'رد',
+          danger: true,
+        });
+        if (!ok) return;
+        act(payNo, async () => {
+          await api('POST', `/api/orders/${enc(o.id)}/confirm-payment`, { action: 'reject' });
+          toast('واریز و سفارش رد شد.', 'info');
+          await Promise.all([load('orders'), loadWallet(true)]);
+        });
+      });
+      actions.push(payOk, payMark, payNo);
+    }
+    if (isOwner() && o.status === 'pending' && payReady) {
       const okBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'تأیید');
       const noBtn = h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'رد');
       okBtn.addEventListener('click', () => act(okBtn, async () => {
@@ -4068,7 +4231,7 @@
       });
       actions.push(okBtn, noBtn);
     }
-    if (isOwner() && (o.status === 'approved' || o.status === 'pending')) {
+    if (isOwner() && (o.status === 'approved' || o.status === 'pending') && payReady) {
       const goBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'انجام سفارش');
       goBtn.addEventListener('click', () => openFulfillModal(o));
       actions.push(goBtn);
@@ -4090,7 +4253,10 @@
         badge(kind, label)),
       h('div', { class: 'svc-meta' }, ...meta),
       o.message ? h('div', { class: 'svc-msg' }, o.message) : null,
-      h('div', { class: 'svc-grid' }, orderSideBlock('ایران', o.iran), orderSideBlock('خارج', o.kharej)),
+      h('div', { class: 'svc-grid' },
+        orderPaymentBlock(o),
+        orderSideBlock('ایران', o.iran),
+        orderSideBlock('خارج', o.kharej)),
       actions.length ? h('div', { class: 'svc-actions' }, ...actions) : null);
   }
 
@@ -4308,15 +4474,36 @@
     if (!IPV4_RE.test(iran.host) || !IPV4_RE.test(kharej.host)) return showErr(errBox, 'IP هر دو سرور باید IPv4 معتبر باشد.');
     if (iran.include_access && !iran.password) return showErr(errBox, 'رمز SSH سرور ایران را وارد کنید.');
     if (kharej.include_access && !kharej.password) return showErr(errBox, 'رمز SSH سرور خارج را وارد کنید.');
+    const price = modePrice(mode);
+    const bal = (state.me && state.me.wallet_balance) || 0;
     const payload = {
       mode,
       message: $('#of-message').value.trim() || null,
       iran,
       kharej,
     };
+    if (commerce().sell_tunnels_enabled && price > 0 && bal < price) {
+      const track = ($('#of-pay-track') && $('#of-pay-track').value || '').trim();
+      const amount = Number($('#of-pay-amount') && $('#of-pay-amount').value);
+      const method = ($('#of-pay-method') && $('#of-pay-method').value) || 'card';
+      const note = ($('#of-pay-note') && $('#of-pay-note').value || '').trim();
+      if (!track || track.length < 3) {
+        return showErr(errBox, 'ابتدا فاکتور را واریز کنید و کد پیگیری را وارد کنید.');
+      }
+      if (!Number.isInteger(amount) || amount < price) {
+        return showErr(errBox, `مبلغ واریز باید حداقل ${fmtMoney(price)} باشد.`);
+      }
+      payload.payment = { method, tracking_code: track, amount, note };
+    }
     act($('#of-submit'), async () => {
-      await api('POST', '/api/orders', payload);
-      toast('سفارش ثبت شد.', 'success');
+      const r = await api('POST', '/api/orders', payload);
+      const awaiting = r && r.payment_status === 'awaiting';
+      toast(
+        awaiting
+          ? 'سفارش ثبت شد. بعد از تأیید واریز توسط مالک انجام می‌شود.'
+          : 'سفارش ثبت شد.',
+        'success',
+      );
       $('#order-form').reset();
       $('#of-iran-port').value = '22';
       $('#of-kharej-port').value = '22';
@@ -4325,7 +4512,7 @@
       syncOrderAccess('iran');
       syncOrderAccess('kharej');
       fillOrderModeSelect();
-      await load('orders');
+      await Promise.all([load('orders'), loadWallet(true)]);
     });
   }
 
@@ -5181,6 +5368,9 @@
     if (state.loggedIn && name === 'users' && isOwner()) {
       load('users', true);
       loadSsl();
+      loadListen();
+      loadCommerceForm();
+      switchMgmtPane(state.mgmtPane || 'customers', true);
     }
     if (state.loggedIn && name === 'orders') load('orders', true);
     if (state.loggedIn && name === 'tickets') {
@@ -5188,7 +5378,38 @@
       if (ticketState.id) openTicketThread(ticketState.id, true);
     }
     if (state.loggedIn && name === 'wallet') loadWallet();
-    if (state.loggedIn && name === 'users' && isOwner()) loadCommerceForm();
+  }
+
+  function switchMgmtPane(name, silent) {
+    const pane = MGMT_PANES.includes(name) ? name : 'customers';
+    state.mgmtPane = pane;
+    for (const b of document.querySelectorAll('.mgmt-nav-btn')) {
+      const on = b.dataset.mgmt === pane;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    for (const id of MGMT_PANES) {
+      const el = $(`#mgmt-${id}`);
+      if (el) el.hidden = id !== pane;
+    }
+    const lead = $('#mgmt-lead');
+    if (lead) lead.textContent = MGMT_LEAD[pane] || MGMT_LEAD.customers;
+    if (!silent && !document.getElementById(`mgmtbtn-${pane}`)?.contains(document.activeElement)) {
+      /* keep focus where user clicked */
+    }
+    if (state.loggedIn && isOwner()) {
+      if (pane === 'customers') load('users', true);
+      if (pane === 'commerce') {
+        loadCommerceForm();
+        loadOwnerDeposits();
+      }
+      if (pane === 'access') {
+        loadListen();
+        loadSsl();
+      }
+      if (pane === 'policies' || pane === 'mail' || pane === 'commerce') loadCommerceForm();
+    }
   }
 
   function readTheme() {
@@ -5847,7 +6068,34 @@
     const refreshOut = $('#btn-refresh-outbounds');
     if (refreshOut) refreshOut.addEventListener('click', (e) => act(e.currentTarget, () => load('tunnels'), 'در حال بروزرسانی…'));
     const refreshUsers = $('#btn-refresh-users');
-    if (refreshUsers) refreshUsers.addEventListener('click', (e) => act(e.currentTarget, () => load('users'), 'در حال بروزرسانی…'));
+    if (refreshUsers) {
+      refreshUsers.addEventListener('click', (e) => act(e.currentTarget, async () => {
+        if (!isOwner()) return;
+        const pane = state.mgmtPane || 'customers';
+        if (pane === 'customers') await load('users');
+        else if (pane === 'commerce') await Promise.all([loadCommerceForm(), loadOwnerDeposits()]);
+        else if (pane === 'access') await Promise.all([loadListen(), loadSsl()]);
+        else await loadCommerceForm();
+      }, 'در حال بروزرسانی…'));
+    }
+    for (const btn of document.querySelectorAll('.mgmt-nav-btn')) {
+      btn.addEventListener('click', () => switchMgmtPane(btn.dataset.mgmt));
+      btn.addEventListener('keydown', (e) => {
+        const buttons = Array.from(document.querySelectorAll('.mgmt-nav-btn'));
+        const i = buttons.indexOf(btn);
+        if (i < 0) return;
+        let n = -1;
+        if (e.key === 'ArrowLeft') n = (i + 1) % buttons.length;
+        else if (e.key === 'ArrowRight') n = (i - 1 + buttons.length) % buttons.length;
+        else if (e.key === 'Home') n = 0;
+        else if (e.key === 'End') n = buttons.length - 1;
+        if (n >= 0) {
+          e.preventDefault();
+          switchMgmtPane(buttons[n].dataset.mgmt);
+          buttons[n].focus();
+        }
+      });
+    }
     const refreshOrders = $('#btn-refresh-orders');
     if (refreshOrders) refreshOrders.addEventListener('click', (e) => act(e.currentTarget, () => load('orders'), 'در حال بروزرسانی…'));
     const refreshTickets = $('#btn-refresh-tickets');
@@ -5859,6 +6107,11 @@
       orderForm.addEventListener('submit', onCreateOrder);
       bindOrderAccessToggle('iran');
       bindOrderAccessToggle('kharej');
+      const ofMode = $('#of-mode');
+      if (ofMode && !ofMode.dataset.invoiceBound) {
+        ofMode.dataset.invoiceBound = '1';
+        ofMode.addEventListener('change', updateOrderInvoice);
+      }
     }
     const ticketForm = $('#ticket-form');
     if (ticketForm) ticketForm.addEventListener('submit', onCreateTicket);

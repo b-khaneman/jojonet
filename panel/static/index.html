@@ -565,7 +565,7 @@
       <div class="section-head">
         <div>
           <h2>سفارش تانل</h2>
-          <p class="muted" id="orders-lead">مشخصات سرورها را بفرستید تا مالک بعد از تأیید، تانل را برایتان بزند.</p>
+          <p class="muted" id="orders-lead">فاکتور را بپردازید، سفارش بفرستید؛ مالک بعد از تأیید واریز، تانل را انجام می‌دهد.</p>
         </div>
         <div class="section-actions">
           <button id="btn-refresh-orders" class="btn btn-sm" type="button">بروزرسانی</button>
@@ -584,6 +584,36 @@
             <div class="field field-wide">
               <label for="of-message">توضیح برای مالک</label>
               <textarea id="of-message" rows="2" maxlength="2000" placeholder="مثلاً پورت‌های مورد نیاز یا نکتهٔ شبکه"></textarea>
+            </div>
+          </div>
+          <div id="of-invoice" class="order-invoice" hidden>
+            <div class="order-invoice-top">
+              <p class="order-invoice-kicker">فاکتور سفارش</p>
+              <p class="order-invoice-amount" id="of-invoice-amount">—</p>
+            </div>
+            <p class="muted" id="of-invoice-balance"></p>
+            <p class="order-invoice-pay" id="of-invoice-payinfo"></p>
+            <p class="hint" id="of-invoice-hint"></p>
+            <div id="of-pay-fields" class="form-grid" hidden>
+              <div class="field">
+                <label for="of-pay-method">روش واریز</label>
+                <select id="of-pay-method">
+                  <option value="card">کارت به کارت</option>
+                  <option value="crypto">ولت / رمزارز</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="of-pay-amount">مبلغ واریزشده</label>
+                <input id="of-pay-amount" type="number" dir="ltr" min="1000" step="1000">
+              </div>
+              <div class="field field-wide">
+                <label for="of-pay-track">کد پیگیری / TX</label>
+                <input id="of-pay-track" type="text" dir="ltr" maxlength="120" autocomplete="off" placeholder="بعد از واریز وارد کنید">
+              </div>
+              <div class="field field-wide">
+                <label for="of-pay-note">توضیح واریز <span class="muted">(اختیاری)</span></label>
+                <input id="of-pay-note" type="text" maxlength="1000" placeholder="مثلاً ساعت واریز یا نام واریزکننده">
+              </div>
             </div>
           </div>
           <div class="order-pair">
@@ -761,210 +791,268 @@
     <section id="tab-users" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-users" hidden>
       <div class="section-head">
         <div>
-          <h2>مدیریت مشتریان</h2>
-          <p class="muted">حساب مشتری بسازید، سقف و اشتراک بگذارید. هر مشتری فقط سرور و تانل خودش را می‌بیند.</p>
+          <h2>مدیریت</h2>
+          <p class="muted" id="mgmt-lead">مشتریان، فروش، آدرس پنل و تنظیمات دسترسی را از بخش‌های جداگانه مدیریت کنید.</p>
         </div>
         <div class="section-actions">
           <button id="btn-refresh-users" class="btn btn-sm" type="button">بروزرسانی</button>
         </div>
       </div>
-      <div class="card create-card" id="listen-card">
-        <h3 class="card-title">آدرس ورود پنل</h3>
-        <p class="muted">IP خالی پنل را باز نمی‌کند. مسیر ثابت پیش‌فرض <span dir="ltr">jojonet-panel-entry</span> است. پورت ۸۰ و ۴۴۳ هم مجاز است. بعد از ذخیره، پنل چند ثانیه قطع می‌شود و با آدرس جدید بالا می‌آید.</p>
-        <form id="listen-form" class="form" novalidate>
-          <div id="listen-error" class="form-error" role="alert" hidden></div>
-          <div class="form-grid">
-            <div class="field">
-              <label for="listen-path">مسیر</label>
-              <input id="listen-path" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="64" placeholder="jojonet-panel-entry">
-            </div>
-            <div class="field">
-              <label for="listen-port">پورت</label>
-              <input id="listen-port" type="number" dir="ltr" min="1" max="65535" required value="2053">
-            </div>
-          </div>
-          <p class="hint" dir="ltr" id="listen-url"></p>
-          <div class="form-actions">
-            <button id="listen-submit" class="btn btn-primary" type="submit">ذخیره آدرس</button>
-          </div>
-        </form>
-      </div>
-      <div class="card create-card" id="ssl-card">
-        <h3 class="card-title">گواهی SSL خودِ پنل</h3>
-        <p class="muted">فقط برای آدرس ورود همین پنل (سرور مالک). برای گواهی رایگان روی سرور مشتریان، از تب سرورها و دکمهٔ «گواهی SSL رایگان» استفاده کنید. رکورد A باید مستقیم به IP همین سرور پنل باشد و پروکسی خاموش باشد.</p>
-        <form id="ssl-form" class="form ssl-form" novalidate>
-          <div id="ssl-error" class="form-error" role="alert" hidden></div>
-          <div class="ssl-fields">
-            <div class="field ssl-field-domain">
-              <label for="ssl-domain" class="ssl-label">دامنهٔ پنل:</label>
-              <input id="ssl-domain" class="ssl-input" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="253" placeholder="panel.example.com">
-            </div>
-            <div class="field ssl-field-email">
-              <label for="ssl-email" class="ssl-label">ایمیل اطلاع‌رسانی:</label>
-              <input id="ssl-email" class="ssl-input" type="text" inputmode="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="you@example.com">
-            </div>
-            <div class="ssl-field-action">
-              <button id="ssl-submit" class="btn btn-primary" type="submit">فعال‌سازی SSL پنل</button>
-            </div>
-          </div>
-        </form>
-        <div id="ssl-out" class="ssl-out" aria-live="polite"></div>
-      </div>
-      <div class="card create-card" id="term-policy-card">
-        <h3 class="card-title">ترمینال صفحه اصلی</h3>
-        <p class="muted">ترمینال چپ و راست را برای همه ببندید، یا برای هر مشتری جداگانه خاموش کنید.</p>
-        <label class="check" for="set-terms-enabled">
-          <input id="set-terms-enabled" type="checkbox" checked>
-          <span>نمایش ترمینال برای همه کاربران مجاز</span>
-        </label>
-      </div>
-      <div class="card create-card" id="register-policy-card">
-        <h3 class="card-title">ثبت‌نام مشتریان جدید</h3>
-        <p class="muted">وقتی ثبت‌نام باز باشد، افراد جدید می‌توانند از صفحهٔ ورود حساب بسازند. با بستن آن، فقط کسانی که از قبل حساب دارند وارد می‌شوند و دکمهٔ ثبت‌نام از صفحهٔ ورود حذف می‌شود.</p>
-        <div id="register-policy-error" class="form-error" role="alert" hidden></div>
-        <div class="register-policy-row">
-          <label class="check" for="set-register-enabled">
-            <input id="set-register-enabled" type="checkbox">
-            <span>ثبت‌نام عمومی باز باشد</span>
-          </label>
-          <span id="register-policy-badge" class="badge muted" dir="rtl">بسته</span>
+
+      <nav class="mgmt-nav" role="tablist" aria-label="بخش‌های مدیریت">
+        <button type="button" class="mgmt-nav-btn is-active" role="tab" id="mgmtbtn-customers" data-mgmt="customers" aria-controls="mgmt-customers" aria-selected="true">مشتریان</button>
+        <button type="button" class="mgmt-nav-btn" role="tab" id="mgmtbtn-commerce" data-mgmt="commerce" aria-controls="mgmt-commerce" aria-selected="false" tabindex="-1">فروش و واریز</button>
+        <button type="button" class="mgmt-nav-btn" role="tab" id="mgmtbtn-access" data-mgmt="access" aria-controls="mgmt-access" aria-selected="false" tabindex="-1">آدرس و SSL</button>
+        <button type="button" class="mgmt-nav-btn" role="tab" id="mgmtbtn-policies" data-mgmt="policies" aria-controls="mgmt-policies" aria-selected="false" tabindex="-1">دسترسی‌ها</button>
+        <button type="button" class="mgmt-nav-btn" role="tab" id="mgmtbtn-mail" data-mgmt="mail" aria-controls="mgmt-mail" aria-selected="false" tabindex="-1">ایمیل</button>
+      </nav>
+
+      <div id="mgmt-customers" class="mgmt-pane" role="tabpanel" aria-labelledby="mgmtbtn-customers">
+        <div class="mgmt-intro">
+          <h3 class="mgmt-intro-title">مشتریان</h3>
+          <p class="muted">حساب بسازید، سقف و اشتراک بگذارید. هر مشتری فقط سرور و تانل خودش را می‌بیند.</p>
         </div>
-        <div class="form-actions">
-          <button id="register-policy-save" class="btn btn-primary" type="button">ذخیرهٔ وضعیت ثبت‌نام</button>
+        <div class="mgmt-layout">
+          <div class="card create-card mgmt-card" id="user-create-card">
+            <h3 class="card-title">ساخت مشتری</h3>
+            <form id="user-form" class="form" novalidate>
+              <div id="uf-error" class="form-error" role="alert" hidden></div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="uf-username">نام کاربری</label>
+                  <input id="uf-username" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="32">
+                </div>
+                <div class="field">
+                  <label for="uf-email">ایمیل</label>
+                  <input id="uf-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="برای بازیابی رمز">
+                </div>
+                <div class="field">
+                  <label for="uf-password">رمز عبور</label>
+                  <input id="uf-password" type="text" dir="ltr" autocomplete="off" placeholder="خالی = تولید تصادفی">
+                  <p class="hint">اگر خالی بماند، رمز تصادفی ساخته و یک‌بار نشان داده می‌شود.</p>
+                </div>
+                <div class="field">
+                  <label for="uf-days">روز اشتراک</label>
+                  <input id="uf-days" type="number" dir="ltr" min="1" max="3650" value="30">
+                </div>
+                <div class="field">
+                  <label for="uf-max-servers">سقف سرور</label>
+                  <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                </div>
+                <div class="field">
+                  <label for="uf-max-tunnels">سقف تانل</label>
+                  <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                </div>
+                <div class="field">
+                  <label for="uf-max-relays">سقف رله</label>
+                  <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                </div>
+                <div class="field field-wide">
+                  <label for="uf-note">یادداشت</label>
+                  <input id="uf-note" type="text" maxlength="500" autocomplete="off">
+                </div>
+                <fieldset class="field field-wide mgmt-caps">
+                  <legend>قابلیت‌ها</legend>
+                  <div class="mgmt-caps-grid">
+                    <label class="check" for="uf-vpn"><input id="uf-vpn" type="checkbox" checked><span>نصب پنل VPN</span></label>
+                    <label class="check" for="uf-relay"><input id="uf-relay" type="checkbox" checked><span>ساخت رله</span></label>
+                    <label class="check" for="uf-os"><input id="uf-os" type="checkbox" checked><span>آپدیت سیستم</span></label>
+                    <label class="check" for="uf-term"><input id="uf-term" type="checkbox" checked><span>ترمینال صفحه اصلی</span></label>
+                  </div>
+                </fieldset>
+              </div>
+              <div class="form-actions">
+                <button id="uf-submit" class="btn btn-primary" type="submit">ساخت مشتری</button>
+              </div>
+            </form>
+          </div>
+          <div class="mgmt-list-wrap">
+            <div class="mgmt-list-head">
+              <h3 class="sub-head">فهرست مشتریان</h3>
+            </div>
+            <div id="users-list" class="list-area"></div>
+          </div>
         </div>
       </div>
-      <div class="card create-card" id="smtp-card">
-        <h3 class="card-title">ایمیل بازیابی رمز (SMTP)</h3>
-        <p class="muted">برای «رمز را فراموش کرده‌ام» باید SMTP روشن باشد. مشتریان هنگام ثبت‌نام ایمیل می‌دهند و لینک بازیابی به همان آدرس می‌رود.</p>
-        <form id="smtp-form" class="form" novalidate>
-          <div id="smtp-error" class="form-error" role="alert" hidden></div>
-          <div class="form-grid">
-            <div class="field">
-              <label class="check" for="smtp-enabled"><input id="smtp-enabled" type="checkbox"><span>ارسال ایمیل فعال باشد</span></label>
-            </div>
-            <div class="field">
-              <label class="check" for="smtp-tls"><input id="smtp-tls" type="checkbox" checked><span>STARTTLS (معمولاً پورت 587)</span></label>
-            </div>
-            <div class="field">
-              <label for="smtp-host">سرور SMTP</label>
-              <input id="smtp-host" type="text" dir="ltr" maxlength="253" autocomplete="off" placeholder="smtp.example.com">
-            </div>
-            <div class="field">
-              <label for="smtp-port">پورت</label>
-              <input id="smtp-port" type="number" dir="ltr" min="1" max="65535" value="587">
-            </div>
-            <div class="field">
-              <label for="smtp-user">نام کاربری SMTP</label>
-              <input id="smtp-user" type="text" dir="ltr" maxlength="200" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="smtp-password">رمز SMTP</label>
-              <input id="smtp-password" type="password" dir="ltr" maxlength="512" autocomplete="new-password" placeholder="خالی = بدون تغییر">
-              <p class="hint" id="smtp-password-hint">اگر قبلاً ذخیره شده، برای نگه‌داشتن خالی بگذارید.</p>
-            </div>
-            <div class="field field-wide">
-              <label for="smtp-from">آدرس فرستنده (From)</label>
-              <input id="smtp-from" type="email" dir="ltr" maxlength="254" autocomplete="off" placeholder="noreply@example.com">
-            </div>
-            <div class="field field-wide">
-              <label for="smtp-test-to">گیرنده تست (اختیاری)</label>
-              <input id="smtp-test-to" type="email" dir="ltr" maxlength="254" autocomplete="off" placeholder="همان From یا ایمیل شما">
-            </div>
+
+      <div id="mgmt-commerce" class="mgmt-pane" role="tabpanel" aria-labelledby="mgmtbtn-commerce" hidden>
+        <div class="mgmt-intro">
+          <h3 class="mgmt-intro-title">فروش و واریز</h3>
+          <p class="muted">قیمت تانل، کارت/ولت و تأیید واریز مشتریان را اینجا مدیریت کنید.</p>
+        </div>
+        <div class="mgmt-stack">
+          <div class="card create-card mgmt-card" id="commerce-card">
+            <h3 class="card-title">تنظیمات فروش</h3>
+            <form id="commerce-form" class="form" novalidate>
+              <div id="commerce-error" class="form-error" role="alert" hidden></div>
+              <div class="form-grid">
+                <div class="field field-wide">
+                  <label class="check" for="set-sell-enabled"><input id="set-sell-enabled" type="checkbox"><span>فروش تانل فعال باشد</span></label>
+                </div>
+                <div class="field">
+                  <label for="pay-card">شماره کارت</label>
+                  <input id="pay-card" type="text" dir="ltr" maxlength="120" autocomplete="off" placeholder="6037-...">
+                </div>
+                <div class="field">
+                  <label for="pay-wallet">آدرس ولت</label>
+                  <input id="pay-wallet" type="text" dir="ltr" maxlength="200" autocomplete="off" placeholder="T... یا 0x...">
+                </div>
+                <div class="field">
+                  <label for="pay-currency">واحد پول</label>
+                  <input id="pay-currency" type="text" maxlength="32" value="تومان">
+                </div>
+                <div class="field field-wide">
+                  <label for="pay-note">توضیح واریز برای مشتری</label>
+                  <input id="pay-note" type="text" maxlength="1000" placeholder="مثلاً فقط به همین کارت واریز کنید و کد پیگیری را بفرستید">
+                </div>
+              </div>
+              <h4 class="sub-head">قیمت هر نوع تانل</h4>
+              <div id="price-grid" class="price-grid"></div>
+              <div class="form-actions">
+                <button id="commerce-submit" class="btn btn-primary" type="submit">ذخیره فروش و قیمت‌ها</button>
+              </div>
+            </form>
           </div>
-          <div class="form-actions">
-            <button id="smtp-save" class="btn btn-primary" type="submit">ذخیره SMTP</button>
-            <button id="smtp-test" class="btn" type="button">ارسال ایمیل تست</button>
+          <div class="card create-card mgmt-card" id="owner-deposits-card">
+            <h3 class="card-title">درخواست‌های واریز</h3>
+            <p class="muted">واریزهای در انتظار را بررسی و تأیید کنید تا موجودی مشتری شارژ شود.</p>
+            <div id="owner-deposits" class="list-area"></div>
           </div>
-        </form>
+        </div>
       </div>
-      <div class="card create-card" id="commerce-card">
-        <h3 class="card-title">فروش تانل و واریز</h3>
-        <p class="muted">فروش را روشن کنید، شماره کارت یا آدرس ولت بگذارید، و برای هر نوع تانل قیمت تعیین کنید. مشتری واریز می‌کند؛ بعد از تأیید شما موجودی شارژ می‌شود و با هر ساخت تانل همان مبلغ یک‌بار کم می‌شود.</p>
-        <form id="commerce-form" class="form" novalidate>
-          <div id="commerce-error" class="form-error" role="alert" hidden></div>
-          <div class="form-grid">
-            <div class="field">
-              <label class="check" for="set-sell-enabled"><input id="set-sell-enabled" type="checkbox"><span>فروش تانل فعال باشد</span></label>
-            </div>
-            <div class="field">
-              <label for="pay-card">شماره کارت</label>
-              <input id="pay-card" type="text" dir="ltr" maxlength="120" autocomplete="off" placeholder="6037-...">
-            </div>
-            <div class="field">
-              <label for="pay-wallet">آدرس ولت</label>
-              <input id="pay-wallet" type="text" dir="ltr" maxlength="200" autocomplete="off" placeholder="T... یا 0x...">
-            </div>
-            <div class="field">
-              <label for="pay-currency">واحد پول</label>
-              <input id="pay-currency" type="text" maxlength="32" value="تومان">
-            </div>
-            <div class="field field-wide">
-              <label for="pay-note">توضیح واریز برای مشتری</label>
-              <input id="pay-note" type="text" maxlength="1000" placeholder="مثلاً فقط به همین کارت واریز کنید و کد پیگیری را بفرستید">
-            </div>
+
+      <div id="mgmt-access" class="mgmt-pane" role="tabpanel" aria-labelledby="mgmtbtn-access" hidden>
+        <div class="mgmt-intro">
+          <h3 class="mgmt-intro-title">آدرس و SSL</h3>
+          <p class="muted">آدرس ورود پنل و گواهی HTTPS خود سرور مالک را تنظیم کنید.</p>
+        </div>
+        <div class="mgmt-grid-2">
+          <div class="card create-card mgmt-card" id="listen-card">
+            <h3 class="card-title">آدرس ورود پنل</h3>
+            <p class="muted">IP خالی پنل را باز نمی‌کند. مسیر ثابت پیش‌فرض <span dir="ltr">jojonet-panel-entry</span> است. پورت ۸۰ و ۴۴۳ هم مجاز است. بعد از ذخیره، پنل چند ثانیه قطع می‌شود و با آدرس جدید بالا می‌آید.</p>
+            <form id="listen-form" class="form" novalidate>
+              <div id="listen-error" class="form-error" role="alert" hidden></div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="listen-path">مسیر</label>
+                  <input id="listen-path" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="64" placeholder="jojonet-panel-entry">
+                </div>
+                <div class="field">
+                  <label for="listen-port">پورت</label>
+                  <input id="listen-port" type="number" dir="ltr" min="1" max="65535" required value="2053">
+                </div>
+              </div>
+              <p class="hint" dir="ltr" id="listen-url"></p>
+              <div class="form-actions">
+                <button id="listen-submit" class="btn btn-primary" type="submit">ذخیره آدرس</button>
+              </div>
+            </form>
           </div>
-          <h4 class="sub-head">قیمت هر نوع تانل</h4>
-          <div id="price-grid" class="price-grid"></div>
-          <div class="form-actions">
-            <button id="commerce-submit" class="btn btn-primary" type="submit">ذخیره فروش و قیمت‌ها</button>
+          <div class="card create-card mgmt-card" id="ssl-card">
+            <h3 class="card-title">گواهی SSL خودِ پنل</h3>
+            <p class="muted">فقط برای آدرس ورود همین پنل. برای گواهی روی سرور مشتریان از تب سرورها استفاده کنید. رکورد A باید مستقیم به IP همین سرور باشد و پروکسی خاموش باشد.</p>
+            <form id="ssl-form" class="form ssl-form" novalidate>
+              <div id="ssl-error" class="form-error" role="alert" hidden></div>
+              <div class="ssl-fields">
+                <div class="field ssl-field-domain">
+                  <label for="ssl-domain" class="ssl-label">دامنهٔ پنل:</label>
+                  <input id="ssl-domain" class="ssl-input" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="253" placeholder="panel.example.com">
+                </div>
+                <div class="field ssl-field-email">
+                  <label for="ssl-email" class="ssl-label">ایمیل اطلاع‌رسانی:</label>
+                  <input id="ssl-email" class="ssl-input" type="text" inputmode="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="you@example.com">
+                </div>
+                <div class="ssl-field-action">
+                  <button id="ssl-submit" class="btn btn-primary" type="submit">فعال‌سازی SSL پنل</button>
+                </div>
+              </div>
+            </form>
+            <div id="ssl-out" class="ssl-out" aria-live="polite"></div>
           </div>
-        </form>
-        <h4 class="sub-head">درخواست‌های واریز</h4>
-        <div id="owner-deposits" class="list-area"></div>
+        </div>
       </div>
-      <div class="card create-card">
-        <h3 class="card-title">ساخت مشتری</h3>
-        <form id="user-form" class="form" novalidate>
-          <div id="uf-error" class="form-error" role="alert" hidden></div>
-          <div class="form-grid">
-            <div class="field">
-              <label for="uf-username">نام کاربری</label>
-              <input id="uf-username" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="32">
+
+      <div id="mgmt-policies" class="mgmt-pane" role="tabpanel" aria-labelledby="mgmtbtn-policies" hidden>
+        <div class="mgmt-intro">
+          <h3 class="mgmt-intro-title">دسترسی‌ها</h3>
+          <p class="muted">ثبت‌نام عمومی و نمایش ترمینال صفحه اصلی را کنترل کنید.</p>
+        </div>
+        <div class="mgmt-grid-2">
+          <div class="card create-card mgmt-card" id="register-policy-card">
+            <h3 class="card-title">ثبت‌نام مشتریان جدید</h3>
+            <p class="muted">وقتی باز باشد، افراد جدید از صفحهٔ ورود حساب می‌سازند. با بستن، فقط حساب‌های قبلی وارد می‌شوند.</p>
+            <div id="register-policy-error" class="form-error" role="alert" hidden></div>
+            <div class="register-policy-row">
+              <label class="check" for="set-register-enabled">
+                <input id="set-register-enabled" type="checkbox">
+                <span>ثبت‌نام عمومی باز باشد</span>
+              </label>
+              <span id="register-policy-badge" class="badge muted" dir="rtl">بسته</span>
             </div>
-            <div class="field">
-              <label for="uf-email">ایمیل</label>
-              <input id="uf-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="برای بازیابی رمز">
+            <div class="form-actions">
+              <button id="register-policy-save" class="btn btn-primary" type="button">ذخیرهٔ وضعیت ثبت‌نام</button>
             </div>
-            <div class="field">
-              <label for="uf-password">رمز عبور</label>
-              <input id="uf-password" type="text" dir="ltr" autocomplete="off" placeholder="خالی = تولید تصادفی">
-              <p class="hint">اگر خالی بماند، رمز تصادفی ساخته و یک‌بار نشان داده می‌شود.</p>
-            </div>
-            <div class="field">
-              <label for="uf-days">روز اشتراک</label>
-              <input id="uf-days" type="number" dir="ltr" min="1" max="3650" value="30">
-            </div>
-            <div class="field">
-              <label for="uf-max-servers">سقف سرور</label>
-              <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
-            </div>
-            <div class="field">
-              <label for="uf-max-tunnels">سقف تانل</label>
-              <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
-            </div>
-            <div class="field">
-              <label for="uf-max-relays">سقف رله</label>
-              <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
-            </div>
-            <div class="field field-wide">
-              <label for="uf-note">یادداشت</label>
-              <input id="uf-note" type="text" maxlength="500" autocomplete="off">
-            </div>
-            <fieldset class="field field-wide">
-              <legend>قابلیت‌ها</legend>
-              <label class="check" for="uf-vpn"><input id="uf-vpn" type="checkbox" checked><span>نصب پنل VPN</span></label>
-              <label class="check" for="uf-relay"><input id="uf-relay" type="checkbox" checked><span>ساخت رله</span></label>
-              <label class="check" for="uf-os"><input id="uf-os" type="checkbox" checked><span>آپدیت سیستم</span></label>
-              <label class="check" for="uf-term"><input id="uf-term" type="checkbox" checked><span>ترمینال صفحه اصلی</span></label>
-            </fieldset>
           </div>
-          <div class="form-actions">
-            <button id="uf-submit" class="btn btn-primary" type="submit">ساخت مشتری</button>
+          <div class="card create-card mgmt-card" id="term-policy-card">
+            <h3 class="card-title">ترمینال صفحه اصلی</h3>
+            <p class="muted">ترمینال چپ و راست را برای همه ببندید، یا برای هر مشتری جداگانه خاموش کنید.</p>
+            <label class="check" for="set-terms-enabled">
+              <input id="set-terms-enabled" type="checkbox" checked>
+              <span>نمایش ترمینال برای همه کاربران مجاز</span>
+            </label>
           </div>
-        </form>
+        </div>
       </div>
-      <h3 class="sub-head">مشتریان</h3>
-      <div id="users-list" class="list-area"></div>
+
+      <div id="mgmt-mail" class="mgmt-pane" role="tabpanel" aria-labelledby="mgmtbtn-mail" hidden>
+        <div class="mgmt-intro">
+          <h3 class="mgmt-intro-title">ایمیل بازیابی رمز</h3>
+          <p class="muted">SMTP را برای فراموشی رمز و لینک بازیابی تنظیم کنید.</p>
+        </div>
+        <div class="card create-card mgmt-card mgmt-card-wide" id="smtp-card">
+          <h3 class="card-title">تنظیمات SMTP</h3>
+          <form id="smtp-form" class="form" novalidate>
+            <div id="smtp-error" class="form-error" role="alert" hidden></div>
+            <div class="form-grid">
+              <div class="field">
+                <label class="check" for="smtp-enabled"><input id="smtp-enabled" type="checkbox"><span>ارسال ایمیل فعال باشد</span></label>
+              </div>
+              <div class="field">
+                <label class="check" for="smtp-tls"><input id="smtp-tls" type="checkbox" checked><span>STARTTLS (معمولاً پورت 587)</span></label>
+              </div>
+              <div class="field">
+                <label for="smtp-host">سرور SMTP</label>
+                <input id="smtp-host" type="text" dir="ltr" maxlength="253" autocomplete="off" placeholder="smtp.example.com">
+              </div>
+              <div class="field">
+                <label for="smtp-port">پورت</label>
+                <input id="smtp-port" type="number" dir="ltr" min="1" max="65535" value="587">
+              </div>
+              <div class="field">
+                <label for="smtp-user">نام کاربری SMTP</label>
+                <input id="smtp-user" type="text" dir="ltr" maxlength="200" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="smtp-password">رمز SMTP</label>
+                <input id="smtp-password" type="password" dir="ltr" maxlength="512" autocomplete="new-password" placeholder="خالی = بدون تغییر">
+                <p class="hint" id="smtp-password-hint">اگر قبلاً ذخیره شده، برای نگه‌داشتن خالی بگذارید.</p>
+              </div>
+              <div class="field field-wide">
+                <label for="smtp-from">آدرس فرستنده (From)</label>
+                <input id="smtp-from" type="email" dir="ltr" maxlength="254" autocomplete="off" placeholder="noreply@example.com">
+              </div>
+              <div class="field field-wide">
+                <label for="smtp-test-to">گیرنده تست (اختیاری)</label>
+                <input id="smtp-test-to" type="email" dir="ltr" maxlength="254" autocomplete="off" placeholder="همان From یا ایمیل شما">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button id="smtp-save" class="btn btn-primary" type="submit">ذخیره SMTP</button>
+              <button id="smtp-test" class="btn" type="button">ارسال ایمیل تست</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </section>
   </main>
   </div>

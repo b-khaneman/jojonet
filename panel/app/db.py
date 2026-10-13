@@ -123,6 +123,12 @@ CREATE TABLE IF NOT EXISTS service_orders (
     kharej_json TEXT,
     owner_note TEXT,
     tunnel_id INTEGER REFERENCES tunnels(id),
+    price INTEGER NOT NULL DEFAULT 0,
+    payment_status TEXT NOT NULL DEFAULT 'none',
+    deposit_id INTEGER,
+    payment_method TEXT,
+    payment_tracking TEXT,
+    payment_amount INTEGER,
     created_at TEXT NOT NULL,
     decided_at TEXT
 );
@@ -163,6 +169,7 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
     tracking_code TEXT NOT NULL,
     note TEXT,
     tunnel_mode TEXT,
+    order_id INTEGER,
     status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
     owner_note TEXT,
     created_at TEXT NOT NULL,
@@ -212,6 +219,17 @@ TABLE_COLUMNS = {
     "relays": {
         "last_job_id": "INTEGER",
         "last_check": "TEXT",
+    },
+    "service_orders": {
+        "price": "INTEGER NOT NULL DEFAULT 0",
+        "payment_status": "TEXT NOT NULL DEFAULT 'none'",
+        "deposit_id": "INTEGER",
+        "payment_method": "TEXT",
+        "payment_tracking": "TEXT",
+        "payment_amount": "INTEGER",
+    },
+    "deposit_requests": {
+        "order_id": "INTEGER",
     },
 }
 
@@ -285,7 +303,11 @@ class Database:
             "customer_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
             "status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'done', 'cancelled')), "
             "mode TEXT NOT NULL, message TEXT, iran_json TEXT, kharej_json TEXT, owner_note TEXT, "
-            "tunnel_id INTEGER REFERENCES tunnels(id), created_at TEXT NOT NULL, decided_at TEXT)"
+            "tunnel_id INTEGER REFERENCES tunnels(id), "
+            "price INTEGER NOT NULL DEFAULT 0, "
+            "payment_status TEXT NOT NULL DEFAULT 'none', "
+            "deposit_id INTEGER, payment_method TEXT, payment_tracking TEXT, payment_amount INTEGER, "
+            "created_at TEXT NOT NULL, decided_at TEXT)"
         )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS tickets ("
@@ -322,7 +344,7 @@ class Database:
             "user_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
             "amount INTEGER NOT NULL, "
             "method TEXT NOT NULL CHECK (method IN ('card', 'crypto')), "
-            "tracking_code TEXT NOT NULL, note TEXT, tunnel_mode TEXT, "
+            "tracking_code TEXT NOT NULL, note TEXT, tunnel_mode TEXT, order_id INTEGER, "
             "status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')), "
             "owner_note TEXT, created_at TEXT NOT NULL, decided_at TEXT)"
         )

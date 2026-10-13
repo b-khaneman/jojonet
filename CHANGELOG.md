@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.5 / panel 1.3.57
+- **Order invoice payment**: customers must pay (wallet balance or card/crypto tracking) before submitting a paid tunnel order; owners confirm deposit before approve/fulfill.
+- **Management UI**: owner tab split into Customers / Commerce / Access+SSL / Policies / Email panes instead of one crowded page.
+- **VPN slip + mode picker**: clearer post-install login card and grouped tunnel-type combobox (from prior local work now shipping).
+
 ## 1.6.5 / panel 1.3.56
 - **Registration email + password reset**: public signup requires an email; users can request a reset link from the login screen; owner configures SMTP under management (with a test-send button); accounts can update their own email from the account menu.
 

@@ -871,11 +871,33 @@ class OrderServerIn(BaseModel):
         return v
 
 
+class OrderPaymentIn(BaseModel):
+    """Proof of card/crypto transfer when wallet balance is not enough."""
+    method: Literal["card", "crypto"] = "card"
+    tracking_code: str = Field(min_length=3, max_length=120)
+    amount: int | None = Field(default=None, ge=1000, le=10_000_000_000)
+    note: str = Field(default="", max_length=1000)
+
+    @field_validator("tracking_code")
+    @classmethod
+    def _track(cls, v: str) -> str:
+        value = (v or "").strip()
+        if len(value) < 3:
+            raise ValueError("کد پیگیری واریز را وارد کنید")
+        return value
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str) -> str:
+        return (v or "").strip()[:1000]
+
+
 class OrderIn(BaseModel):
     mode: str
     message: str | None = Field(default=None, max_length=2000)
     iran: OrderServerIn
     kharej: OrderServerIn
+    payment: OrderPaymentIn | None = None
 
     @field_validator("mode")
     @classmethod
@@ -900,6 +922,19 @@ class OrderIn(BaseModel):
 
 class OrderDecideIn(BaseModel):
     action: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        return str(v).strip()[:1000]
+
+
+class OrderConfirmPaymentIn(BaseModel):
+    """Owner confirms the customer's card/crypto transfer for an order invoice."""
+    action: Literal["approve", "mark_received", "reject"] = "approve"
     note: str | None = Field(default=None, max_length=1000)
 
     @field_validator("note")
@@ -2469,7 +2504,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def order_out(row: dict[str, Any], sess: dict[str, Any], names: dict[int, str] | None = None) -> dict[str, Any]:
         names = names or admin_names()
         reveal = is_owner(sess)
-        return {
+        try:
+            price = int(row.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        try:
+            pay_amount = int(row.get("payment_amount") or 0) or None
+        except (TypeError, ValueError):
+            pay_amount = None
+        pay_status = row.get("payment_status") or "none"
+        pay = wallet_mod.payment_info(db)
+        out = {
             "id": row["id"],
             "customer_id": row["customer_id"],
             "customer_username": names.get(row["customer_id"], "?"),
@@ -2481,9 +2526,89 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "kharej": _order_public_server(row.get("kharej_json"), reveal=reveal),
             "owner_note": row.get("owner_note"),
             "tunnel_id": row.get("tunnel_id"),
+            "price": price,
+            "currency": pay["currency"],
+            "payment_status": pay_status,
+            "payment_ready": pay_status in ("none", "wallet", "confirmed"),
+            "deposit_id": row.get("deposit_id"),
+            "payment_method": row.get("payment_method"),
+            "payment_tracking": row.get("payment_tracking"),
+            "payment_amount": pay_amount,
             "created_at": row["created_at"],
             "decided_at": row.get("decided_at"),
         }
+        if reveal or row["customer_id"] == sess.get("admin_id"):
+            out["payment_card"] = pay.get("card") or ""
+            out["payment_wallet_address"] = pay.get("wallet_address") or ""
+        return out
+
+    def _sync_order_payment_from_deposit(deposit_row: dict[str, Any], *, approved: bool, note: str | None = None) -> None:
+        oid = deposit_row.get("order_id")
+        if not oid:
+            return
+        order = db.one("SELECT * FROM service_orders WHERE id=?", (int(oid),))
+        if not order:
+            return
+        if approved:
+            db.update("service_orders", int(oid), {
+                "payment_status": "confirmed",
+                "owner_note": note if note is not None else order.get("owner_note"),
+            })
+        else:
+            db.update("service_orders", int(oid), {
+                "payment_status": "awaiting",
+                "owner_note": note if note is not None else order.get("owner_note"),
+            })
+
+    def _approve_deposit_row(row: dict[str, Any], sess: dict[str, Any], note: str = "") -> dict[str, Any]:
+        deposit_id = int(row["id"])
+        now = utcnow()
+        with db._lock:
+            pending = db._conn.execute(
+                "SELECT status FROM deposit_requests WHERE id=?", (deposit_id,)
+            ).fetchone()
+            if not pending or pending["status"] != "pending":
+                raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
+            db._conn.execute("BEGIN IMMEDIATE")
+            try:
+                db._conn.execute(
+                    "UPDATE admins SET wallet_balance = COALESCE(wallet_balance, 0) + ? WHERE id=?",
+                    (int(row["amount"]), int(row["user_id"])),
+                )
+                bal_row = db._conn.execute(
+                    "SELECT wallet_balance FROM admins WHERE id=?", (int(row["user_id"]),)
+                ).fetchone()
+                bal = int(bal_row["wallet_balance"] or 0) if bal_row else 0
+                db._conn.execute(
+                    "INSERT INTO wallet_ledger (user_id, actor_id, kind, amount, balance_after, note, ref_type, ref_id, created_at) "
+                    "VALUES (?, ?, 'deposit', ?, ?, ?, 'deposit', ?, ?)",
+                    (
+                        int(row["user_id"]),
+                        sess["admin_id"],
+                        int(row["amount"]),
+                        bal,
+                        f"تأیید واریز #{deposit_id} — {row['tracking_code']}"[:500],
+                        deposit_id,
+                        now,
+                    ),
+                )
+                db._conn.execute(
+                    "UPDATE deposit_requests SET status='approved', owner_note=?, decided_at=? WHERE id=? AND status='pending'",
+                    ((note or "").strip(), now, deposit_id),
+                )
+                if db._conn.execute("SELECT changes()").fetchone()[0] != 1:
+                    raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
+                db._conn.execute("COMMIT")
+            except Exception:
+                try:
+                    db._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+        fresh = db.one("SELECT * FROM deposit_requests WHERE id=?", (deposit_id,))
+        if fresh:
+            _sync_order_payment_from_deposit(fresh, approved=True, note=(note or "").strip() or None)
+        return fresh  # type: ignore[return-value]
 
     def get_order(order_id: int, sess: dict[str, Any]) -> dict[str, Any]:
         row = db.one("SELECT * FROM service_orders WHERE id=?", (order_id,))
@@ -2612,6 +2737,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if int((pending or {"n": 0})["n"]) >= MAX_PENDING_ORDERS:
             raise HTTPException(422, f"حداکثر {MAX_PENDING_ORDERS} سفارش در انتظار همزمان مجاز است")
+        price = wallet_mod.price_for(db, data.mode)
+        pay_info = wallet_mod.payment_info(db)
+        payment_status = "none"
+        deposit_id = None
+        payment_method = None
+        payment_tracking = None
+        payment_amount = None
+        if price > 0:
+            bal = wallet_mod.balance_of(db, sess["admin_id"])
+            if bal >= price:
+                payment_status = "wallet"
+                payment_amount = price
+            elif data.payment is not None:
+                amount = int(data.payment.amount) if data.payment.amount is not None else price
+                if amount < price:
+                    raise HTTPException(
+                        422,
+                        f"مبلغ واریز از فاکتور کمتر است (حداقل {price:,} {pay_info['currency']})",
+                    )
+                if data.payment.method == "card" and not pay_info["card"]:
+                    raise HTTPException(422, "مالک هنوز شماره کارت ثبت نکرده است")
+                if data.payment.method == "crypto" and not pay_info["wallet_address"]:
+                    raise HTTPException(422, "مالک هنوز آدرس ولت ثبت نکرده است")
+                pending_dep = db.one(
+                    "SELECT COUNT(*) AS n FROM deposit_requests WHERE user_id=? AND status='pending'",
+                    (sess["admin_id"],),
+                )
+                if pending_dep and int(pending_dep["n"] or 0) >= 5:
+                    raise HTTPException(429, "چند درخواست واریز در انتظار تأیید دارید")
+                payment_status = "awaiting"
+                payment_method = data.payment.method
+                payment_tracking = data.payment.tracking_code
+                payment_amount = amount
+            else:
+                raise HTTPException(
+                    402,
+                    f"برای ثبت سفارش باید فاکتور را بپردازید ({price:,} {pay_info['currency']}). "
+                    "از کیف پول شارژ کنید یا کد پیگیری واریز کارت/ولت را همراه سفارش بفرستید.",
+                )
         oid = db.insert("service_orders", {
             "customer_id": sess["admin_id"],
             "status": "pending",
@@ -2619,8 +2783,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "message": data.message,
             "iran_json": _order_pack_server(data.iran),
             "kharej_json": _order_pack_server(data.kharej),
+            "price": price,
+            "payment_status": payment_status,
+            "deposit_id": None,
+            "payment_method": payment_method,
+            "payment_tracking": payment_tracking,
+            "payment_amount": payment_amount,
             "created_at": utcnow(),
         })
+        if payment_status == "awaiting" and data.payment is not None:
+            note = (data.payment.note or "").strip()
+            if not note:
+                note = f"واریز فاکتور سفارش #{oid} — {MODES[data.mode]['label']}"
+            deposit_id = db.insert("deposit_requests", {
+                "user_id": sess["admin_id"],
+                "amount": int(payment_amount or price),
+                "method": payment_method,
+                "tracking_code": payment_tracking,
+                "note": note[:1000],
+                "tunnel_mode": data.mode,
+                "order_id": oid,
+                "status": "pending",
+                "created_at": utcnow(),
+            })
+            db.update("service_orders", oid, {"deposit_id": deposit_id})
         return order_out(get_order(oid, sess), sess)
 
     @app.post("/api/orders/{order_id}/cancel")
@@ -2628,6 +2814,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row = get_order(order_id, sess)
         if row["status"] != "pending":
             raise HTTPException(409, "فقط سفارش در انتظار قابل لغو است")
+        did = row.get("deposit_id")
+        if did and (row.get("payment_status") or "") == "awaiting":
+            dep = db.one("SELECT * FROM deposit_requests WHERE id=?", (int(did),))
+            if dep and dep["status"] == "pending":
+                db.update("deposit_requests", int(did), {
+                    "status": "rejected",
+                    "owner_note": "لغو سفارش توسط مشتری",
+                    "decided_at": utcnow(),
+                })
         db.update("service_orders", order_id, {"status": "cancelled", "decided_at": utcnow()})
         return order_out(get_order(order_id, sess), sess)
 
@@ -2637,6 +2832,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if row["status"] != "pending":
             raise HTTPException(409, "این سفارش دیگر در انتظار نیست")
         status = "approved" if data.action == "approve" else "rejected"
+        if data.action == "approve" and (row.get("payment_status") or "none") == "awaiting":
+            raise HTTPException(
+                409,
+                "ابتدا واریز فاکتور را تأیید کنید؛ بعد می‌توانید سفارش را تأیید یا انجام دهید.",
+            )
+        if data.action == "reject":
+            did = row.get("deposit_id")
+            if did and (row.get("payment_status") or "") == "awaiting":
+                dep = db.one("SELECT * FROM deposit_requests WHERE id=?", (int(did),))
+                if dep and dep["status"] == "pending":
+                    db.update("deposit_requests", int(did), {
+                        "status": "rejected",
+                        "owner_note": data.note or "رد سفارش",
+                        "decided_at": utcnow(),
+                    })
         db.update("service_orders", order_id, {
             "status": status,
             "owner_note": data.note,
@@ -2644,11 +2854,127 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         })
         return order_out(get_order(order_id, sess), sess)
 
+    @app.post("/api/orders/{order_id}/confirm-payment")
+    async def confirm_order_payment(
+        order_id: int, data: OrderConfirmPaymentIn, sess: dict = Depends(require_owner)
+    ) -> dict[str, Any]:
+        row = get_order(order_id, sess)
+        if row["status"] not in ("pending", "approved"):
+            raise HTTPException(409, "این سفارش دیگر قابل تأیید واریز نیست")
+        pay_status = row.get("payment_status") or "none"
+        if pay_status in ("none", "wallet", "confirmed") and data.action != "reject":
+            raise HTTPException(409, "واریز این سفارش از قبل آماده است")
+        if pay_status != "awaiting" and data.action != "mark_received":
+            raise HTTPException(409, "این سفارش واریز در انتظار ندارد")
+        note = data.note or ""
+        if data.action == "reject":
+            did = row.get("deposit_id")
+            if did:
+                dep = db.one("SELECT * FROM deposit_requests WHERE id=?", (int(did),))
+                if dep and dep["status"] == "pending":
+                    db.update("deposit_requests", int(did), {
+                        "status": "rejected",
+                        "owner_note": note or "رد واریز سفارش",
+                        "decided_at": utcnow(),
+                    })
+            db.update("service_orders", order_id, {
+                "status": "rejected",
+                "payment_status": "awaiting",
+                "owner_note": note or "واریز رد شد",
+                "decided_at": utcnow(),
+            })
+            return {
+                "ok": True,
+                "order": order_out(get_order(order_id, sess), sess),
+                "wallet_balance": wallet_mod.balance_of(db, int(row["customer_id"])),
+            }
+        # approve linked deposit or mark received (credit invoice amount)
+        did = row.get("deposit_id")
+        if did and data.action == "approve":
+            dep = db.one("SELECT * FROM deposit_requests WHERE id=?", (int(did),))
+            if not dep:
+                raise HTTPException(404, "درخواست واریز سفارش پیدا نشد")
+            if dep["status"] == "pending":
+                try:
+                    _approve_deposit_row(dep, sess, note)
+                except HTTPException:
+                    raise
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from None
+            elif dep["status"] != "approved":
+                raise HTTPException(409, "وضعیت واریز سفارش نامعتبر است")
+            else:
+                db.update("service_orders", order_id, {
+                    "payment_status": "confirmed",
+                    "owner_note": note or row.get("owner_note"),
+                })
+        else:
+            # mark_received: owner confirms money arrived (with or without deposit row)
+            amount = int(row.get("payment_amount") or row.get("price") or 0)
+            if amount <= 0:
+                amount = wallet_mod.price_for(db, row["mode"])
+            if amount <= 0:
+                db.update("service_orders", order_id, {"payment_status": "confirmed", "owner_note": note or row.get("owner_note")})
+            else:
+                if did:
+                    dep = db.one("SELECT * FROM deposit_requests WHERE id=?", (int(did),))
+                    if dep and dep["status"] == "pending":
+                        try:
+                            _approve_deposit_row(dep, sess, note or "تأیید دستی واریز سفارش")
+                        except HTTPException:
+                            raise
+                        except ValueError as exc:
+                            raise HTTPException(422, str(exc)) from None
+                    else:
+                        db.update("service_orders", order_id, {
+                            "payment_status": "confirmed",
+                            "owner_note": note or row.get("owner_note"),
+                        })
+                else:
+                    try:
+                        wallet_mod.credit(
+                            db,
+                            int(row["customer_id"]),
+                            amount,
+                            kind="deposit",
+                            note=(note or f"تأیید دستی واریز سفارش #{order_id}")[:500],
+                            actor_id=sess["admin_id"],
+                            ref_type="order",
+                            ref_id=order_id,
+                        )
+                    except ValueError as exc:
+                        raise HTTPException(422, str(exc)) from None
+                    db.update("service_orders", order_id, {
+                        "payment_status": "confirmed",
+                        "payment_amount": amount,
+                        "owner_note": note or row.get("owner_note"),
+                    })
+        fresh = get_order(order_id, sess)
+        if (fresh.get("payment_status") or "") != "confirmed":
+            db.update("service_orders", order_id, {"payment_status": "confirmed"})
+            fresh = get_order(order_id, sess)
+        return {
+            "ok": True,
+            "order": order_out(fresh, sess),
+            "wallet_balance": wallet_mod.balance_of(db, int(row["customer_id"])),
+        }
+
     @app.post("/api/orders/{order_id}/fulfill")
     async def fulfill_order(order_id: int, data: OrderFulfillIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
         row = get_order(order_id, sess)
         if row["status"] not in ("approved", "pending"):
             raise HTTPException(409, "فقط سفارش تأییدشده (یا در انتظار) قابل انجام است")
+        pay_status = row.get("payment_status") or "none"
+        price = int(row.get("price") or 0)
+        if price <= 0:
+            price = wallet_mod.price_for(db, row["mode"])
+        if price > 0 and pay_status == "awaiting":
+            raise HTTPException(
+                402,
+                "واریز فاکتور هنوز تأیید نشده است. ابتدا واریز را تأیید کنید، بعد سفارش را انجام دهید.",
+            )
+        if price > 0 and pay_status not in ("none", "wallet", "confirmed"):
+            raise HTTPException(402, "وضعیت پرداخت سفارش برای انجام آماده نیست")
         customer_id = int(row["customer_id"])
         cust = customer_sess(customer_id)
         reason = account_block_reason(cust)
@@ -2941,6 +3267,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "tracking_code": row["tracking_code"],
             "note": row.get("note") or "",
             "tunnel_mode": row.get("tunnel_mode"),
+            "order_id": row.get("order_id"),
             "status": row["status"],
             "owner_note": row.get("owner_note") or "",
             "created_at": row["created_at"],
@@ -3030,57 +3357,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if row["status"] != "pending":
             raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
         now = utcnow()
+        note = (data.note or "").strip()
         if data.action == "reject":
             db.update("deposit_requests", deposit_id, {
                 "status": "rejected",
-                "owner_note": (data.note or "").strip(),
+                "owner_note": note,
                 "decided_at": now,
             })
+            fresh = db.one("SELECT * FROM deposit_requests WHERE id=?", (deposit_id,))
+            if fresh:
+                _sync_order_payment_from_deposit(fresh, approved=False, note=note or None)
+                if fresh.get("order_id"):
+                    order = db.one("SELECT * FROM service_orders WHERE id=?", (int(fresh["order_id"]),))
+                    if order and order["status"] == "pending" and (order.get("payment_status") or "") == "awaiting":
+                        db.update("service_orders", int(fresh["order_id"]), {
+                            "status": "rejected",
+                            "owner_note": note or "واریز رد شد",
+                            "decided_at": now,
+                        })
         else:
-            # Keep credit + status flip in one SQLite transaction so a crash cannot double-approve.
             try:
-                with db._lock:
-                    pending = db._conn.execute(
-                        "SELECT status FROM deposit_requests WHERE id=?", (deposit_id,)
-                    ).fetchone()
-                    if not pending or pending["status"] != "pending":
-                        raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
-                    db._conn.execute("BEGIN IMMEDIATE")
-                    try:
-                        db._conn.execute(
-                            "UPDATE admins SET wallet_balance = COALESCE(wallet_balance, 0) + ? WHERE id=?",
-                            (int(row["amount"]), int(row["user_id"])),
-                        )
-                        bal_row = db._conn.execute(
-                            "SELECT wallet_balance FROM admins WHERE id=?", (int(row["user_id"]),)
-                        ).fetchone()
-                        bal = int(bal_row["wallet_balance"] or 0) if bal_row else 0
-                        db._conn.execute(
-                            "INSERT INTO wallet_ledger (user_id, actor_id, kind, amount, balance_after, note, ref_type, ref_id, created_at) "
-                            "VALUES (?, ?, 'deposit', ?, ?, ?, 'deposit', ?, ?)",
-                            (
-                                int(row["user_id"]),
-                                sess["admin_id"],
-                                int(row["amount"]),
-                                bal,
-                                f"تأیید واریز #{deposit_id} — {row['tracking_code']}"[:500],
-                                deposit_id,
-                                now,
-                            ),
-                        )
-                        db._conn.execute(
-                            "UPDATE deposit_requests SET status='approved', owner_note=?, decided_at=? WHERE id=? AND status='pending'",
-                            ((data.note or "").strip(), now, deposit_id),
-                        )
-                        if db._conn.execute("SELECT changes()").fetchone()[0] != 1:
-                            raise HTTPException(409, "این درخواست قبلاً رسیدگی شده است")
-                        db._conn.execute("COMMIT")
-                    except Exception:
-                        try:
-                            db._conn.execute("ROLLBACK")
-                        except Exception:
-                            pass
-                        raise
+                fresh = _approve_deposit_row(row, sess, note)
             except HTTPException:
                 raise
             except ValueError as exc:
