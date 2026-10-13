@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.20 / panel 1.3.73
+- **Customers table**: true grid look with vertical column rules so each section (account, status, quota, wallet, access, actions) is visually separated.
+
 ## 1.6.19 / panel 1.3.72
 - **Customers quota**: clearer tiled meters for server/tunnel/relay with used/max, closed state, and color cues.
 
