@@ -3144,7 +3144,16 @@
       box.replaceChildren(emptyState('هنوز مشتری‌ای ساخته نشده است.', 'از فرم بالا یک حساب مشتری بسازید.'));
       return;
     }
-    box.replaceChildren(h('div', { class: 'cards' }, data.map(userCard)));
+    box.replaceChildren(h('div', { class: 'cust-board' },
+      h('div', { class: 'cust-table', role: 'table', 'aria-label': 'فهرست مشتریان' },
+        h('div', { class: 'cust-tr cust-th', role: 'row' },
+          h('div', { class: 'cust-td', role: 'columnheader' }, 'حساب'),
+          h('div', { class: 'cust-td', role: 'columnheader' }, 'وضعیت'),
+          h('div', { class: 'cust-td', role: 'columnheader' }, 'مصرف'),
+          h('div', { class: 'cust-td', role: 'columnheader' }, 'انقضا / ایمیل'),
+          h('div', { class: 'cust-td', role: 'columnheader' }, 'دسترسی'),
+          h('div', { class: 'cust-td', role: 'columnheader' }, 'عملیات')),
+        ...data.map(userCard))));
   }
 
   function userCard(u) {
@@ -3155,9 +3164,9 @@
 
     const walletBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'کیف پول');
     if (walletBtn) walletBtn.addEventListener('click', () => openWalletAdjust(u));
-    const overviewBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'وضعیت کامل');
+    const overviewBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'وضعیت');
     if (overviewBtn) overviewBtn.addEventListener('click', () => openUserOverview(u));
-    const extendBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'تمدید روز');
+    const extendBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'تمدید');
     if (extendBtn) extendBtn.addEventListener('click', () => openExtendUser(u));
 
     const toggleBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, u.enabled ? 'غیرفعال' : 'فعال');
@@ -3167,7 +3176,7 @@
       await load('users');
     }));
 
-    const pwBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'بازنشانی رمز');
+    const pwBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'رمز');
     if (pwBtn) pwBtn.addEventListener('click', async () => {
       const ok = await confirmDialog({
         title: 'بازنشانی رمز',
@@ -3182,7 +3191,7 @@
       });
     });
 
-    const termBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, u.allow_term !== false ? 'بستن ترمینال' : 'باز کردن ترمینال');
+    const termBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, u.allow_term !== false ? 'بستن ترمینال' : 'ترمینال');
     if (termBtn) termBtn.addEventListener('click', () => act(termBtn, async () => {
       const next = u.allow_term === false;
       await api('PATCH', `/api/users/${enc(u.id)}`, { allow_term: next });
@@ -3213,39 +3222,44 @@
       class: on ? 'perm is-on' : 'perm',
       title: on ? `${label}: روشن` : `${label}: خاموش`,
     }, label);
-    const stat = (label, value) => h('div', { class: 'user-stat' },
-      h('span', { class: 'user-stat-n', dir: 'ltr' }, value),
-      h('span', { class: 'user-stat-k' }, label));
-    const facts = [h('div', { class: 'user-fact' },
-      h('span', { class: 'user-fact-k' }, 'انقضا'),
-      h('span', { class: 'user-fact-v' }, expiry))];
-    facts.push(h('div', { class: 'user-fact' },
-      h('span', { class: 'user-fact-k' }, 'ایمیل'),
-      h('span', { class: 'user-fact-v', dir: 'ltr' }, u.email || '—')));
-    if (u.note) {
-      facts.push(h('div', { class: 'user-fact' },
-        h('span', { class: 'user-fact-k' }, 'یادداشت'),
-        h('span', { class: 'user-fact-v' }, u.note)));
-    }
+    const metric = (label, value) => h('div', { class: 'cust-metric' },
+      h('span', { class: 'cust-metric-k' }, label),
+      h('span', { class: 'cust-metric-v', dir: 'ltr' }, value));
 
-    return h('article', { class: 'card user-card' },
-      h('div', { class: 'card-head' },
-        h('div', { class: 'user-id' },
-          h('h4', { class: 'card-title' }, u.username),
-          h('span', { class: owner ? 'role-chip role-owner' : 'role-chip' }, owner ? 'مالک' : 'مشتری')),
-        badge(status[0], status[1])),
-      h('div', { class: 'user-stats' },
-        stat('سرور', limitText(usage.servers || 0, u.max_servers, '')),
-        stat('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
-        stat('رله', limitText(usage.relays || 0, u.max_relays, '')),
-        owner ? null : stat('کیف پول', fmtNum(u.wallet_balance || 0))),
-      h('div', { class: 'user-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
-        perm(!!u.allow_vpn, 'VPN'),
-        perm(!!u.allow_relay, 'رله'),
-        perm(!!u.allow_os_update, 'آپدیت'),
-        perm(u.allow_term !== false, 'ترمینال')),
-      h('div', { class: 'user-facts' }, facts),
-      h('div', { class: 'card-actions' }, overviewBtn, walletBtn, extendBtn, toggleBtn, termBtn, pwBtn, delBtn));
+    const actions = [overviewBtn, walletBtn, extendBtn, toggleBtn, termBtn, pwBtn, delBtn].filter(Boolean);
+
+    return h('article', { class: `cust-tr cust-row${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}`, role: 'row' },
+      h('div', { class: 'cust-td cust-td-user', role: 'cell', 'data-label': 'حساب' },
+        h('div', { class: 'cust-user' },
+          h('span', { class: 'cust-avatar', 'aria-hidden': 'true' }, (u.username || '?').slice(0, 1).toUpperCase()),
+          h('div', { class: 'cust-user-text' },
+            h('div', { class: 'cust-user-line' },
+              h('strong', { class: 'cust-username', dir: 'ltr' }, u.username),
+              h('span', { class: owner ? 'role-chip role-owner' : 'role-chip' }, owner ? 'مالک' : 'مشتری')),
+            u.note ? h('p', { class: 'cust-note' }, u.note) : null))),
+      h('div', { class: 'cust-td cust-td-status', role: 'cell', 'data-label': 'وضعیت' }, badge(status[0], status[1])),
+      h('div', { class: 'cust-td cust-td-usage', role: 'cell', 'data-label': 'مصرف' },
+        h('div', { class: 'cust-metrics' },
+          metric('سرور', limitText(usage.servers || 0, u.max_servers, '')),
+          metric('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
+          metric('رله', limitText(usage.relays || 0, u.max_relays, '')),
+          owner ? null : metric('کیف', fmtNum(u.wallet_balance || 0)))),
+      h('div', { class: 'cust-td cust-td-meta', role: 'cell', 'data-label': 'انقضا / ایمیل' },
+        h('div', { class: 'cust-meta' },
+          h('div', { class: 'cust-meta-row' },
+            h('span', { class: 'cust-meta-k' }, 'انقضا'),
+            h('span', { class: 'cust-meta-v' }, expiry)),
+          h('div', { class: 'cust-meta-row' },
+            h('span', { class: 'cust-meta-k' }, 'ایمیل'),
+            h('span', { class: 'cust-meta-v', dir: 'ltr' }, u.email || '—')))),
+      h('div', { class: 'cust-td cust-td-perms', role: 'cell', 'data-label': 'دسترسی' },
+        h('div', { class: 'user-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
+          perm(!!u.allow_vpn, 'VPN'),
+          perm(!!u.allow_relay, 'رله'),
+          perm(!!u.allow_os_update, 'آپدیت'),
+          perm(u.allow_term !== false, 'ترمینال'))),
+      h('div', { class: 'cust-td cust-td-actions', role: 'cell', 'data-label': 'عملیات' },
+        actions.length ? h('div', { class: 'cust-actions' }, ...actions) : h('span', { class: 'muted' }, '—')));
   }
 
   function openExtendUser(u) {

@@ -812,63 +812,101 @@
           <h3 class="mgmt-intro-title">مشتریان</h3>
           <p class="muted">حساب بسازید، سقف و اشتراک بگذارید. هر مشتری فقط سرور و تانل خودش را می‌بیند.</p>
         </div>
-        <div class="mgmt-layout">
-          <div class="card create-card mgmt-card" id="user-create-card">
-            <h3 class="card-title">ساخت مشتری</h3>
-            <form id="user-form" class="form" novalidate>
-              <div id="uf-error" class="form-error" role="alert" hidden></div>
-              <div class="form-grid">
-                <div class="field">
-                  <label for="uf-username">نام کاربری</label>
-                  <input id="uf-username" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="32">
-                </div>
-                <div class="field">
-                  <label for="uf-email">ایمیل</label>
-                  <input id="uf-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="برای بازیابی رمز">
-                </div>
-                <div class="field">
-                  <label for="uf-password">رمز عبور</label>
-                  <input id="uf-password" type="text" dir="ltr" autocomplete="off" placeholder="خالی = تولید تصادفی">
-                  <p class="hint">اگر خالی بماند، رمز تصادفی ساخته و یک‌بار نشان داده می‌شود.</p>
-                </div>
-                <div class="field">
-                  <label for="uf-days">روز اشتراک</label>
-                  <input id="uf-days" type="number" dir="ltr" min="1" max="3650" value="30">
-                </div>
-                <div class="field">
-                  <label for="uf-max-servers">سقف سرور</label>
-                  <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
-                </div>
-                <div class="field">
-                  <label for="uf-max-tunnels">سقف تانل</label>
-                  <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
-                </div>
-                <div class="field">
-                  <label for="uf-max-relays">سقف رله</label>
-                  <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
-                </div>
-                <div class="field field-wide">
-                  <label for="uf-note">یادداشت</label>
-                  <input id="uf-note" type="text" maxlength="500" autocomplete="off">
-                </div>
-                <fieldset class="field field-wide mgmt-caps">
-                  <legend>قابلیت‌ها</legend>
-                  <div class="mgmt-caps-grid">
-                    <label class="check" for="uf-vpn"><input id="uf-vpn" type="checkbox" checked><span>نصب پنل VPN</span></label>
-                    <label class="check" for="uf-relay"><input id="uf-relay" type="checkbox" checked><span>ساخت رله</span></label>
-                    <label class="check" for="uf-os"><input id="uf-os" type="checkbox" checked><span>آپدیت سیستم</span></label>
-                    <label class="check" for="uf-term"><input id="uf-term" type="checkbox" checked><span>ترمینال صفحه اصلی</span></label>
-                  </div>
-                </fieldset>
+        <div class="cust-page">
+          <div class="card create-card mgmt-card cust-create" id="user-create-card">
+            <header class="cust-create-h">
+              <div>
+                <p class="cust-kicker">حساب جدید</p>
+                <h3 class="card-title">ساخت مشتری</h3>
               </div>
-              <div class="form-actions">
+              <p class="cust-create-lead muted">نام و سقف را مشخص کنید؛ رمز خالی یعنی تولید خودکار.</p>
+            </header>
+            <form id="user-form" class="form cust-form" novalidate>
+              <div id="uf-error" class="form-error" role="alert" hidden></div>
+
+              <section class="cust-sec" aria-labelledby="uf-sec-id">
+                <header class="cust-sec-h">
+                  <h4 id="uf-sec-id" class="cust-sec-title">هویت حساب</h4>
+                  <p class="cust-sec-sub">نام کاربری، ایمیل بازیابی و رمز ورود</p>
+                </header>
+                <div class="cust-grid cust-grid-id">
+                  <div class="field">
+                    <label for="uf-username">نام کاربری</label>
+                    <input id="uf-username" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="32">
+                  </div>
+                  <div class="field">
+                    <label for="uf-email">ایمیل</label>
+                    <input id="uf-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="برای بازیابی رمز">
+                  </div>
+                  <div class="field cust-field-pass">
+                    <label for="uf-password">رمز عبور</label>
+                    <input id="uf-password" type="text" dir="ltr" autocomplete="off" placeholder="خالی = تولید تصادفی">
+                    <p class="hint">اگر خالی بماند، رمز تصادفی ساخته و یک‌بار نشان داده می‌شود.</p>
+                  </div>
+                </div>
+              </section>
+
+              <section class="cust-sec" aria-labelledby="uf-sec-quota">
+                <header class="cust-sec-h">
+                  <h4 id="uf-sec-quota" class="cust-sec-title">سقف و اشتراک</h4>
+                  <p class="cust-sec-sub">خالی گذاشتن سقف‌ها یعنی نامحدود</p>
+                </header>
+                <div class="cust-grid cust-grid-quota">
+                  <div class="field">
+                    <label for="uf-days">روز اشتراک</label>
+                    <input id="uf-days" type="number" dir="ltr" min="1" max="3650" value="30">
+                  </div>
+                  <div class="field">
+                    <label for="uf-max-servers">سقف سرور</label>
+                    <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                  </div>
+                  <div class="field">
+                    <label for="uf-max-tunnels">سقف تانل</label>
+                    <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                  </div>
+                  <div class="field">
+                    <label for="uf-max-relays">سقف رله</label>
+                    <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                  </div>
+                </div>
+              </section>
+
+              <section class="cust-sec" aria-labelledby="uf-sec-note">
+                <header class="cust-sec-h">
+                  <h4 id="uf-sec-note" class="cust-sec-title">یادداشت</h4>
+                  <p class="cust-sec-sub">فقط برای مالک دیده می‌شود</p>
+                </header>
+                <div class="field">
+                  <label for="uf-note">متن یادداشت</label>
+                  <input id="uf-note" type="text" maxlength="500" autocomplete="off" placeholder="اختیاری">
+                </div>
+              </section>
+
+              <section class="cust-sec cust-sec-caps" aria-labelledby="uf-sec-caps">
+                <header class="cust-sec-h">
+                  <h4 id="uf-sec-caps" class="cust-sec-title">قابلیت‌ها</h4>
+                  <p class="cust-sec-sub">دسترسی‌های قابل استفاده برای این مشتری</p>
+                </header>
+                <div class="cust-caps-grid" role="group" aria-labelledby="uf-sec-caps">
+                  <label class="cust-cap" for="uf-vpn"><input id="uf-vpn" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">نصب پنل VPN</span><span class="cust-cap-d">مجوز نصب پنل روی سرور</span></span></label>
+                  <label class="cust-cap" for="uf-relay"><input id="uf-relay" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">ساخت رله</span><span class="cust-cap-d">ایجاد و مدیریت رله</span></span></label>
+                  <label class="cust-cap" for="uf-os"><input id="uf-os" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">آپدیت سیستم</span><span class="cust-cap-d">به‌روزرسانی سیستم‌عامل</span></span></label>
+                  <label class="cust-cap" for="uf-term"><input id="uf-term" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">ترمینال صفحه اصلی</span><span class="cust-cap-d">دسترسی به ترمینال وب</span></span></label>
+                </div>
+              </section>
+
+              <div class="form-actions cust-form-actions">
                 <button id="uf-submit" class="btn btn-primary" type="submit">ساخت مشتری</button>
               </div>
             </form>
           </div>
-          <div class="mgmt-list-wrap">
+
+          <div class="mgmt-list-wrap cust-list-wrap">
             <div class="mgmt-list-head">
-              <h3 class="sub-head">فهرست مشتریان</h3>
+              <div>
+                <p class="cust-kicker">حساب‌ها</p>
+                <h3 class="sub-head">فهرست مشتریان</h3>
+              </div>
             </div>
             <div id="users-list" class="list-area"></div>
           </div>

@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.6 / panel 1.3.59
+- **Customers UI**: sectioned create form and table list instead of cramped side layout.
+
 ## 1.6.5 / panel 1.3.58
 - **Order cards**: structured billing strip and equal Iran/Kharej tables with inline copy/reveal instead of nested boxes.
 
