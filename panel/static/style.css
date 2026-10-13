@@ -4013,12 +4013,22 @@ html[data-theme="day"] .vpn-slip {
   flex: 1;
   min-height: 0;
   padding: .35rem;
+  cursor: text;
 }
 
 .hx-screen .xterm,
 .hx-screen .xterm-viewport,
 .hx-screen .xterm-screen {
   height: 100%;
+}
+
+.hx-screen .xterm {
+  padding: 0;
+}
+
+.hx-screen .xterm:focus-within {
+  outline: 1px solid color-mix(in srgb, #6ef0ff 35%, transparent);
+  outline-offset: 1px;
 }
 
 .hx-fab {
