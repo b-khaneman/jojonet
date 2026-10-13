@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.5"
+readonly JOJONET_VERSION="1.6.6"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -10310,11 +10310,24 @@ relay_add() {
             ;;
         gost) install_gost_binary || return 1 ;;
         haproxy|socat)
+            # Prefer local installs (/usr/local) used when apt mirrors are unreachable (common in Iran).
+            if ! command -v "$engine" >/dev/null 2>&1; then
+                for cand in "/usr/local/sbin/$engine" "/usr/local/bin/$engine" "/usr/sbin/$engine" "/usr/bin/$engine"; do
+                    if [[ -x "$cand" ]]; then
+                        export PATH="$(dirname "$cand"):$PATH"
+                        break
+                    fi
+                done
+            fi
             if ! command -v "$engine" >/dev/null 2>&1; then
                 log_note "Installing $engine..."
                 jojonet_pkg_install "$engine" || true
             fi
-            command -v "$engine" >/dev/null 2>&1 || { log_error "$engine is required"; return 1; }
+            if ! command -v "$engine" >/dev/null 2>&1; then
+                log_error "$engine is required but not installed (apt/DNS failed)."
+                log_error "Fix DNS (jojonet --dns 8.8.8.8 1.1.1.1) and apt, or use gost/xray relay instead."
+                return 1
+            fi
             if [[ "$engine" == "haproxy" ]] && systemctl is-enabled --quiet haproxy 2>/dev/null && \
                 ! systemctl is-active --quiet haproxy 2>/dev/null; then
                 systemctl disable haproxy >/dev/null 2>&1 || true

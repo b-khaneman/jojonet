@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.6
+- **Relays**: clearer haproxy/socat install errors when apt/DNS fails; prefer `/usr/local` binaries; Iran DNS tip.
+
 ## 1.6.10 / panel 1.3.63
 - **Guide nav**: section headers (شروع، تونل‌ها، …) use strong primary color, badge bar, and clearer weight.
 
