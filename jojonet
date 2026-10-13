@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.1"
+readonly JOJONET_VERSION="1.6.2"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -100,7 +100,7 @@ DEFAULT_HY2_HOP_RANGE="20000-50000"
 DEFAULT_HY2_HOP_INTERVAL="30s"
 HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
 HY2_BIN="/usr/local/bin/hysteria"
-HY2_VERSION="${JOJONET_HY2_VERSION:-v2.6.1}"
+HY2_VERSION="${JOJONET_HY2_VERSION:-app/v2.13.0}"
 DEFAULT_RATHOLE_CTRL_PORT=2333
 DEFAULT_RATHOLE_FWD="443"
 RATHOLE_CONFIG_DIR="$JOJONET_ROOT/rathole"
@@ -3298,10 +3298,20 @@ install_paqet_binary() {
     fi
     tar -xzf "$tmpdir/paqet.tar.gz" -C "$tmpdir" 2>/dev/null || { rm -rf "$tmpdir"; return 1; }
     local bin_path=""
-    if [[ -f "$tmpdir/paqet" ]]; then
-        bin_path="$tmpdir/paqet"
-    else
-        bin_path=$(find "$tmpdir" -maxdepth 2 -type f -name paqet 2>/dev/null | head -1)
+    # Upstream archives ship as "paqet" or "paqet_linux_amd64" / "paqet_linux_arm64".
+    for cand in \
+        "$tmpdir/paqet" \
+        "$tmpdir/paqet_linux_${arch}" \
+        "$tmpdir/paqet_linux_amd64" \
+        "$tmpdir/paqet_linux_arm64"
+    do
+        if [[ -f "$cand" ]]; then
+            bin_path="$cand"
+            break
+        fi
+    done
+    if [[ -z "$bin_path" ]]; then
+        bin_path=$(find "$tmpdir" -maxdepth 3 -type f \( -name paqet -o -name 'paqet_linux_*' \) 2>/dev/null | head -1)
     fi
     [[ -n "$bin_path" && -f "$bin_path" ]] || {
         echo -e "${RED}[!] paqet binary not found in archive.${NC}" >&2
@@ -5943,7 +5953,7 @@ HY2_SERVICE="/etc/systemd/system/jojonet-hy2@.service"
 HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
 HY2_BIN="/usr/local/bin/hysteria"
 HY2_REPO="apernet/hysteria"
-HY2_VERSION="${JOJONET_HY2_VERSION:-v2.6.1}"
+HY2_VERSION="${JOJONET_HY2_VERSION:-app/v2.13.0}"
 DEFAULT_HY2_PORT=443
 DEFAULT_HY2_SNI="www.cloudflare.com"
 DEFAULT_HY2_HOP_RANGE="20000-50000"
