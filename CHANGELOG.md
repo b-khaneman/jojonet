@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.10 / panel 1.3.63
+- **Guide nav**: section headers (شروع، تونل‌ها، …) use strong primary color, badge bar, and clearer weight.
+
 ## 1.6.9 / panel 1.3.62
 - **Terminal scroll**: fix xterm scrollback CSS, mouse wheel, Shift+PageUp/Down and Shift+Arrows.
 

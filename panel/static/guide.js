@@ -780,7 +780,9 @@
     ARTICLES.forEach((article) => {
       if (article.group !== group) {
         group = article.group;
-        nav.append(el('p', 'guide-group', group));
+        const head = el('div', 'guide-group', group);
+        head.setAttribute('role', 'presentation');
+        nav.append(head);
       }
       const btn = document.createElement('button');
       btn.type = 'button';
