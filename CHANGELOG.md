@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.5 / panel 1.3.56
+- **Registration email + password reset**: public signup requires an email; users can request a reset link from the login screen; owner configures SMTP under management (with a test-send button); accounts can update their own email from the account menu.
+
 ## 1.6.5 / panel 1.3.55
 - **Prereqs**: if core tools are already on the VPS, skip apt entirely (avoids 15-minute hangs when Iran DNS/mirrors are down) and use short Acquire timeouts otherwise.
 

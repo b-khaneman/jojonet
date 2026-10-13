@@ -900,12 +900,16 @@ def test_wallet_deposit_and_tunnel_charge(client, admin, monkeypatch):
 
     # Public registration gate
     client.post("/api/logout", headers=owner_auth)
-    assert client.post("/api/register", json={"username": "newbie1", "password": "newbie-pass-1"}).status_code == 200
+    assert client.post("/api/register", json={
+        "username": "newbie1", "password": "newbie-pass-1", "email": "newbie1@example.com",
+    }).status_code == 200
     client.post("/api/logout")
     owner_auth = login_as(client, admin[0], admin[1])
     assert client.patch("/api/settings", json={"register_enabled": False}, headers=owner_auth).status_code == 200
     client.post("/api/logout", headers=owner_auth)
-    closed = client.post("/api/register", json={"username": "newbie2", "password": "newbie-pass-2"})
+    closed = client.post("/api/register", json={
+        "username": "newbie2", "password": "newbie-pass-2", "email": "newbie2@example.com",
+    })
     assert closed.status_code == 403
 
     # Tunnel charge + refund on failed deploy
@@ -943,3 +947,61 @@ def test_wallet_deposit_and_tunnel_charge(client, admin, monkeypatch):
     assert tunnels.status_code == 200
     match = [t for t in tunnels.json() if t["id"] == created.json()["tunnel"]["id"]]
     assert match and match[0]["status"] == "failed"
+
+
+def test_register_email_and_password_reset(client, admin, monkeypatch):
+    from test_tenants import login_as
+
+    owner_auth = login_as(client, admin[0], admin[1])
+    assert client.patch("/api/settings", json={
+        "register_enabled": True,
+        "smtp_enabled": True,
+        "smtp_host": "smtp.test.local",
+        "smtp_port": 587,
+        "smtp_user": "mailer",
+        "smtp_password": "smtp-secret",
+        "smtp_from": "noreply@example.com",
+        "smtp_tls": True,
+    }, headers=owner_auth).status_code == 200
+    sett = client.get("/api/settings", headers=owner_auth).json()
+    assert sett["smtp"]["enabled"] is True
+    assert sett["smtp"]["password_set"] is True
+    assert sett["password_reset_enabled"] is True
+
+    client.post("/api/logout", headers=owner_auth)
+    missing = client.post("/api/register", json={"username": "mailuser1", "password": "mailuser-pass-1"})
+    assert missing.status_code == 422
+    reg = client.post("/api/register", json={
+        "username": "mailuser1",
+        "password": "mailuser-pass-1",
+        "email": "MailUser1@Example.COM",
+    })
+    assert reg.status_code == 200, reg.text
+    me = client.get("/api/me").json()
+    assert me["email"] == "mailuser1@example.com"
+    client.post("/api/logout")
+
+    captured = {}
+
+    def fake_send(db, vault, *, to, username, reset_url):
+        captured["to"] = to
+        captured["username"] = username
+        captured["reset_url"] = reset_url
+
+    monkeypatch.setattr("app.mail.send_password_reset_mail", fake_send)
+    forgot = client.post("/api/forgot-password", json={"email": "mailuser1@example.com"})
+    assert forgot.status_code == 200
+    assert "ایمیل" in forgot.json()["message"] or "بازیابی" in forgot.json()["message"]
+    assert captured["to"] == "mailuser1@example.com"
+    assert "reset=" in captured["reset_url"]
+    token = captured["reset_url"].split("reset=", 1)[1]
+
+    bad = client.post("/api/reset-password", json={"token": "not-a-real-token-value-xx", "password": "new-password-99"})
+    assert bad.status_code == 400
+    ok = client.post("/api/reset-password", json={"token": token, "password": "new-password-99"})
+    assert ok.status_code == 200, ok.text
+
+    old = client.post("/api/login", json={"username": "mailuser1", "password": "mailuser-pass-1"})
+    assert old.status_code == 401
+    new = client.post("/api/login", json={"username": "mailuser1", "password": "new-password-99"})
+    assert new.status_code == 200

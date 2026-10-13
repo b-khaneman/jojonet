@@ -24,6 +24,7 @@ from . import PANEL_VERSION
 from .config import PanelEntry, Settings, load_settings, normalize_base_path, write_listen
 from .guide import delete_guide_article, guide_public_view, write_guide_article
 from .tlsinfo import build_ssl_view, normalize_domain, normalize_email, write_ssl_request
+from . import mail as mail_mod
 from . import wallet as wallet_mod
 from .db import Database, utcnow
 from .jobs import JobManager
@@ -240,6 +241,67 @@ class UsernameIn(BaseModel):
         if not USER_RE.fullmatch(v) or v.endswith("$"):
             raise ValueError("نام کاربری نامعتبر است")
         return v
+
+
+class EmailIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        try:
+            value = normalize_email(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not value:
+            raise ValueError("ایمیل را وارد کنید")
+        return value
+
+
+class ForgotPasswordIn(BaseModel):
+    email: str | None = Field(default=None, max_length=254)
+    username: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _one(self) -> ForgotPasswordIn:
+        email = (self.email or "").strip()
+        username = (self.username or "").strip()
+        if not email and not username:
+            raise ValueError("ایمیل یا نام کاربری را وارد کنید")
+        if email:
+            try:
+                self.email = normalize_email(email)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+            if not self.email:
+                raise ValueError("ایمیل نامعتبر است")
+        else:
+            self.email = None
+        self.username = username.lower() if username else None
+        return self
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=10, max_length=256)
+
+
+class SmtpTestIn(BaseModel):
+    to: str | None = Field(default=None, max_length=254)
+
+    @field_validator("to")
+    @classmethod
+    def _to(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        try:
+            value = normalize_email(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not value:
+            raise ValueError("ایمیل نامعتبر است")
+        return value
 
 
 class VpnPanelIn(BaseModel):
@@ -541,6 +603,7 @@ class DeleteIn(BaseModel):
 class UserCreateIn(BaseModel):
     username: str
     password: str | None = Field(default=None, max_length=256)
+    email: str | None = Field(default=None, max_length=254)
     days: int | None = Field(default=None, ge=1, le=3650)
     max_servers: int | None = Field(default=None, ge=0, le=10000)
     max_tunnels: int | None = Field(default=None, ge=0, le=10000)
@@ -568,6 +631,17 @@ class UserCreateIn(BaseModel):
             raise ValueError("رمز عبور باید حداقل ۱۰ کاراکتر باشد")
         return v
 
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str | None) -> str | None:
+        if v is None or not str(v).strip():
+            return None
+        try:
+            value = normalize_email(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return value or None
+
     @field_validator("note")
     @classmethod
     def _note(cls, v: str | None) -> str | None:
@@ -586,6 +660,7 @@ class UserPatchIn(BaseModel):
     allow_os_update: bool | None = None
     allow_term: bool | None = None
     note: str | None = Field(default=None, max_length=500)
+    email: str | None = Field(default=None, max_length=254)
 
     @field_validator("note")
     @classmethod
@@ -594,6 +669,19 @@ class UserPatchIn(BaseModel):
             return None
         v = str(v).strip()
         return v[:500] if v else None
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not str(v).strip():
+            return ""
+        try:
+            value = normalize_email(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return value
 
 
 class UserExtendIn(BaseModel):
@@ -609,6 +697,13 @@ class PanelSettingsIn(BaseModel):
     payment_note: str | None = Field(default=None, max_length=1000)
     wallet_currency: str | None = Field(default=None, max_length=32)
     tunnel_prices: dict[str, int] | None = None
+    smtp_enabled: bool | None = None
+    smtp_host: str | None = Field(default=None, max_length=253)
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    smtp_user: str | None = Field(default=None, max_length=200)
+    smtp_password: str | None = Field(default=None, max_length=512)
+    smtp_from: str | None = Field(default=None, max_length=254)
+    smtp_tls: bool | None = None
 
 
 class DepositIn(BaseModel):
@@ -650,6 +745,7 @@ class WalletAdjustIn(BaseModel):
 class RegisterIn(BaseModel):
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=10, max_length=256)
+    email: str = Field(min_length=3, max_length=254)
 
     @field_validator("username")
     @classmethod
@@ -657,6 +753,17 @@ class RegisterIn(BaseModel):
         value = (v or "").strip().lower()
         if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,31}", value):
             raise ValueError("نام کاربری نامعتبر است")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        try:
+            value = normalize_email(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not value:
+            raise ValueError("ایمیل را وارد کنید")
         return value
 
 
@@ -963,7 +1070,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return None
         row = db.one(
             """SELECT s.token_hash, s.admin_id, s.csrf, s.created_at AS session_created_at,
-                      s.expires_at AS session_expires_at, a.username, a.role, a.enabled,
+                      s.expires_at AS session_expires_at, a.username, a.email, a.role, a.enabled,
                       a.expires_at, a.max_servers, a.max_tunnels, a.max_relays,
                       a.allow_vpn, a.allow_relay, a.allow_os_update, a.allow_term, a.note
                FROM sessions s JOIN admins a ON a.id = s.admin_id WHERE s.token_hash=?""",
@@ -1159,6 +1266,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "id": row["id"],
             "username": row["username"],
+            "email": row.get("email") or None,
             "role": row["role"],
             "enabled": bool(row.get("enabled")),
             "expires_at": row.get("expires_at"),
@@ -1181,15 +1289,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "sell_tunnels_enabled": wallet_mod.sell_enabled(db),
             "register_enabled": wallet_mod.register_enabled(db),
+            "password_reset_enabled": mail_mod.smtp_ready(db, vault),
             "currency": pay["currency"],
             "payment": pay,
             "tunnel_prices": wallet_mod.load_prices(db),
         }
 
+    def email_taken(email: str, exclude_id: int | None = None) -> bool:
+        if not email:
+            return False
+        if exclude_id is None:
+            return db.one("SELECT id FROM admins WHERE email=?", (email,)) is not None
+        return db.one("SELECT id FROM admins WHERE email=? AND id!=?", (email, exclude_id)) is not None
+
     def me_payload(sess: dict[str, Any]) -> dict[str, Any]:
         usage = usage_counts(sess["admin_id"])
         return {
             "username": sess["username"],
+            "email": sess.get("email") or None,
             "csrf": sess["csrf"],
             "panel_version": PANEL_VERSION,
             "jojonet_version": bundle_version(settings.bundle_dir),
@@ -1246,9 +1363,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(429, "تلاش‌های زیاد بود؛ کمی بعد دوباره امتحان کنید")
         if db.one("SELECT id FROM admins WHERE username=?", (data.username,)):
             raise HTTPException(409, "این نام کاربری قبلاً ثبت شده است")
+        if email_taken(data.email):
+            raise HTTPException(409, "این ایمیل قبلاً ثبت شده است")
         pw_hash = await asyncio.to_thread(hash_password, data.password)
         uid = db.insert("admins", {
             "username": data.username,
+            "email": data.email,
             "pw_hash": pw_hash,
             "created_at": utcnow(),
             "role": "customer",
@@ -1273,6 +1393,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             secure=settings.secure_cookies, samesite="strict", path=cookie_path(),
         )
         return {"ok": True, "csrf": csrf}
+
+    @app.post("/api/forgot-password")
+    async def forgot_password(data: ForgotPasswordIn, request: Request) -> dict[str, Any]:
+        ip = client_ip(request)
+        rate_key = data.email or data.username or "forgot"
+        if not login_allowed(db, ip, f"forgot:{rate_key}"):
+            raise HTTPException(429, "تلاش‌های زیاد بود؛ کمی بعد دوباره امتحان کنید")
+        record_login_failure(db, ip, f"forgot:{rate_key}")
+        admin = None
+        if data.email:
+            admin = db.one("SELECT * FROM admins WHERE email=?", (data.email,))
+        elif data.username:
+            admin = db.one("SELECT * FROM admins WHERE username=?", (data.username,))
+        if admin and admin.get("email") and mail_mod.smtp_ready(db, vault):
+            blocked = account_block_reason(admin)
+            if not blocked:
+                raw = new_token()
+                now = datetime.now(timezone.utc).replace(microsecond=0)
+                expires = now + timedelta(seconds=mail_mod.RESET_TTL_SECONDS)
+                db.execute("DELETE FROM password_resets WHERE admin_id=?", (admin["id"],))
+                db.insert("password_resets", {
+                    "token_hash": token_hash(raw),
+                    "admin_id": admin["id"],
+                    "created_at": now.isoformat(),
+                    "expires_at": expires.isoformat(),
+                    "used_at": None,
+                })
+                reset_url = panel_public_url(request, app.state.entry.path, app.state.entry.port)
+                if "?" in reset_url:
+                    reset_url = reset_url.rstrip("/") + f"&reset={raw}"
+                else:
+                    reset_url = reset_url.rstrip("/") + f"/?reset={raw}"
+                try:
+                    await asyncio.to_thread(
+                        mail_mod.send_password_reset_mail,
+                        db,
+                        vault,
+                        to=admin["email"],
+                        username=admin["username"],
+                        reset_url=reset_url,
+                    )
+                except Exception:
+                    log.exception("password reset mail failed for admin_id=%s", admin["id"])
+        return {"ok": True, "message": mail_mod.GENERIC_FORGOT_MSG}
+
+    @app.post("/api/reset-password")
+    async def reset_password(data: ResetPasswordIn) -> dict[str, Any]:
+        th = token_hash(data.token.strip())
+        row = db.one("SELECT * FROM password_resets WHERE token_hash=?", (th,))
+        if row is None or row.get("used_at"):
+            raise HTTPException(400, "لینک بازیابی نامعتبر یا منقضی است")
+        if row["expires_at"] < utcnow():
+            db.execute("DELETE FROM password_resets WHERE token_hash=?", (th,))
+            raise HTTPException(400, "لینک بازیابی منقضی شده است؛ دوباره درخواست دهید")
+        admin = db.one("SELECT * FROM admins WHERE id=?", (row["admin_id"],))
+        if admin is None:
+            db.execute("DELETE FROM password_resets WHERE token_hash=?", (th,))
+            raise HTTPException(400, "لینک بازیابی نامعتبر است")
+        blocked = account_block_reason(admin)
+        if blocked:
+            raise HTTPException(403, blocked)
+        pw_hash = await asyncio.to_thread(hash_password, data.password)
+        db.update("admins", admin["id"], {"pw_hash": pw_hash})
+        db.execute(
+            "UPDATE password_resets SET used_at=? WHERE token_hash=?",
+            (utcnow(), th),
+        )
+        db.execute("DELETE FROM password_resets WHERE admin_id=? AND token_hash!=?", (admin["id"], th))
+        db.execute("DELETE FROM sessions WHERE admin_id=?", (admin["id"],))
+        return {"ok": True, "message": "رمز عبور عوض شد؛ الان می‌توانید وارد شوید."}
 
     @app.post("/api/login")
     async def login(data: LoginIn, request: Request, response: Response) -> dict[str, Any]:
@@ -1336,6 +1526,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             db.update("admins", admin["id"], {"username": data.username})
         return {"ok": True, "username": data.username}
 
+    @app.post("/api/email")
+    async def change_email(data: EmailIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        admin = db.one("SELECT * FROM admins WHERE id=?", (sess["admin_id"],))
+        if not admin or not await asyncio.to_thread(verify_password, data.password, admin["pw_hash"]):
+            raise HTTPException(400, "رمز فعلی اشتباه است")
+        if email_taken(data.email, exclude_id=admin["id"]):
+            raise HTTPException(409, "این ایمیل قبلاً ثبت شده است")
+        db.update("admins", admin["id"], {"email": data.email})
+        return {"ok": True, "email": data.email}
+
     def get_admin(user_id: int) -> dict[str, Any]:
         row = db.one("SELECT * FROM admins WHERE id=?", (user_id,))
         if row is None:
@@ -1346,6 +1546,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_settings(_: dict = Depends(require_owner)) -> dict[str, Any]:
         out = {"terms_enabled": terms_globally_on()}
         out.update(commerce_public())
+        out["smtp"] = mail_mod.smtp_public(db)
         return out
 
     @app.patch("/api/settings")
@@ -1371,9 +1572,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if data.tunnel_prices is not None:
             wallet_mod.save_prices(db, data.tunnel_prices)
+        smtp_fields = (
+            data.smtp_enabled, data.smtp_host, data.smtp_port, data.smtp_user,
+            data.smtp_password, data.smtp_from, data.smtp_tls,
+        )
+        if any(x is not None for x in smtp_fields):
+            try:
+                mail_mod.save_smtp(
+                    db,
+                    vault,
+                    enabled=data.smtp_enabled,
+                    host=data.smtp_host,
+                    port=data.smtp_port,
+                    username=data.smtp_user,
+                    password=data.smtp_password,
+                    from_addr=data.smtp_from,
+                    tls=data.smtp_tls,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
         out = {"terms_enabled": terms_globally_on()}
         out.update(commerce_public())
+        out["smtp"] = mail_mod.smtp_public(db)
         return out
+
+    @app.post("/api/settings/smtp/test")
+    async def test_smtp(data: SmtpTestIn, sess: dict = Depends(require_owner)) -> dict[str, Any]:
+        to = data.to or (sess.get("email") or "")
+        if not to:
+            cfg = mail_mod.smtp_public(db)
+            to = cfg.get("from_addr") or ""
+        if not to:
+            raise HTTPException(400, "آدرس گیرنده تست را وارد کنید یا ایمیل حساب/فرستنده را تنظیم کنید")
+        try:
+            await asyncio.to_thread(
+                mail_mod.send_mail,
+                db,
+                vault,
+                to=to,
+                subject="تست SMTP پنل JojoNet",
+                text="این یک ایمیل آزمایشی از پنل JojoNet است. اگر دریافت کردید، تنظیمات SMTP درست است.\n",
+            )
+        except Exception as exc:
+            raise HTTPException(400, f"ارسال تست ناموفق بود: {exc}") from exc
+        return {"ok": True, "to": to}
 
     def panel_public_url(request: Request, path: str, port: int) -> str:
         host = request.headers.get("host") or request.url.hostname or "127.0.0.1"
@@ -1484,6 +1726,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def add_user(data: UserCreateIn, _: dict = Depends(require_owner)) -> dict[str, Any]:
         if db.one("SELECT id FROM admins WHERE username=?", (data.username,)):
             raise HTTPException(409, "این نام کاربری قبلاً ثبت شده است")
+        if data.email and email_taken(data.email):
+            raise HTTPException(409, "این ایمیل قبلاً ثبت شده است")
         password = data.password or random_password(16)
         generated = data.password is None
         now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -1491,6 +1735,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pw_hash = await asyncio.to_thread(hash_password, password)
         uid = db.insert("admins", {
             "username": data.username,
+            "email": data.email,
             "pw_hash": pw_hash,
             "created_at": now.isoformat(),
             "role": "customer",
@@ -1519,6 +1764,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if incoming.get("enabled") is False:
                 raise HTTPException(400, "مالک پنل را نمی‌توان غیرفعال کرد")
             incoming.pop("enabled", None)
+        if "email" in incoming:
+            email_val = incoming.pop("email")
+            if email_val == "":
+                values["email"] = None
+            elif email_val is not None:
+                if email_taken(email_val, exclude_id=user_id):
+                    raise HTTPException(409, "این ایمیل قبلاً ثبت شده است")
+                values["email"] = email_val
         bool_fields = ("enabled", "allow_vpn", "allow_relay", "allow_os_update", "allow_term")
         for key, val in incoming.items():
             if key in bool_fields and val is not None:

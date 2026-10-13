@@ -44,7 +44,7 @@ def normalize_domain(raw: str) -> str:
 
 
 def normalize_email(raw: str | None) -> str:
-    value = (raw or "").strip()
+    value = (raw or "").strip().lower()
     if not value:
         return ""
     if "\n" in value or "\r" in value or len(value) > 254 or not _EMAIL_RE.fullmatch(value):

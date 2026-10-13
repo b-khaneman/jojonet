@@ -23,8 +23,17 @@ CREATE TABLE IF NOT EXISTS admins (
     allow_relay INTEGER NOT NULL DEFAULT 1,
     allow_os_update INTEGER NOT NULL DEFAULT 1,
     allow_term INTEGER NOT NULL DEFAULT 1,
-    note TEXT
+    note TEXT,
+    email TEXT
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+    token_hash TEXT PRIMARY KEY,
+    admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_admin ON password_resets(admin_id);
 CREATE TABLE IF NOT EXISTS panel_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -176,6 +185,7 @@ ADMIN_COLUMNS = {
     "allow_term": "INTEGER NOT NULL DEFAULT 1",
     "note": "TEXT",
     "wallet_balance": "INTEGER NOT NULL DEFAULT 0",
+    "email": "TEXT",
 }
 OWNER_TABLES = ("servers", "tunnels", "relays", "jobs")
 TABLE_COLUMNS = {
@@ -332,9 +342,27 @@ class Database:
             ("payment_note", ""),
             ("wallet_currency", "تومان"),
             ("tunnel_prices_json", "{}"),
+            ("smtp_enabled", "0"),
+            ("smtp_host", ""),
+            ("smtp_port", "587"),
+            ("smtp_user", ""),
+            ("smtp_password", ""),
+            ("smtp_from", ""),
+            ("smtp_tls", "1"),
         ):
             if self._conn.execute("SELECT key FROM panel_settings WHERE key=?", (key,)).fetchone() is None:
                 self._conn.execute("INSERT INTO panel_settings (key, value) VALUES (?, ?)", (key, val))
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS password_resets ("
+            "token_hash TEXT PRIMARY KEY, "
+            "admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE, "
+            "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_admin ON password_resets(admin_id)")
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_admins_email_unique "
+            "ON admins(email) WHERE email IS NOT NULL AND email != ''"
+        )
 
     def _rebuild_relays_without_global_name_unique(self) -> None:
         row = self._conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='relays'").fetchone()

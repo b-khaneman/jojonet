@@ -56,6 +56,9 @@
       <input id="login-pass" name="password" type="password" dir="ltr" autocomplete="current-password" required>
     </div>
     <button id="login-btn" class="btn btn-primary btn-block" type="submit">ورود</button>
+    <p class="muted login-switch" id="login-forgot-wrap">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-show-forgot">رمز را فراموش کرده‌ام</button>
+    </p>
     <p class="muted login-switch" id="login-to-register" hidden>
       حساب ندارید؟
       <button type="button" class="btn btn-ghost btn-sm" id="btn-show-register">ثبت‌نام</button>
@@ -67,11 +70,15 @@
   <form id="register-form" class="login-card" novalidate hidden>
     <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
     <h1 class="login-title">ثبت‌نام</h1>
-    <p class="muted">حساب مشتری بسازید. مالک می‌تواند ثبت‌نام را از مدیریت ببندد.</p>
+    <p class="muted">حساب مشتری بسازید. ایمیل برای بازیابی رمز لازم است. مالک می‌تواند ثبت‌نام را از مدیریت ببندد.</p>
     <div id="register-error" class="form-error" role="alert" hidden></div>
     <div class="field">
       <label for="reg-user">نام کاربری</label>
       <input id="reg-user" name="username" type="text" dir="ltr" autocomplete="username" autocapitalize="off" spellcheck="false" required minlength="3" maxlength="32">
+    </div>
+    <div class="field">
+      <label for="reg-email">ایمیل</label>
+      <input id="reg-email" name="email" type="email" dir="ltr" autocomplete="email" spellcheck="false" required maxlength="254" placeholder="you@example.com">
     </div>
     <div class="field">
       <label for="reg-pass">رمز عبور</label>
@@ -81,6 +88,44 @@
     <p class="muted login-switch">
       قبلاً حساب دارید؟
       <button type="button" class="btn btn-ghost btn-sm" id="btn-show-login">ورود</button>
+    </p>
+  </form>
+  <form id="forgot-form" class="login-card" novalidate hidden>
+    <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
+    <h1 class="login-title">بازیابی رمز</h1>
+    <p class="muted">ایمیل یا نام کاربری حساب را وارد کنید. اگر ایمیل ثبت شده باشد، لینک بازیابی برایتان ارسال می‌شود.</p>
+    <div id="forgot-error" class="form-error" role="alert" hidden></div>
+    <div id="forgot-ok" class="form-ok" role="status" hidden></div>
+    <div class="field">
+      <label for="forgot-email">ایمیل</label>
+      <input id="forgot-email" name="email" type="email" dir="ltr" autocomplete="email" maxlength="254" placeholder="you@example.com">
+    </div>
+    <div class="field">
+      <label for="forgot-user">یا نام کاربری</label>
+      <input id="forgot-user" name="username" type="text" dir="ltr" autocomplete="username" autocapitalize="off" spellcheck="false" maxlength="64">
+    </div>
+    <button id="forgot-btn" class="btn btn-primary btn-block" type="submit">ارسال لینک بازیابی</button>
+    <p class="muted login-switch">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-forgot-to-login">بازگشت به ورود</button>
+    </p>
+  </form>
+  <form id="reset-form" class="login-card" novalidate hidden>
+    <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
+    <h1 class="login-title">رمز جدید</h1>
+    <p class="muted">رمز عبور تازه را وارد کنید.</p>
+    <div id="reset-error" class="form-error" role="alert" hidden></div>
+    <input id="reset-token" type="hidden" value="">
+    <div class="field">
+      <label for="reset-pass">رمز عبور جدید</label>
+      <input id="reset-pass" name="password" type="password" dir="ltr" autocomplete="new-password" required minlength="10">
+    </div>
+    <div class="field">
+      <label for="reset-pass2">تکرار رمز</label>
+      <input id="reset-pass2" name="password2" type="password" dir="ltr" autocomplete="new-password" required minlength="10">
+    </div>
+    <button id="reset-btn" class="btn btn-primary btn-block" type="submit">ذخیره رمز جدید</button>
+    <p class="muted login-switch">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-reset-to-login">بازگشت به ورود</button>
     </p>
   </form>
 </section>
@@ -136,6 +181,7 @@
             <span id="hdr-quota" class="quota-chip" hidden></span>
           </div>
           <button id="btn-username" class="account-item" type="button" role="menuitem">تغییر نام کاربری</button>
+          <button id="btn-email" class="account-item" type="button" role="menuitem">تغییر ایمیل</button>
           <button id="btn-password" class="account-item" type="button" role="menuitem">تغییر رمز عبور</button>
           <a class="account-item" href="https://t.me/B_KHANEMAN" target="_blank" rel="noopener noreferrer">پشتیبانی</a>
           <button id="btn-logout" class="account-item account-item-danger" type="button" role="menuitem">خروج</button>
@@ -787,6 +833,50 @@
           <button id="register-policy-save" class="btn btn-primary" type="button">ذخیرهٔ وضعیت ثبت‌نام</button>
         </div>
       </div>
+      <div class="card create-card" id="smtp-card">
+        <h3 class="card-title">ایمیل بازیابی رمز (SMTP)</h3>
+        <p class="muted">برای «رمز را فراموش کرده‌ام» باید SMTP روشن باشد. مشتریان هنگام ثبت‌نام ایمیل می‌دهند و لینک بازیابی به همان آدرس می‌رود.</p>
+        <form id="smtp-form" class="form" novalidate>
+          <div id="smtp-error" class="form-error" role="alert" hidden></div>
+          <div class="form-grid">
+            <div class="field">
+              <label class="check" for="smtp-enabled"><input id="smtp-enabled" type="checkbox"><span>ارسال ایمیل فعال باشد</span></label>
+            </div>
+            <div class="field">
+              <label class="check" for="smtp-tls"><input id="smtp-tls" type="checkbox" checked><span>STARTTLS (معمولاً پورت 587)</span></label>
+            </div>
+            <div class="field">
+              <label for="smtp-host">سرور SMTP</label>
+              <input id="smtp-host" type="text" dir="ltr" maxlength="253" autocomplete="off" placeholder="smtp.example.com">
+            </div>
+            <div class="field">
+              <label for="smtp-port">پورت</label>
+              <input id="smtp-port" type="number" dir="ltr" min="1" max="65535" value="587">
+            </div>
+            <div class="field">
+              <label for="smtp-user">نام کاربری SMTP</label>
+              <input id="smtp-user" type="text" dir="ltr" maxlength="200" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="smtp-password">رمز SMTP</label>
+              <input id="smtp-password" type="password" dir="ltr" maxlength="512" autocomplete="new-password" placeholder="خالی = بدون تغییر">
+              <p class="hint" id="smtp-password-hint">اگر قبلاً ذخیره شده، برای نگه‌داشتن خالی بگذارید.</p>
+            </div>
+            <div class="field field-wide">
+              <label for="smtp-from">آدرس فرستنده (From)</label>
+              <input id="smtp-from" type="email" dir="ltr" maxlength="254" autocomplete="off" placeholder="noreply@example.com">
+            </div>
+            <div class="field field-wide">
+              <label for="smtp-test-to">گیرنده تست (اختیاری)</label>
+              <input id="smtp-test-to" type="email" dir="ltr" maxlength="254" autocomplete="off" placeholder="همان From یا ایمیل شما">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="smtp-save" class="btn btn-primary" type="submit">ذخیره SMTP</button>
+            <button id="smtp-test" class="btn" type="button">ارسال ایمیل تست</button>
+          </div>
+        </form>
+      </div>
       <div class="card create-card" id="commerce-card">
         <h3 class="card-title">فروش تانل و واریز</h3>
         <p class="muted">فروش را روشن کنید، شماره کارت یا آدرس ولت بگذارید، و برای هر نوع تانل قیمت تعیین کنید. مشتری واریز می‌کند؛ بعد از تأیید شما موجودی شارژ می‌شود و با هر ساخت تانل همان مبلغ یک‌بار کم می‌شود.</p>
@@ -830,6 +920,10 @@
             <div class="field">
               <label for="uf-username">نام کاربری</label>
               <input id="uf-username" type="text" dir="ltr" autocomplete="off" autocapitalize="off" spellcheck="false" required maxlength="32">
+            </div>
+            <div class="field">
+              <label for="uf-email">ایمیل</label>
+              <input id="uf-email" type="email" dir="ltr" autocomplete="off" maxlength="254" placeholder="برای بازیابی رمز">
             </div>
             <div class="field">
               <label for="uf-password">رمز عبور</label>

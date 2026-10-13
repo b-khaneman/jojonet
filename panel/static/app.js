@@ -390,7 +390,9 @@
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
-    if (method !== 'GET' && path !== '/api/login' && path !== '/api/register' && state.csrf) headers['X-CSRF-Token'] = state.csrf;
+    const noCsrf = path === '/api/login' || path === '/api/register'
+      || path === '/api/forgot-password' || path === '/api/reset-password';
+    if (method !== 'GET' && !noCsrf && state.csrf) headers['X-CSRF-Token'] = state.csrf;
 
     let res;
     try {
@@ -3201,6 +3203,9 @@
     const facts = [h('div', { class: 'user-fact' },
       h('span', { class: 'user-fact-k' }, 'انقضا'),
       h('span', { class: 'user-fact-v' }, expiry))];
+    facts.push(h('div', { class: 'user-fact' },
+      h('span', { class: 'user-fact-k' }, 'ایمیل'),
+      h('span', { class: 'user-fact-v', dir: 'ltr' }, u.email || '—')));
     if (u.note) {
       facts.push(h('div', { class: 'user-fact' },
         h('span', { class: 'user-fact-k' }, 'یادداشت'),
@@ -3273,8 +3278,11 @@
     if (Number.isNaN(maxServers) || Number.isNaN(maxTunnels) || Number.isNaN(maxRelays)) {
       return showErr(errBox, 'سقف‌ها باید عدد صفر یا بزرگ‌تر باشند (خالی = نامحدود).');
     }
+    const emailRaw = ($('#uf-email') && $('#uf-email').value.trim()) || '';
+    if (emailRaw && !emailRaw.includes('@')) return showErr(errBox, 'ایمیل نامعتبر است.');
     const payload = {
       username,
+      email: emailRaw || null,
       password: $('#uf-password').value || null,
       days,
       max_servers: maxServers,
@@ -3599,6 +3607,25 @@
     }
   }
 
+  function paintSmtpForm(smtp) {
+    const s = smtp || {};
+    const en = $('#smtp-enabled');
+    if (en) en.checked = !!s.enabled;
+    const tls = $('#smtp-tls');
+    if (tls) tls.checked = s.tls !== false;
+    if ($('#smtp-host')) $('#smtp-host').value = s.host || '';
+    if ($('#smtp-port')) $('#smtp-port').value = String(s.port || 587);
+    if ($('#smtp-user')) $('#smtp-user').value = s.username || '';
+    if ($('#smtp-from')) $('#smtp-from').value = s.from_addr || '';
+    if ($('#smtp-password')) $('#smtp-password').value = '';
+    const hint = $('#smtp-password-hint');
+    if (hint) {
+      hint.textContent = s.password_set
+        ? 'رمز قبلاً ذخیره شده؛ برای نگه‌داشتن خالی بگذارید.'
+        : 'رمز SMTP را وارد کنید (اگر سرور نیاز دارد).';
+    }
+  }
+
   async function loadCommerceForm() {
     if (!isOwner()) return;
     try {
@@ -3606,6 +3633,7 @@
       if (state.me) state.me.commerce = {
         sell_tunnels_enabled: s.sell_tunnels_enabled,
         register_enabled: s.register_enabled,
+        password_reset_enabled: s.password_reset_enabled,
         currency: s.currency,
         payment: s.payment,
         tunnel_prices: s.tunnel_prices,
@@ -3613,6 +3641,7 @@
       const sell = $('#set-sell-enabled');
       if (sell) sell.checked = !!s.sell_tunnels_enabled;
       paintRegisterPolicy(!!s.register_enabled);
+      paintSmtpForm(s.smtp);
       if ($('#pay-card')) $('#pay-card').value = (s.payment && s.payment.card) || '';
       if ($('#pay-wallet')) $('#pay-wallet').value = (s.payment && s.payment.wallet_address) || '';
       if ($('#pay-note')) $('#pay-note').value = (s.payment && s.payment.note) || '';
@@ -3622,6 +3651,51 @@
     } catch (err) {
       if (err.status !== 401) toast(err.message || NET_ERR, 'error');
     }
+  }
+
+  async function onSmtpSubmit(e) {
+    e.preventDefault();
+    const errBox = $('#smtp-error');
+    hideErr(errBox);
+    const port = Number(($('#smtp-port') && $('#smtp-port').value) || 587);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return showErr(errBox, 'پورت SMTP نامعتبر است.');
+    }
+    const payload = {
+      smtp_enabled: !!($('#smtp-enabled') && $('#smtp-enabled').checked),
+      smtp_tls: !!($('#smtp-tls') && $('#smtp-tls').checked),
+      smtp_host: ($('#smtp-host') && $('#smtp-host').value.trim()) || '',
+      smtp_port: port,
+      smtp_user: ($('#smtp-user') && $('#smtp-user').value.trim()) || '',
+      smtp_from: ($('#smtp-from') && $('#smtp-from').value.trim()) || '',
+    };
+    const pw = ($('#smtp-password') && $('#smtp-password').value) || '';
+    if (pw) payload.smtp_password = pw;
+    act($('#smtp-save'), async () => {
+      const r = await api('PATCH', '/api/settings', payload);
+      paintSmtpForm(r.smtp);
+      if (state.me) {
+        state.me.commerce = Object.assign({}, state.me.commerce || {}, {
+          password_reset_enabled: r.password_reset_enabled,
+        });
+      }
+      toast('تنظیمات SMTP ذخیره شد.', 'success');
+    });
+  }
+
+  async function onSmtpTest() {
+    const errBox = $('#smtp-error');
+    hideErr(errBox);
+    const to = ($('#smtp-test-to') && $('#smtp-test-to').value.trim()) || '';
+    act($('#smtp-test'), async () => {
+      try {
+        const r = await api('POST', '/api/settings/smtp/test', to ? { to } : {});
+        toast(`ایمیل تست به ${r.to} ارسال شد.`, 'success');
+      } catch (err) {
+        showErr(errBox, err.message || NET_ERR);
+        throw err;
+      }
+    });
   }
 
   async function onRegisterPolicySave() {
@@ -3675,6 +3749,27 @@
     });
   }
 
+  function hideAuthForms() {
+    for (const id of ['login-form', 'register-form', 'forgot-form', 'reset-form']) {
+      const el = $(`#${id}`);
+      if (el) el.hidden = true;
+    }
+  }
+
+  function consumeResetTokenFromUrl() {
+    try {
+      const url = new URL(window.location.href);
+      const token = url.searchParams.get('reset') || '';
+      if (!token) return '';
+      url.searchParams.delete('reset');
+      const cleaned = url.pathname + (url.search || '') + (url.hash || '');
+      window.history.replaceState({}, '', cleaned);
+      return token;
+    } catch (_) {
+      return '';
+    }
+  }
+
   async function refreshRegisterGate() {
     const link = $('#login-to-register');
     const closedNote = $('#login-register-closed');
@@ -3685,9 +3780,11 @@
       if (closedNote) closedNote.hidden = open;
       if (!open) {
         const rf = $('#register-form');
-        if (rf) rf.hidden = true;
-        const lf = $('#login-form');
-        if (lf) lf.hidden = false;
+        if (rf && !rf.hidden) {
+          hideAuthForms();
+          const lf = $('#login-form');
+          if (lf) lf.hidden = false;
+        }
       }
     } catch (_) {
       if (link) link.hidden = true;
@@ -3696,14 +3793,35 @@
   }
 
   function showRegisterView() {
-    $('#login-form').hidden = true;
+    hideAuthForms();
     $('#register-form').hidden = false;
     hideErr($('#register-error'));
     $('#reg-user').focus();
   }
 
+  function showForgotView() {
+    hideAuthForms();
+    $('#forgot-form').hidden = false;
+    hideErr($('#forgot-error'));
+    const ok = $('#forgot-ok');
+    if (ok) { ok.hidden = true; ok.textContent = ''; }
+    if ($('#forgot-email')) $('#forgot-email').value = '';
+    if ($('#forgot-user')) $('#forgot-user').value = '';
+    ($('#forgot-email') || $('#forgot-user')).focus();
+  }
+
+  function showResetView(token) {
+    hideAuthForms();
+    $('#reset-form').hidden = false;
+    hideErr($('#reset-error'));
+    if ($('#reset-token')) $('#reset-token').value = token || '';
+    if ($('#reset-pass')) $('#reset-pass').value = '';
+    if ($('#reset-pass2')) $('#reset-pass2').value = '';
+    $('#reset-pass').focus();
+  }
+
   function showLoginViewOnly() {
-    $('#register-form').hidden = true;
+    hideAuthForms();
     $('#login-form').hidden = false;
     hideErr($('#login-error'));
     $('#login-user').focus();
@@ -3715,14 +3833,16 @@
     const btn = $('#register-btn');
     hideErr(errBox);
     const username = ($('#reg-user').value || '').trim().toLowerCase();
+    const email = ($('#reg-email').value || '').trim();
     const password = $('#reg-pass').value || '';
     if (username.length < 3) return showErr(errBox, 'نام کاربری حداقل ۳ کاراکتر باشد.');
+    if (!email || !email.includes('@')) return showErr(errBox, 'ایمیل معتبر وارد کنید.');
     if (password.length < 10) return showErr(errBox, 'رمز عبور حداقل ۱۰ کاراکتر باشد.');
     btn.disabled = true;
     btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'در حال ساخت…';
     try {
-      const r = await api('POST', '/api/register', { username, password });
+      const r = await api('POST', '/api/register', { username, email, password });
       if (r && r.csrf) state.csrf = r.csrf;
       await enterApp();
       toast('حساب ساخته شد. برای ساخت تانل از کیف پول موجودی بگیرید.', 'success');
@@ -3732,6 +3852,65 @@
       btn.disabled = false;
       btn.removeAttribute('aria-busy');
       btn.textContent = 'ساخت حساب';
+    }
+  }
+
+  async function onForgot(e) {
+    e.preventDefault();
+    const errBox = $('#forgot-error');
+    const okBox = $('#forgot-ok');
+    const btn = $('#forgot-btn');
+    hideErr(errBox);
+    if (okBox) { okBox.hidden = true; okBox.textContent = ''; }
+    const email = ($('#forgot-email').value || '').trim();
+    const username = ($('#forgot-user').value || '').trim().toLowerCase();
+    if (!email && !username) return showErr(errBox, 'ایمیل یا نام کاربری را وارد کنید.');
+    const body = {};
+    if (email) body.email = email;
+    if (username) body.username = username;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'در حال ارسال…';
+    try {
+      const r = await api('POST', '/api/forgot-password', body);
+      if (okBox) {
+        okBox.textContent = (r && r.message) || 'اگر حسابی با این مشخصات باشد، ایمیل بازیابی ارسال می‌شود.';
+        okBox.hidden = false;
+      }
+      toast('درخواست بازیابی ثبت شد.', 'success');
+    } catch (err) {
+      showErr(errBox, err.message || NET_ERR);
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'ارسال لینک بازیابی';
+    }
+  }
+
+  async function onReset(e) {
+    e.preventDefault();
+    const errBox = $('#reset-error');
+    const btn = $('#reset-btn');
+    hideErr(errBox);
+    const token = ($('#reset-token').value || '').trim();
+    const password = $('#reset-pass').value || '';
+    const password2 = $('#reset-pass2').value || '';
+    if (!token) return showErr(errBox, 'لینک بازیابی نامعتبر است؛ دوباره از صفحه ورود درخواست دهید.');
+    if (password.length < 10) return showErr(errBox, 'رمز عبور حداقل ۱۰ کاراکتر باشد.');
+    if (password !== password2) return showErr(errBox, 'تکرار رمز مطابقت ندارد.');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'در حال ذخیره…';
+    try {
+      const r = await api('POST', '/api/reset-password', { token, password });
+      toast((r && r.message) || 'رمز عوض شد.', 'success');
+      showLoginViewOnly();
+    } catch (err) {
+      showErr(errBox, err.message || NET_ERR);
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.textContent = 'ذخیره رمز جدید';
     }
   }
 
@@ -4774,6 +4953,47 @@
     });
   }
 
+  function openEmailForm() {
+    closeAccountMenu();
+    const formId = uid('em');
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const fEmail = h('input', {
+      id: uid('f'), type: 'email', dir: 'ltr', autocomplete: 'email', required: true, maxlength: '254',
+      value: (state.me && state.me.email) || '',
+    });
+    const fPw = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'current-password', required: true });
+    const form = h('form', { id: formId, class: 'form', novalidate: true },
+      errBox,
+      field('ایمیل', fEmail, 'برای بازیابی رمز عبور لازم است.'),
+      field('رمز عبور فعلی', fPw));
+    const saveBtn = h('button', { type: 'submit', form: formId, class: 'btn btn-primary' }, 'ذخیره ایمیل');
+    const m = openModal({
+      title: 'تغییر ایمیل',
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+      sticky: true,
+    });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const email = fEmail.value.trim();
+      if (!email || !email.includes('@')) return showErr(errBox, 'ایمیل معتبر وارد کنید.');
+      if (!fPw.value) return showErr(errBox, 'رمز عبور فعلی را وارد کنید.');
+      saveBtn.disabled = true;
+      try {
+        const row = await api('POST', '/api/email', { email, password: fPw.value });
+        if (state.me) state.me.email = row.email || email;
+        toast('ایمیل ذخیره شد.', 'success');
+        m.close();
+      } catch (err) {
+        if (err.status !== 401) showErr(errBox, err.message);
+      } finally {
+        saveBtn.disabled = false;
+      }
+      return undefined;
+    });
+  }
+
   function openPasswordForm() {
     closeAccountMenu();
     const formId = uid('pw');
@@ -4833,7 +5053,7 @@
 
   /* ---------- screens ---------- */
 
-  function showLogin(msg) {
+  function showLogin(msg, opts) {
     state.loggedIn = false;
     state.csrf = '';
     state.me = null;
@@ -4847,12 +5067,17 @@
     $('#boot').hidden = true;
     $('#app-view').hidden = true;
     $('#login-view').hidden = false;
-    showLoginViewOnly();
-    $('#login-pass').value = '';
-    const errBox = $('#login-error');
-    if (msg) showErr(errBox, msg);
-    else hideErr(errBox);
-    $('#login-user').focus();
+    const resetToken = (opts && opts.resetToken) || '';
+    if (resetToken) {
+      showResetView(resetToken);
+    } else {
+      showLoginViewOnly();
+      $('#login-pass').value = '';
+      const errBox = $('#login-error');
+      if (msg) showErr(errBox, msg);
+      else hideErr(errBox);
+      $('#login-user').focus();
+    }
     refreshRegisterGate();
   }
 
@@ -5544,14 +5769,28 @@
     $('#login-form').addEventListener('submit', onLogin);
     const regForm = $('#register-form');
     if (regForm) regForm.addEventListener('submit', onRegister);
+    const forgotForm = $('#forgot-form');
+    if (forgotForm) forgotForm.addEventListener('submit', onForgot);
+    const resetForm = $('#reset-form');
+    if (resetForm) resetForm.addEventListener('submit', onReset);
     const showReg = $('#btn-show-register');
     if (showReg) showReg.addEventListener('click', showRegisterView);
+    const showForgot = $('#btn-show-forgot');
+    if (showForgot) showForgot.addEventListener('click', showForgotView);
     const showLoginBtn = $('#btn-show-login');
     if (showLoginBtn) showLoginBtn.addEventListener('click', showLoginViewOnly);
+    const forgotToLogin = $('#btn-forgot-to-login');
+    if (forgotToLogin) forgotToLogin.addEventListener('click', showLoginViewOnly);
+    const resetToLogin = $('#btn-reset-to-login');
+    if (resetToLogin) resetToLogin.addEventListener('click', showLoginViewOnly);
     const depForm = $('#deposit-form');
     if (depForm) depForm.addEventListener('submit', onDepositSubmit);
     const commerceForm = $('#commerce-form');
     if (commerceForm) commerceForm.addEventListener('submit', onCommerceSubmit);
+    const smtpForm = $('#smtp-form');
+    if (smtpForm) smtpForm.addEventListener('submit', onSmtpSubmit);
+    const smtpTest = $('#smtp-test');
+    if (smtpTest) smtpTest.addEventListener('click', onSmtpTest);
     const regSave = $('#register-policy-save');
     if (regSave) regSave.addEventListener('click', onRegisterPolicySave);
     const regToggle = $('#set-register-enabled');
@@ -5573,6 +5812,8 @@
     $('#btn-password').addEventListener('click', openPasswordForm);
     const userBtn = $('#btn-username');
     if (userBtn) userBtn.addEventListener('click', openUsernameForm);
+    const emailBtn = $('#btn-email');
+    if (emailBtn) emailBtn.addEventListener('click', openEmailForm);
     $('#btn-add-server').addEventListener('click', () => openServerForm(null));
     $('#btn-refresh-servers').addEventListener('click', (e) => act(e.currentTarget, () => load('servers'), 'در حال بروزرسانی…'));
     $('#btn-refresh-tunnels').addEventListener('click', (e) => act(e.currentTarget, () => Promise.all([load('tunnels'), load('servers'), loadLiveTunnels(true)]), 'در حال بروزرسانی…'));
@@ -5695,10 +5936,14 @@
 
   async function init() {
     bindStatic();
+    const resetToken = consumeResetTokenFromUrl();
     try {
       await enterApp();
+      if (resetToken) {
+        toast('وارد هستید؛ برای عوض کردن رمز از منوی حساب استفاده کنید.', 'info');
+      }
     } catch (err) {
-      showLogin(err.status === 401 ? '' : err.message);
+      showLogin(err.status === 401 ? '' : err.message, { resetToken });
     }
   }
 
