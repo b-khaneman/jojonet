@@ -608,10 +608,11 @@ class UserCreateIn(BaseModel):
     max_servers: int | None = Field(default=None, ge=0, le=10000)
     max_tunnels: int | None = Field(default=None, ge=0, le=10000)
     max_relays: int | None = Field(default=None, ge=0, le=10000)
-    allow_vpn: bool = True
-    allow_relay: bool = True
-    allow_os_update: bool = True
-    allow_term: bool = True
+    # Owner must opt in; locked by default like public registration.
+    allow_vpn: bool = False
+    allow_relay: bool = False
+    allow_os_update: bool = False
+    allow_term: bool = False
     note: str | None = Field(default=None, max_length=500)
 
     @field_validator("username")
@@ -1259,7 +1260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False
         if is_owner(sess):
             return True
-        return bool(sess.get("allow_term", 1))
+        return bool(sess.get("allow_term", 0))
 
     def admin_names() -> dict[int, str]:
         return {r["id"]: r["username"] for r in db.all("SELECT id, username FROM admins")}
@@ -1399,10 +1400,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "max_tunnels": sess.get("max_tunnels"),
                 "max_relays": sess.get("max_relays"),
             },
-            "allow_vpn": bool(sess.get("allow_vpn", 1)),
-            "allow_relay": bool(sess.get("allow_relay", 1)),
-            "allow_os_update": bool(sess.get("allow_os_update", 1)),
-            "allow_term": bool(sess.get("allow_term", 1)),
+            "allow_vpn": bool(sess.get("allow_vpn", 0)),
+            "allow_relay": bool(sess.get("allow_relay", 0)),
+            "allow_os_update": bool(sess.get("allow_os_update", 0)),
+            "allow_term": bool(sess.get("allow_term", 0)),
             "terms_enabled": terms_globally_on(),
             "can_term": term_allowed(sess),
             "base_path": app.state.entry.path,
@@ -1445,6 +1446,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if email_taken(data.email):
             raise HTTPException(409, "این ایمیل قبلاً ثبت شده است")
         pw_hash = await asyncio.to_thread(hash_password, data.password)
+        # Public signup is login-only until the owner grants quotas/capabilities.
         uid = db.insert("admins", {
             "username": data.username,
             "email": data.email,
@@ -1453,10 +1455,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "role": "customer",
             "enabled": 1,
             "wallet_balance": 0,
-            "allow_vpn": 1,
-            "allow_relay": 1,
+            "max_servers": 0,
+            "max_tunnels": 0,
+            "max_relays": 0,
+            "allow_vpn": 0,
+            "allow_relay": 0,
             "allow_os_update": 0,
-            "allow_term": 1,
+            "allow_term": 0,
+            "note": "ثبت‌نام عمومی — در انتظار تخصیص دسترسی",
         })
         token, csrf = new_token(), new_token()
         now = datetime.now(timezone.utc).replace(microsecond=0)

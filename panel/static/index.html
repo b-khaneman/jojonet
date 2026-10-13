@@ -70,7 +70,12 @@
   <form id="register-form" class="login-card" novalidate hidden>
     <img class="login-logo" src="__BASE__/static/logo.svg?v=__V__" alt="" width="64" height="64">
     <h1 class="login-title">ثبت‌نام</h1>
-    <p class="muted">حساب مشتری بسازید. ایمیل برای بازیابی رمز لازم است. مالک می‌تواند ثبت‌نام را از مدیریت ببندد.</p>
+    <p class="muted">حساب مشتری بسازید. بعد از ثبت‌نام فقط ورود و کیف پول فعال است؛ تانل، رله و بقیه را مالک باید برایتان باز کند.</p>
+    <ul class="reg-points" aria-label="بعد از ثبت‌نام">
+      <li>ورود به پنل و پیگیری وضعیت</li>
+      <li>شارژ کیف پول و ثبت سفارش</li>
+      <li>تانل / رله / ترمینال فقط بعد از تأیید مالک</li>
+    </ul>
     <div id="register-error" class="form-error" role="alert" hidden></div>
     <div class="field">
       <label for="reg-user">نام کاربری</label>
@@ -83,6 +88,7 @@
     <div class="field">
       <label for="reg-pass">رمز عبور</label>
       <input id="reg-pass" name="password" type="password" dir="ltr" autocomplete="new-password" required minlength="8">
+      <p class="hint">حداقل ۸ کاراکتر</p>
     </div>
     <button id="register-btn" class="btn btn-primary btn-block" type="submit">ساخت حساب</button>
     <p class="muted login-switch">
@@ -848,7 +854,7 @@
       <div id="mgmt-customers" class="mgmt-pane" role="tabpanel" aria-labelledby="mgmtbtn-customers">
         <div class="mgmt-intro">
           <h3 class="mgmt-intro-title">مشتریان</h3>
-          <p class="muted">حساب بسازید، سقف و اشتراک بگذارید. هر مشتری فقط سرور و تانل خودش را می‌بیند.</p>
+          <p class="muted">حساب بسازید یا ثبت‌نام‌های عمومی را تأیید کنید، سقف و دسترسی بدهید، کیف پول شارژ کنید.</p>
         </div>
         <div class="cust-page">
           <div class="card create-card mgmt-card cust-create" id="user-create-card">
@@ -857,7 +863,7 @@
                 <p class="cust-kicker">حساب جدید</p>
                 <h3 class="card-title">ساخت مشتری</h3>
               </div>
-              <p class="cust-create-lead muted">نام و سقف را مشخص کنید؛ رمز خالی یعنی تولید خودکار.</p>
+              <p class="cust-create-lead muted">پیش‌فرض بدون دسترسی است؛ سقف و قابلیت‌ها را عمداً باز کنید. رمز خالی = تولید خودکار.</p>
             </header>
             <form id="user-form" class="form cust-form" novalidate>
               <div id="uf-error" class="form-error" role="alert" hidden></div>
@@ -887,7 +893,7 @@
               <section class="cust-sec" aria-labelledby="uf-sec-quota">
                 <header class="cust-sec-h">
                   <h4 id="uf-sec-quota" class="cust-sec-title">سقف و اشتراک</h4>
-                  <p class="cust-sec-sub">خالی گذاشتن سقف‌ها یعنی نامحدود</p>
+                  <p class="cust-sec-sub">۰ = بسته · خالی = نامحدود · روز خالی = بدون انقضا</p>
                 </header>
                 <div class="cust-grid cust-grid-quota">
                   <div class="field">
@@ -896,15 +902,15 @@
                   </div>
                   <div class="field">
                     <label for="uf-max-servers">سقف سرور</label>
-                    <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                    <input id="uf-max-servers" type="number" dir="ltr" min="0" max="10000" value="0" placeholder="نامحدود">
                   </div>
                   <div class="field">
                     <label for="uf-max-tunnels">سقف تانل</label>
-                    <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                    <input id="uf-max-tunnels" type="number" dir="ltr" min="0" max="10000" value="0" placeholder="نامحدود">
                   </div>
                   <div class="field">
                     <label for="uf-max-relays">سقف رله</label>
-                    <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" placeholder="نامحدود">
+                    <input id="uf-max-relays" type="number" dir="ltr" min="0" max="10000" value="0" placeholder="نامحدود">
                   </div>
                 </div>
               </section>
@@ -928,10 +934,10 @@
                   <p class="cust-sec-sub">دسترسی‌های قابل استفاده برای این مشتری</p>
                 </header>
                 <div class="cust-caps-grid" role="group" aria-labelledby="uf-sec-caps">
-                  <label class="cust-cap" for="uf-vpn"><input id="uf-vpn" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">نصب پنل VPN</span><span class="cust-cap-d">مجوز نصب پنل روی سرور</span></span></label>
-                  <label class="cust-cap" for="uf-relay"><input id="uf-relay" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">ساخت رله</span><span class="cust-cap-d">ایجاد و مدیریت رله</span></span></label>
-                  <label class="cust-cap" for="uf-os"><input id="uf-os" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">آپدیت سیستم</span><span class="cust-cap-d">به‌روزرسانی سیستم‌عامل</span></span></label>
-                  <label class="cust-cap" for="uf-term"><input id="uf-term" type="checkbox" checked><span class="cust-cap-body"><span class="cust-cap-t">ترمینال صفحه اصلی</span><span class="cust-cap-d">دسترسی به ترمینال وب</span></span></label>
+                  <label class="cust-cap" for="uf-vpn"><input id="uf-vpn" type="checkbox"><span class="cust-cap-body"><span class="cust-cap-t">نصب پنل VPN</span><span class="cust-cap-d">مجوز نصب پنل روی سرور</span></span></label>
+                  <label class="cust-cap" for="uf-relay"><input id="uf-relay" type="checkbox"><span class="cust-cap-body"><span class="cust-cap-t">ساخت رله</span><span class="cust-cap-d">ایجاد و مدیریت رله</span></span></label>
+                  <label class="cust-cap" for="uf-os"><input id="uf-os" type="checkbox"><span class="cust-cap-body"><span class="cust-cap-t">آپدیت سیستم</span><span class="cust-cap-d">به‌روزرسانی سیستم‌عامل</span></span></label>
+                  <label class="cust-cap" for="uf-term"><input id="uf-term" type="checkbox"><span class="cust-cap-body"><span class="cust-cap-t">ترمینال صفحه اصلی</span><span class="cust-cap-d">دسترسی به ترمینال وب</span></span></label>
                 </div>
               </section>
 
@@ -942,12 +948,25 @@
           </div>
 
           <div class="mgmt-list-wrap cust-list-wrap">
-            <div class="mgmt-list-head">
+            <div class="mgmt-list-head cust-list-head">
               <div>
                 <p class="cust-kicker">حساب‌ها</p>
                 <h3 class="sub-head">فهرست مشتریان</h3>
               </div>
+              <div class="cust-toolbar" role="search">
+                <label class="sr-only" for="users-search">جستجوی مشتری</label>
+                <input id="users-search" type="search" dir="rtl" placeholder="جستجو نام، ایمیل، یادداشت…" autocomplete="off" maxlength="80">
+                <label class="sr-only" for="users-filter">فیلتر وضعیت</label>
+                <select id="users-filter" aria-label="فیلتر وضعیت">
+                  <option value="all">همه</option>
+                  <option value="pending">در انتظار دسترسی</option>
+                  <option value="active">فعال</option>
+                  <option value="disabled">غیرفعال</option>
+                  <option value="expired">منقضی</option>
+                </select>
+              </div>
             </div>
+            <p id="users-summary" class="cust-summary muted" hidden></p>
             <div id="users-list" class="list-area"></div>
           </div>
         </div>

@@ -153,7 +153,7 @@
 
   const MGMT_PANES = ['customers', 'commerce', 'access', 'policies', 'mail'];
   const MGMT_LEAD = {
-    customers: 'ساخت مشتری، سقف اشتراک و فهرست حساب‌ها.',
+    customers: 'ساخت مشتری، تأیید ثبت‌نام، سقف و دسترسی، شارژ کیف پول.',
     commerce: 'فروش تانل، کارت/ولت، قیمت‌ها و تأیید واریز.',
     access: 'آدرس ورود پنل و گواهی SSL خود سرور مالک.',
     policies: 'ثبت‌نام عمومی و نمایش ترمینال صفحه اصلی.',
@@ -172,6 +172,8 @@
     vpnMon: null,
     sessionJobs: new Set(),
     notified: new Set(),
+    usersQuery: '',
+    usersFilter: 'all',
   };
   const hxTerms = { left: null, right: null };
 
@@ -952,21 +954,31 @@
       rows.push(ovRow(r.name || 'رله', st[1], tone, 'relays'));
     });
 
+    const locked = !isOwner() && Number(lim.max_servers) === 0 && Number(lim.max_tunnels) === 0
+      && Number(lim.max_relays) === 0 && !can('allow_vpn') && !can('allow_relay')
+      && !can('allow_os_update') && !can('allow_term');
+    const accessBanner = locked
+      ? h('div', { class: 'ov-access-lock', role: 'status' },
+          h('strong', null, 'دسترسی عملیاتی هنوز باز نشده'),
+          h('p', null, 'می‌توانید وارد شوید، تیکت بزنید و کیف پول را شارژ کنید. ساخت سرور، تانل و رله بعد از تأیید مالک فعال می‌شود.'))
+      : null;
+
     box.replaceChildren(
+      accessBanner,
       h('section', { class: `ov-hero is-${verdict.tone}` },
         h('div', { class: 'ov-copy' },
           h('p', { class: 'ov-kicker' }, hello),
           h('h2', { class: 'ov-hello' }, me.username || 'حساب'),
-          h('p', { class: 'ov-lead' }, verdict.text),
-          h('span', { class: `ov-pill is-${verdict.tone}` }, verdict.label)),
+          h('p', { class: 'ov-lead' }, locked ? 'حساب آماده‌سازی شده؛ منتظر تخصیص دسترسی از طرف مالک باشید.' : verdict.text),
+          h('span', { class: `ov-pill is-${locked ? 'warn' : verdict.tone}` }, locked ? 'در انتظار دسترسی' : verdict.label)),
         h('div', { class: `ov-clock is-${clock.tone}` },
           h('span', { class: 'ov-clock-k' }, 'زمان باقی‌مانده'),
           h('strong', { class: 'ov-clock-n', dir: 'ltr' }, clock.num),
           h('span', { class: 'ov-clock-u' }, clock.unit),
           h('span', { class: 'ov-clock-s' }, clock.sub))),
       h('div', { class: 'ov-tiles' },
-        ovTile('سرورها', servers.length, down ? `${fmtNum(down)} اتصال خطا` : (unchecked ? `${fmtNum(unchecked)} بررسی نشده` : (servers.length ? 'همه در دسترس' : 'هنوز سروری نیست')), serverTone),
-        ovTile('تانل‌ها', tunnels.length, tbad ? `${fmtNum(tbad)} ناموفق` : (tbusy ? `${fmtNum(tbusy)} در حال انجام` : (tunnels.length ? `${fmtNum(tok)} سالم` : 'هنوز تانلی نیست')), tunnelTone),
+        ovTile('سرورها', servers.length, locked ? 'سقف سرور بسته است' : (down ? `${fmtNum(down)} اتصال خطا` : (unchecked ? `${fmtNum(unchecked)} بررسی نشده` : (servers.length ? 'همه در دسترس' : 'هنوز سروری نیست')), locked ? 'warn' : serverTone),
+        ovTile('تانل‌ها', tunnels.length, locked ? 'سقف تانل بسته است' : (tbad ? `${fmtNum(tbad)} ناموفق` : (tbusy ? `${fmtNum(tbusy)} در حال انجام` : (tunnels.length ? `${fmtNum(tok)} سالم` : 'هنوز تانلی نیست')), locked ? 'warn' : tunnelTone),
         ovTile('رله‌ها', relays.length, !can('allow_relay') && !isOwner() ? 'دسترسی رله خاموش است' : (rbad ? `${fmtNum(rbad)} ناموفق` : (relays.length ? `${fmtNum(rok)} سالم` : 'هنوز رله‌ای نیست')), relayTone),
         ovTile('کیف پول', me.wallet_balance || 0, commerce().sell_tunnels_enabled ? currencyLabel() : (isOwner() ? 'مالک بدون کسر' : 'فروش خاموش'), 'ok'),
         ovTile('عملیات', running, running ? 'در حال اجرا' : 'عملیاتی در جریان نیست', running ? 'warn' : 'ok')),
@@ -982,7 +994,7 @@
           h('span', { class: 'ov-panel-note' }, 'برای جزئیات روی هر ردیف بزنید')),
         rows.length
           ? h('div', { class: 'ov-rows' }, rows)
-          : h('p', { class: 'ov-empty' }, 'سرویسی برای نمایش نیست.')));
+          : h('p', { class: 'ov-empty' }, locked ? 'هنوز دسترسی ساخت سرویس ندارید.' : 'سرویسی برای نمایش نیست.')));
   }
 
   /* ---------- servers ---------- */
@@ -3136,11 +3148,56 @@
     });
   }
 
+  function userIsPending(u) {
+    if (!u || u.role === 'owner') return false;
+    const capsOff = !u.allow_vpn && !u.allow_relay && !u.allow_os_update && !u.allow_term;
+    const quotasLocked = Number(u.max_servers) === 0 && Number(u.max_tunnels) === 0 && Number(u.max_relays) === 0;
+    return capsOff && quotasLocked;
+  }
+
+  function userStatusInfo(u) {
+    if (u.role === 'owner') return ['ok', 'مالک'];
+    if (!u.enabled) return ['err', 'غیرفعال'];
+    if (u.days_left === 0) return ['warn', 'منقضی'];
+    if (userIsPending(u)) return ['warn', 'در انتظار'];
+    return ['ok', 'فعال'];
+  }
+
+  function filteredUsers() {
+    const q = (state.usersQuery || '').trim().toLowerCase();
+    const filter = state.usersFilter || 'all';
+    return (lists.users.data || []).filter((u) => {
+      if (filter === 'pending' && !userIsPending(u)) return false;
+      if (filter === 'active' && (u.role === 'owner' || !u.enabled || u.days_left === 0 || userIsPending(u))) return false;
+      if (filter === 'disabled' && (u.role === 'owner' || u.enabled)) return false;
+      if (filter === 'expired' && (u.role === 'owner' || u.days_left !== 0)) return false;
+      if (!q) return true;
+      const hay = [u.username, u.email, u.note].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  function paintUsersSummary(all, shown) {
+    const el = $('#users-summary');
+    if (!el) return;
+    const pending = all.filter(userIsPending).length;
+    const parts = [`${fmtNum(shown.length)} از ${fmtNum(all.length)} حساب`];
+    if (pending) parts.push(`${fmtNum(pending)} در انتظار دسترسی`);
+    el.textContent = parts.join(' · ');
+    el.hidden = !all.length;
+  }
+
   function renderUsers() {
     const box = $(lists.users.el);
-    const data = lists.users.data || [];
+    const all = lists.users.data || [];
+    const data = filteredUsers();
+    paintUsersSummary(all, data);
+    if (!all.length) {
+      box.replaceChildren(emptyState('هنوز مشتری‌ای نیست.', 'از فرم بالا بسازید یا ثبت‌نام عمومی را باز کنید.'));
+      return;
+    }
     if (!data.length) {
-      box.replaceChildren(emptyState('هنوز مشتری‌ای ساخته نشده است.', 'از فرم بالا یک حساب مشتری بسازید.'));
+      box.replaceChildren(emptyState('نتیجه‌ای پیدا نشد.', 'جستجو یا فیلتر را عوض کنید.'));
       return;
     }
     box.replaceChildren(h('div', { class: 'cust-board' },
@@ -3159,8 +3216,11 @@
     const owner = u.role === 'owner';
     const usage = u.usage || {};
     const days = u.days_left;
-    const status = !u.enabled ? ['err', 'غیرفعال'] : (days === 0 ? ['warn', 'منقضی'] : ['ok', 'فعال']);
+    const pending = userIsPending(u);
+    const status = userStatusInfo(u);
 
+    const editBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, pending ? 'تخصیص دسترسی' : 'ویرایش');
+    if (editBtn) editBtn.addEventListener('click', () => openEditUser(u));
     const walletBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'کیف پول');
     if (walletBtn) walletBtn.addEventListener('click', () => openWalletAdjust(u));
     const overviewBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'وضعیت');
@@ -3176,27 +3236,7 @@
     }));
 
     const pwBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, 'رمز');
-    if (pwBtn) pwBtn.addEventListener('click', async () => {
-      const ok = await confirmDialog({
-        title: 'بازنشانی رمز',
-        message: `رمز «${u.username}» عوض شود؟ نشست‌های فعلی قطع می‌شوند.`,
-        okText: 'بازنشانی',
-      });
-      if (!ok) return;
-      act(pwBtn, async () => {
-        const r = await api('POST', `/api/users/${enc(u.id)}/password`, {});
-        if (r && r.password) showOnceSecret(`رمز جدید «${u.username}»`, r.password);
-        toast('رمز بازنشانی شد.', 'success');
-      });
-    });
-
-    const termBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm' }, u.allow_term !== false ? 'بستن ترمینال' : 'ترمینال');
-    if (termBtn) termBtn.addEventListener('click', () => act(termBtn, async () => {
-      const next = u.allow_term === false;
-      await api('PATCH', `/api/users/${enc(u.id)}`, { allow_term: next });
-      toast(next ? `ترمینال «${u.username}» روشن شد.` : `ترمینال «${u.username}» بسته شد.`, 'success');
-      await load('users');
-    }));
+    if (pwBtn) pwBtn.addEventListener('click', () => openResetUserPassword(u));
 
     const delBtn = owner ? null : h('button', { type: 'button', class: 'btn btn-sm btn-danger-ghost' }, 'حذف');
     if (delBtn) delBtn.addEventListener('click', async () => {
@@ -3217,24 +3257,42 @@
     const expiry = owner
       ? 'بدون انقضا'
       : (u.expires_at ? `${fmtTime(u.expires_at)}${days != null ? ` (${fmtNum(days)} روز)` : ''}` : 'بدون انقضا');
-    const perm = (on, label) => h('span', {
-      class: on ? 'perm is-on' : 'perm',
-      title: on ? `${label}: روشن` : `${label}: خاموش`,
-    }, label);
+    const permBtn = (key, on, label) => {
+      if (owner) {
+        return h('span', { class: on ? 'perm is-on' : 'perm', title: `${label}: ${on ? 'روشن' : 'خاموش'}` }, label);
+      }
+      const btn = h('button', {
+        type: 'button',
+        class: on ? 'perm is-on perm-btn' : 'perm perm-btn',
+        title: on ? `خاموش کردن ${label}` : `روشن کردن ${label}`,
+      }, label);
+      btn.addEventListener('click', () => act(btn, async () => {
+        await api('PATCH', `/api/users/${enc(u.id)}`, { [key]: !on });
+        toast(`${label} «${u.username}» ${on ? 'خاموش' : 'روشن'} شد.`, 'success');
+        await load('users');
+      }));
+      return btn;
+    };
     const metric = (label, value) => h('div', { class: 'cust-metric' },
       h('span', { class: 'cust-metric-k' }, label),
       h('span', { class: 'cust-metric-v', dir: 'ltr' }, value));
 
-    const actions = [overviewBtn, walletBtn, extendBtn, toggleBtn, termBtn, pwBtn, delBtn].filter(Boolean);
+    const actions = [editBtn, overviewBtn, walletBtn, extendBtn, toggleBtn, pwBtn, delBtn].filter(Boolean);
+    const signup = !!(u.note && String(u.note).includes('ثبت‌نام عمومی'));
 
-    return h('article', { class: `cust-tr cust-row${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}`, role: 'row' },
+    return h('article', {
+      class: `cust-tr cust-row${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}${pending ? ' is-pending' : ''}`,
+      role: 'row',
+    },
       h('div', { class: 'cust-td cust-td-user', role: 'cell', 'data-label': 'حساب' },
         h('div', { class: 'cust-user' },
           h('span', { class: 'cust-avatar', 'aria-hidden': 'true' }, (u.username || '?').slice(0, 1).toUpperCase()),
           h('div', { class: 'cust-user-text' },
             h('div', { class: 'cust-user-line' },
               h('strong', { class: 'cust-username', dir: 'ltr' }, u.username),
-              h('span', { class: owner ? 'role-chip role-owner' : 'role-chip' }, owner ? 'مالک' : 'مشتری')),
+              h('span', { class: owner ? 'role-chip role-owner' : 'role-chip' }, owner ? 'مالک' : 'مشتری'),
+              signup ? h('span', { class: 'role-chip role-signup' }, 'ثبت‌نام') : null,
+              pending ? h('span', { class: 'role-chip role-pending' }, 'بدون دسترسی') : null),
             u.note ? h('p', { class: 'cust-note' }, u.note) : null))),
       h('div', { class: 'cust-td cust-td-status', role: 'cell', 'data-label': 'وضعیت' }, badge(status[0], status[1])),
       h('div', { class: 'cust-td cust-td-usage', role: 'cell', 'data-label': 'مصرف' },
@@ -3253,12 +3311,135 @@
             h('span', { class: 'cust-meta-v', dir: 'ltr' }, u.email || '—')))),
       h('div', { class: 'cust-td cust-td-perms', role: 'cell', 'data-label': 'دسترسی' },
         h('div', { class: 'user-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
-          perm(!!u.allow_vpn, 'VPN'),
-          perm(!!u.allow_relay, 'رله'),
-          perm(!!u.allow_os_update, 'آپدیت'),
-          perm(u.allow_term !== false, 'ترمینال'))),
+          permBtn('allow_vpn', !!u.allow_vpn, 'VPN'),
+          permBtn('allow_relay', !!u.allow_relay, 'رله'),
+          permBtn('allow_os_update', !!u.allow_os_update, 'آپدیت'),
+          permBtn('allow_term', !!u.allow_term, 'ترمینال'))),
       h('div', { class: 'cust-td cust-td-actions', role: 'cell', 'data-label': 'عملیات' },
         actions.length ? h('div', { class: 'cust-actions' }, ...actions) : h('span', { class: 'muted' }, '—')));
+  }
+
+  function resetUserCreateForm() {
+    const form = $('#user-form');
+    if (!form) return;
+    form.reset();
+    if ($('#uf-days')) $('#uf-days').value = '30';
+    if ($('#uf-max-servers')) $('#uf-max-servers').value = '0';
+    if ($('#uf-max-tunnels')) $('#uf-max-tunnels').value = '0';
+    if ($('#uf-max-relays')) $('#uf-max-relays').value = '0';
+    ['uf-vpn', 'uf-relay', 'uf-os', 'uf-term'].forEach((id) => {
+      if ($(`#${id}`)) $(`#${id}`).checked = false;
+    });
+  }
+
+  function openEditUser(u) {
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const fEmail = h('input', { type: 'email', dir: 'ltr', maxlength: '254', value: u.email || '' });
+    const fServers = h('input', { type: 'number', dir: 'ltr', min: '0', max: '10000', value: u.max_servers == null ? '' : String(u.max_servers), placeholder: 'نامحدود' });
+    const fTunnels = h('input', { type: 'number', dir: 'ltr', min: '0', max: '10000', value: u.max_tunnels == null ? '' : String(u.max_tunnels), placeholder: 'نامحدود' });
+    const fRelays = h('input', { type: 'number', dir: 'ltr', min: '0', max: '10000', value: u.max_relays == null ? '' : String(u.max_relays), placeholder: 'نامحدود' });
+    const fNote = h('input', { type: 'text', maxlength: '500', value: u.note || '' });
+    const mkCap = (id, checked, title, desc) => {
+      const inp = h('input', { id, type: 'checkbox' });
+      inp.checked = !!checked;
+      return h('label', { class: 'cust-cap', for: id },
+        inp,
+        h('span', { class: 'cust-cap-body' },
+          h('span', { class: 'cust-cap-t' }, title),
+          h('span', { class: 'cust-cap-d' }, desc)));
+    };
+    const cVpn = mkCap(uid('c'), u.allow_vpn, 'نصب پنل VPN', 'مجوز نصب پنل روی سرور');
+    const cRelay = mkCap(uid('c'), u.allow_relay, 'ساخت رله', 'ایجاد و مدیریت رله');
+    const cOs = mkCap(uid('c'), u.allow_os_update, 'آپدیت سیستم', 'به‌روزرسانی سیستم‌عامل');
+    const cTerm = mkCap(uid('c'), u.allow_term, 'ترمینال وب', 'دسترسی به ترمینال صفحه اصلی');
+    const form = h('form', { class: 'form cust-form cust-edit-form', novalidate: true },
+      errBox,
+      h('p', { class: 'muted' }, userIsPending(u)
+        ? 'این حساب هنوز دسترسی عملیاتی ندارد. سقف و قابلیت‌ها را باز کنید.'
+        : 'سقف، ایمیل، یادداشت و قابلیت‌ها را ویرایش کنید.'),
+      field('ایمیل', fEmail),
+      h('div', { class: 'cust-grid cust-grid-quota' },
+        field('سقف سرور', fServers),
+        field('سقف تانل', fTunnels),
+        field('سقف رله', fRelays)),
+      h('p', { class: 'hint' }, '۰ = بسته · خالی = نامحدود'),
+      field('یادداشت', fNote),
+      h('div', { class: 'cust-caps-grid' }, cVpn, cRelay, cOs, cTerm));
+    form.id = uid('eu');
+    const saveBtn = h('button', { type: 'submit', class: 'btn btn-primary', form: form.id }, 'ذخیره');
+    const walletBtn = h('button', { type: 'button', class: 'btn' }, 'کیف پول');
+    const extendBtn = h('button', { type: 'button', class: 'btn' }, 'تمدید');
+    const m = openModal({
+      title: `مدیریت «${u.username}»`,
+      body: form,
+      footer: [
+        h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'),
+        walletBtn,
+        extendBtn,
+        saveBtn,
+      ],
+      sticky: true,
+    });
+    walletBtn.addEventListener('click', () => { m.close(); openWalletAdjust(u); });
+    extendBtn.addEventListener('click', () => { m.close(); openExtendUser(u); });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const maxServers = optLimit(fServers);
+      const maxTunnels = optLimit(fTunnels);
+      const maxRelays = optLimit(fRelays);
+      if (Number.isNaN(maxServers) || Number.isNaN(maxTunnels) || Number.isNaN(maxRelays)) {
+        return showErr(errBox, 'سقف‌ها باید عدد صفر یا بزرگ‌تر باشند (خالی = نامحدود).');
+      }
+      const emailRaw = (fEmail.value || '').trim();
+      if (emailRaw && !emailRaw.includes('@')) return showErr(errBox, 'ایمیل نامعتبر است.');
+      const payload = {
+        email: emailRaw || '',
+        max_servers: maxServers,
+        max_tunnels: maxTunnels,
+        max_relays: maxRelays,
+        note: (fNote.value || '').trim() || null,
+        allow_vpn: !!cVpn.querySelector('input').checked,
+        allow_relay: !!cRelay.querySelector('input').checked,
+        allow_os_update: !!cOs.querySelector('input').checked,
+        allow_term: !!cTerm.querySelector('input').checked,
+      };
+      act(saveBtn, async () => {
+        await api('PATCH', `/api/users/${enc(u.id)}`, payload);
+        toast(`دسترسی «${u.username}» ذخیره شد.`, 'success');
+        m.close();
+        await load('users');
+      });
+    });
+  }
+
+  function openResetUserPassword(u) {
+    const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
+    const fPass = h('input', { type: 'password', dir: 'ltr', autocomplete: 'new-password', minlength: '8', placeholder: 'خالی = تولید تصادفی' });
+    const form = h('form', { class: 'form', novalidate: true },
+      errBox,
+      h('p', { class: 'muted' }, 'نشست‌های فعلی این کاربر قطع می‌شود.'),
+      field('رمز جدید', fPass, 'حداقل ۸ کاراکتر؛ خالی بماند تا تصادفی ساخته شود.'));
+    form.id = uid('rp');
+    const saveBtn = h('button', { type: 'submit', class: 'btn btn-primary', form: form.id }, 'بازنشانی');
+    const m = openModal({
+      title: `رمز «${u.username}»`,
+      body: form,
+      footer: [h('button', { type: 'button', class: 'btn', onclick: () => m.close() }, 'انصراف'), saveBtn],
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      hideErr(errBox);
+      const password = fPass.value || '';
+      if (password && password.length < 8) return showErr(errBox, 'رمز باید حداقل ۸ کاراکتر باشد.');
+      act(saveBtn, async () => {
+        const body = password ? { password } : {};
+        const r = await api('POST', `/api/users/${enc(u.id)}/password`, body);
+        m.close();
+        if (r && r.password) showOnceSecret(`رمز جدید «${u.username}»`, r.password);
+        toast('رمز بازنشانی شد.', 'success');
+      });
+    });
   }
 
   function openExtendUser(u) {
@@ -3327,12 +3508,7 @@
     act(btn, async () => {
       const r = await api('POST', '/api/users', payload);
       toast(`مشتری «${username}» ساخته شد.`, 'success');
-      $('#user-form').reset();
-      $('#uf-days').value = '30';
-      $('#uf-vpn').checked = true;
-      $('#uf-relay').checked = true;
-      $('#uf-os').checked = true;
-      if ($('#uf-term')) $('#uf-term').checked = true;
+      resetUserCreateForm();
       if (r && r.password) showOnceSecret(`رمز «${username}»`, r.password);
       await load('users');
     });
@@ -3993,7 +4169,7 @@
       const r = await api('POST', '/api/register', { username, email, password });
       if (r && r.csrf) state.csrf = r.csrf;
       await enterApp();
-      toast('حساب ساخته شد. برای ساخت تانل از کیف پول موجودی بگیرید.', 'success');
+      toast('حساب ساخته شد. تانل و رله بعد از تأیید مالک باز می‌شود؛ می‌توانید کیف پول را شارژ کنید.', 'info');
     } catch (err) {
       showErr(errBox, err.message || NET_ERR);
     } finally {
@@ -6365,6 +6541,20 @@
     if (refreshTickets) refreshTickets.addEventListener('click', (e) => act(e.currentTarget, () => load('tickets'), 'در حال بروزرسانی…'));
     const userForm = $('#user-form');
     if (userForm) userForm.addEventListener('submit', onCreateUser);
+    const usersSearch = $('#users-search');
+    if (usersSearch) {
+      usersSearch.addEventListener('input', () => {
+        state.usersQuery = usersSearch.value || '';
+        renderUsers();
+      });
+    }
+    const usersFilter = $('#users-filter');
+    if (usersFilter) {
+      usersFilter.addEventListener('change', () => {
+        state.usersFilter = usersFilter.value || 'all';
+        renderUsers();
+      });
+    }
     const orderForm = $('#order-form');
     if (orderForm) {
       orderForm.addEventListener('submit', onCreateOrder);

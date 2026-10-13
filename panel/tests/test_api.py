@@ -1081,6 +1081,11 @@ def test_register_email_and_password_reset(client, admin, monkeypatch):
     assert reg.status_code == 200, reg.text
     me = client.get("/api/me").json()
     assert me["email"] == "mailuser1@example.com"
+    assert me["allow_vpn"] is False and me["allow_relay"] is False
+    assert me["allow_os_update"] is False and me["allow_term"] is False
+    assert me["limits"]["max_servers"] == 0
+    assert me["limits"]["max_tunnels"] == 0
+    assert me["limits"]["max_relays"] == 0
     client.post("/api/logout")
 
     captured = {}

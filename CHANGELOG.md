@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.12 / panel 1.3.65
+- **Registration lockdown**: public signup gets zero tunnel/relay/VPN/terminal quotas until the owner grants access.
+- **Customer admin**: full edit modal (quotas, caps, email, note), clickable permission chips, search/filter, custom password reset, clearer pending badges.
+
 ## 1.6.11 / panel 1.3.64
 - **Sessions**: sliding 7-day login (renews while you use the panel); softer login lockout; passwords may be 8+ characters so the usual admin password works again after idle logout.
 

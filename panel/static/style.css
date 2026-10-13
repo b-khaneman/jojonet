@@ -6403,6 +6403,119 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
   padding-inline: .45rem .5rem;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.reg-points {
+  margin: 0 0 1rem;
+  padding: .75rem .9rem .75rem 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-2) 70%, var(--bg));
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.reg-points li + li {
+  margin-top: .25rem;
+}
+
+.cust-list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: .75rem 1rem;
+}
+
+.cust-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  align-items: center;
+}
+
+.cust-toolbar input[type="search"],
+.cust-toolbar select {
+  min-height: 2.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  padding: .4rem .7rem;
+  font: inherit;
+}
+
+.cust-toolbar input[type="search"] {
+  min-width: min(16rem, 70vw);
+}
+
+.cust-summary {
+  margin: .15rem 0 0;
+  font-size: .82rem;
+  font-weight: 600;
+}
+
+.cust-row.is-pending {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--warn, #c9892e) 12%, transparent), transparent 48%),
+    var(--surface);
+}
+
+.role-chip.role-signup,
+.role-chip.role-pending {
+  border-color: color-mix(in srgb, var(--warn, #c9892e) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn, #c9892e) 14%, var(--bg));
+  color: color-mix(in srgb, var(--warn, #c9892e) 70%, var(--text));
+}
+
+button.perm-btn {
+  font: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+button.perm-btn:hover {
+  filter: brightness(1.06);
+}
+
+.cust-edit-form .cust-grid-quota {
+  padding: 0;
+}
+
+.ov-access-lock {
+  margin: 0 0 1rem;
+  padding: .95rem 1.05rem;
+  border: 1px solid color-mix(in srgb, var(--warn, #c9892e) 45%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn, #c9892e) 10%, var(--surface));
+}
+
+.ov-access-lock strong {
+  display: block;
+  margin-bottom: .3rem;
+  font-size: .98rem;
+}
+
+.ov-access-lock p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .88rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
 @media (max-width: 1100px) {
   .cust-grid-id {
     grid-template-columns: repeat(2, minmax(0, 1fr));
