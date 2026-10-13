@@ -14,10 +14,6 @@ from .validators import USER_RE
 
 def cmd_set_admin(args: argparse.Namespace) -> int:
     settings = load_settings()
-    username = (args.username or "admin").strip()
-    if not USER_RE.fullmatch(username) or username.endswith("$"):
-        print("invalid username", file=sys.stderr)
-        return 2
     if args.random:
         password = random_password(16)
     elif args.password_stdin:
@@ -27,16 +23,26 @@ def cmd_set_admin(args: argparse.Namespace) -> int:
         if password != getpass.getpass("Repeat: "):
             print("passwords do not match", file=sys.stderr)
             return 2
-    if len(password) < 10:
-        print("password must be at least 10 characters", file=sys.stderr)
+    if len(password) < 8:
+        print("password must be at least 8 characters", file=sys.stderr)
         return 2
     db = Database(settings.db_path)
     try:
         pw_hash = hash_password(password)
-        row = db.one("SELECT id FROM admins ORDER BY id LIMIT 1")
+        row = db.one("SELECT id, username FROM admins ORDER BY id LIMIT 1")
+        if args.username:
+            username = args.username.strip()
+        elif row:
+            username = str(row["username"])
+        else:
+            username = "admin"
+        if not USER_RE.fullmatch(username) or username.endswith("$"):
+            print("invalid username", file=sys.stderr)
+            return 2
         if row:
             db.update("admins", row["id"], {"username": username, "pw_hash": pw_hash})
             db.execute("DELETE FROM sessions")
+            db.execute("DELETE FROM login_failures")
         else:
             db.insert("admins", {
                 "username": username, "pw_hash": pw_hash, "created_at": utcnow(),

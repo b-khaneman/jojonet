@@ -151,7 +151,7 @@ def test_login_logout_and_csrf(client, admin):
     r = client.post("/api/login", json={"username": "admin", "password": admin[1]})
     assert r.status_code == 200
     cookie = r.headers["set-cookie"].lower()
-    assert "httponly" in cookie and "samesite=strict" in cookie
+    assert "httponly" in cookie and "samesite=lax" in cookie
     assert f"path={client.prefix}/" in cookie
     csrf = r.json()["csrf"]
     me = client.get("/api/me").json()
@@ -168,10 +168,14 @@ def test_login_logout_and_csrf(client, admin):
 
 
 def test_login_rate_limit(client, admin):
-    for _ in range(5):
+    # Soft lockout: a handful of wrong tries must not block the real password.
+    for _ in range(10):
         assert client.post("/api/login", json={"username": "admin", "password": "bad"}).status_code == 401
-    r = client.post("/api/login", json={"username": "admin", "password": admin[1]})
-    assert r.status_code == 429
+    assert client.post("/api/login", json={"username": "admin", "password": admin[1]}).status_code == 200
+    client.cookies.clear()
+    for _ in range(20):
+        assert client.post("/api/login", json={"username": "admin", "password": "bad"}).status_code == 401
+    assert client.post("/api/login", json={"username": "admin", "password": admin[1]}).status_code == 429
 
 
 def test_unknown_user_same_error(client, admin):

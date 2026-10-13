@@ -227,7 +227,7 @@ class LoginIn(BaseModel):
 
 class PasswordIn(BaseModel):
     old_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=10, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class UsernameIn(BaseModel):
@@ -284,7 +284,7 @@ class ForgotPasswordIn(BaseModel):
 
 class ResetPasswordIn(BaseModel):
     token: str = Field(min_length=20, max_length=200)
-    password: str = Field(min_length=10, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
 
 
 class SmtpTestIn(BaseModel):
@@ -627,8 +627,8 @@ class UserCreateIn(BaseModel):
     def _pw(cls, v: str | None) -> str | None:
         if v is None or not str(v).strip():
             return None
-        if len(v) < 10:
-            raise ValueError("رمز عبور باید حداقل ۱۰ کاراکتر باشد")
+        if len(v) < 8:
+            raise ValueError("رمز عبور باید حداقل ۸ کاراکتر باشد")
         return v
 
     @field_validator("email")
@@ -744,7 +744,7 @@ class WalletAdjustIn(BaseModel):
 
 class RegisterIn(BaseModel):
     username: str = Field(min_length=3, max_length=32)
-    password: str = Field(min_length=10, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
     email: str = Field(min_length=3, max_length=254)
 
     @field_validator("username")
@@ -813,8 +813,8 @@ class UserPasswordIn(BaseModel):
     def _pw(cls, v: str | None) -> str | None:
         if v is None or not str(v).strip():
             return None
-        if len(v) < 10:
-            raise ValueError("رمز عبور باید حداقل ۱۰ کاراکتر باشد")
+        if len(v) < 8:
+            raise ValueError("رمز عبور باید حداقل ۸ کاراکتر باشد")
         return v
 
 
@@ -1099,7 +1099,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return fwd.split(",")[-1].strip()[:64]
         return request.client.host if request.client else "unknown"
 
-    def session_row(request: Request) -> dict[str, Any] | None:
+    def session_ttl() -> timedelta:
+        return timedelta(hours=max(1, int(settings.session_hours)))
+
+    def set_session_cookie(response: Response, token: str) -> None:
+        response.set_cookie(
+            COOKIE, token,
+            max_age=int(session_ttl().total_seconds()),
+            httponly=True,
+            secure=settings.secure_cookies,
+            samesite="lax",
+            path=cookie_path(),
+        )
+
+    def touch_session(
+        row: dict[str, Any],
+        request: Request | None = None,
+        response: Response | None = None,
+    ) -> None:
+        """Sliding expiry: while the user is active, keep pushing the deadline forward."""
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        new_exp = now + session_ttl()
+        raw = row.get("session_expires_at") or ""
+        try:
+            cur = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if cur.tzinfo is None:
+                cur = cur.replace(tzinfo=timezone.utc)
+        except ValueError:
+            cur = now
+        remaining = (cur - now).total_seconds()
+        # Renew when less than half the TTL remains (avoids a write on every click).
+        if remaining > session_ttl().total_seconds() / 2:
+            return
+        db.execute(
+            "UPDATE sessions SET expires_at=? WHERE token_hash=?",
+            (new_exp.isoformat(), row["token_hash"]),
+        )
+        row["session_expires_at"] = new_exp.isoformat()
+        if response is not None and request is not None:
+            token = request.cookies.get(COOKIE) or ""
+            if token:
+                set_session_cookie(response, token)
+
+    def session_row(request: Request, *, touch: bool = False, response: Response | None = None) -> dict[str, Any] | None:
         token = request.cookies.get(COOKIE)
         if not token or len(token) > 128:
             return None
@@ -1116,6 +1158,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if row["session_expires_at"] < utcnow():
             db.execute("DELETE FROM sessions WHERE token_hash=?", (row["token_hash"],))
             return None
+        if touch:
+            touch_session(row, request, response)
         return row
 
     def account_block_reason(row: dict[str, Any]) -> str | None:
@@ -1128,8 +1172,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return "اشتراک شما منقضی شده است"
         return None
 
-    def require_auth(request: Request) -> dict[str, Any]:
-        row = session_row(request)
+    def require_auth(request: Request, response: Response) -> dict[str, Any]:
+        row = session_row(request, touch=True, response=response)
         if row is None:
             raise HTTPException(401, "ابتدا وارد شوید")
         blocked = account_block_reason(row)
@@ -1142,8 +1186,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(403, "توکن CSRF نامعتبر است؛ صفحه را تازه کنید")
         return row
 
-    def require_owner(request: Request) -> dict[str, Any]:
-        sess = require_auth(request)
+    def require_owner(request: Request, response: Response) -> dict[str, Any]:
+        sess = require_auth(request, response)
         if sess.get("role") != "owner":
             raise HTTPException(403, "فقط مالک پنل به این بخش دسترسی دارد")
         return sess
@@ -1421,12 +1465,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "admin_id": uid,
             "csrf": csrf,
             "created_at": now.isoformat(),
-            "expires_at": (now + timedelta(hours=settings.session_hours)).isoformat(),
+            "expires_at": (now + session_ttl()).isoformat(),
         })
-        response.set_cookie(
-            COOKIE, token, max_age=settings.session_hours * 3600, httponly=True,
-            secure=settings.secure_cookies, samesite="strict", path=cookie_path(),
-        )
+        set_session_cookie(response, token)
         return {"ok": True, "csrf": csrf}
 
     @app.post("/api/forgot-password")
@@ -1503,7 +1544,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def login(data: LoginIn, request: Request, response: Response) -> dict[str, Any]:
         ip = client_ip(request)
         if not login_allowed(db, ip, data.username):
-            raise HTTPException(429, "تلاش‌های ناموفق زیاد بود؛ 5 دقیقه دیگر دوباره امتحان کنید")
+            raise HTTPException(429, "تلاش‌های ناموفق زیاد بود؛ ۱۵ دقیقه دیگر دوباره امتحان کنید")
         admin = db.one("SELECT * FROM admins WHERE username=?", (data.username,))
         ok = await asyncio.to_thread(verify_password, data.password, admin["pw_hash"] if admin else DUMMY_HASH)
         if not admin or not ok:
@@ -1516,17 +1557,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token, csrf = new_token(), new_token()
         now = datetime.now(timezone.utc).replace(microsecond=0)
         db.execute("DELETE FROM sessions WHERE expires_at < ?", (now.isoformat(),))
+        # One active session per account avoids stale CSRF after long idle tabs.
+        db.execute("DELETE FROM sessions WHERE admin_id=?", (admin["id"],))
         db.insert("sessions", {
             "token_hash": token_hash(token),
             "admin_id": admin["id"],
             "csrf": csrf,
             "created_at": now.isoformat(),
-            "expires_at": (now + timedelta(hours=settings.session_hours)).isoformat(),
+            "expires_at": (now + session_ttl()).isoformat(),
         })
-        response.set_cookie(
-            COOKIE, token, max_age=settings.session_hours * 3600, httponly=True,
-            secure=settings.secure_cookies, samesite="strict", path=cookie_path(),
-        )
+        set_session_cookie(response, token)
         return {"ok": True, "csrf": csrf}
 
     @app.post("/api/logout")
@@ -3461,6 +3501,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await ws.send_json({"t": "e", "m": "ابتدا وارد شوید"})
             await ws.close()
             return
+        # Keep long-lived terminal sessions from dying mid-use.
+        touch_session(sess)
         blocked = account_block_reason(sess)
         if blocked:
             await ws.send_json({"t": "e", "m": blocked})

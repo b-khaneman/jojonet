@@ -3985,7 +3985,7 @@
     const password = $('#reg-pass').value || '';
     if (username.length < 3) return showErr(errBox, 'نام کاربری حداقل ۳ کاراکتر باشد.');
     if (!email || !email.includes('@')) return showErr(errBox, 'ایمیل معتبر وارد کنید.');
-    if (password.length < 10) return showErr(errBox, 'رمز عبور حداقل ۱۰ کاراکتر باشد.');
+    if (password.length < 8) return showErr(errBox, 'رمز عبور حداقل ۸ کاراکتر باشد.');
     btn.disabled = true;
     btn.setAttribute('aria-busy', 'true');
     btn.textContent = 'در حال ساخت…';
@@ -4044,7 +4044,7 @@
     const password = $('#reset-pass').value || '';
     const password2 = $('#reset-pass2').value || '';
     if (!token) return showErr(errBox, 'لینک بازیابی نامعتبر است؛ دوباره از صفحه ورود درخواست دهید.');
-    if (password.length < 10) return showErr(errBox, 'رمز عبور حداقل ۱۰ کاراکتر باشد.');
+    if (password.length < 8) return showErr(errBox, 'رمز عبور حداقل ۸ کاراکتر باشد.');
     if (password !== password2) return showErr(errBox, 'تکرار رمز مطابقت ندارد.');
     btn.disabled = true;
     btn.setAttribute('aria-busy', 'true');
@@ -5301,13 +5301,13 @@
     const formId = uid('pw');
     const errBox = h('div', { class: 'form-error', role: 'alert', hidden: true });
     const fOld = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'current-password', required: true });
-    const fNew = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'new-password', minlength: '10', required: true });
+    const fNew = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'new-password', minlength: '8', required: true });
     const fRep = h('input', { id: uid('f'), type: 'password', dir: 'ltr', autocomplete: 'new-password', required: true });
     const form = h('form', { id: formId, class: 'form', novalidate: true },
       errBox,
       h('input', { type: 'text', autocomplete: 'username', value: (state.me && state.me.username) || '', hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
       field('رمز عبور فعلی', fOld),
-      field('رمز عبور جدید', fNew, 'حداقل 10 کاراکتر.'),
+      field('رمز عبور جدید', fNew, 'حداقل ۸ کاراکتر.'),
       field('تکرار رمز عبور جدید', fRep));
     const saveBtn = h('button', { type: 'submit', form: formId, class: 'btn btn-primary' }, 'تغییر رمز');
     const m = openModal({
@@ -5320,7 +5320,7 @@
       e.preventDefault();
       hideErr(errBox);
       if (!fOld.value) return showErr(errBox, 'رمز عبور فعلی را وارد کنید.');
-      if (fNew.value.length < 10) return showErr(errBox, 'رمز عبور جدید باید حداقل 10 کاراکتر باشد.');
+      if (fNew.value.length < 8) return showErr(errBox, 'رمز عبور جدید باید حداقل ۸ کاراکتر باشد.');
       if (fNew.value !== fRep.value) return showErr(errBox, 'تکرار رمز عبور جدید مطابقت ندارد.');
       if (fNew.value === fOld.value) return showErr(errBox, 'رمز عبور جدید باید با رمز فعلی متفاوت باشد.');
       saveBtn.disabled = true;

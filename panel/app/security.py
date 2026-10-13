@@ -15,8 +15,8 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_MAXMEM = 128 * SCRYPT_N * SCRYPT_R * 2
 
-LOGIN_WINDOW = 300.0
-LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW = 900.0  # 15 minutes
+LOGIN_MAX_FAILURES = 20
 
 
 def hash_password(password: str) -> str:

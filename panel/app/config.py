@@ -135,7 +135,7 @@ class Settings:
     trusted_proxy: bool
     base_path: str
     domain: str = ""
-    session_hours: int = 12
+    session_hours: int = 168  # 7 days; renewed on activity (sliding)
     ssh_connect_timeout: int = 15
     command_timeout: int = 900
 
@@ -157,6 +157,13 @@ def load_settings() -> Settings:
     if not 1 <= port <= 65535:
         port = 2053
     data_dir = Path(os.environ.get("JOJONET_PANEL_DATA") or "/var/lib/jojonet-panel")
+    session_raw = os.environ.get("JOJONET_PANEL_SESSION_HOURS", "168").strip() or "168"
+    try:
+        session_hours = int(session_raw)
+    except ValueError:
+        session_hours = 168
+    if not 1 <= session_hours <= 24 * 90:
+        session_hours = 168
     return Settings(
         data_dir=data_dir,
         bundle_dir=Path(os.environ.get("JOJONET_PANEL_BUNDLE") or _default_bundle()),
@@ -169,4 +176,5 @@ def load_settings() -> Settings:
         trusted_proxy=_bool("JOJONET_PANEL_TRUSTED_PROXY", False),
         base_path=resolve_base_path(data_dir, os.environ.get("JOJONET_PANEL_PATH", "")),
         domain=os.environ.get("JOJONET_PANEL_DOMAIN", "").strip().lower().rstrip("."),
+        session_hours=session_hours,
     )

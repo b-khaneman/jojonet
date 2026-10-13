@@ -1058,7 +1058,7 @@ cmd_set_admin() {
     else
         IFS= read -r p1 || true
     fi
-    ((${#p1} >= 10)) || die "password must be at least 10 characters"
+    ((${#p1} >= 8)) || die "password must be at least 8 characters"
     printf '%s\n' "$p1" | run_app set-admin "$@" --password-stdin
 }
 
