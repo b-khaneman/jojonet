@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.17 / panel 1.3.70
+- **Customers list**: replace scattered cards with a dense aligned table (account, status, quota, wallet, access, actions); sticky header, search/filter toolbar, and stacked mobile rows.
+
 ## 1.6.16 / panel 1.3.69
 - **Orders**: owners can cancel pending or approved orders from the orders tab.
 

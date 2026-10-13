@@ -3216,7 +3216,14 @@
       box.replaceChildren(emptyState('نتیجه‌ای پیدا نشد.', 'جستجو یا فیلتر را عوض کنید.'));
       return;
     }
-    box.replaceChildren(h('div', { class: 'cust-stack', role: 'list', 'aria-label': 'فهرست مشتریان' },
+    box.replaceChildren(h('div', { class: 'cust-table', role: 'table', 'aria-label': 'فهرست مشتریان' },
+      h('div', { class: 'cust-tr cust-head', role: 'row' },
+        h('div', { class: 'cust-td cust-col-user', role: 'columnheader' }, 'حساب'),
+        h('div', { class: 'cust-td cust-col-status', role: 'columnheader' }, 'وضعیت'),
+        h('div', { class: 'cust-td cust-col-quota', role: 'columnheader' }, 'سهمیه'),
+        h('div', { class: 'cust-td cust-col-wallet', role: 'columnheader' }, 'کیف پول'),
+        h('div', { class: 'cust-td cust-col-perms', role: 'columnheader' }, 'دسترسی'),
+        h('div', { class: 'cust-td cust-col-actions', role: 'columnheader' }, 'عملیات')),
       ...data.map(userCard)));
   }
 
@@ -3251,16 +3258,16 @@
       return btn;
     };
 
-    const stat = (label, value) => h('div', { class: 'cust-stat' },
-      h('span', { class: 'cust-stat-k' }, label),
-      h('strong', { class: 'cust-stat-v', dir: 'ltr' }, value));
+    const quotaLine = (label, used, max) => h('div', { class: 'cust-quota-line' },
+      h('span', { class: 'cust-quota-k' }, label),
+      h('span', { class: 'cust-quota-v', dir: 'ltr' }, limitText(used || 0, max, '')));
 
-    let actions = null;
+    let actions = h('span', { class: 'cust-actions-empty muted' }, '—');
     if (!owner) {
       const primary = h('button', {
         type: 'button',
         class: 'btn btn-sm btn-primary',
-      }, pending ? 'تخصیص دسترسی' : 'ویرایش');
+      }, pending ? 'تخصیص' : 'ویرایش');
       primary.addEventListener('click', () => openEditUser(u));
 
       const walletBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'کیف پول');
@@ -3317,14 +3324,14 @@
         toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
       menu.append(toggle, panel);
-      actions = h('div', { class: 'cust-card-actions' }, primary, walletBtn, menu);
+      actions = h('div', { class: 'cust-row-actions' }, primary, walletBtn, menu);
     }
 
     return h('article', {
-      class: `cust-card${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}${pending ? ' is-pending' : ''}`,
-      role: 'listitem',
+      class: `cust-tr cust-row${owner ? ' is-owner' : ''}${u.enabled ? '' : ' is-off'}${pending ? ' is-pending' : ''}`,
+      role: 'row',
     },
-      h('div', { class: 'cust-card-top' },
+      h('div', { class: 'cust-td cust-col-user', role: 'cell', 'data-label': 'حساب' },
         h('div', { class: 'cust-user' },
           h('span', { class: 'cust-avatar', 'aria-hidden': 'true' }, (u.username || '?').slice(0, 1).toUpperCase()),
           h('div', { class: 'cust-user-text' },
@@ -3337,21 +3344,25 @@
             h('p', { class: 'cust-submeta' },
               h('span', null, expiry),
               h('span', { class: 'cust-dot', 'aria-hidden': 'true' }, '·'),
-              h('span', { dir: 'ltr' }, u.email || 'بدون ایمیل')))),
-        h('div', { class: 'cust-card-side' },
-          badge(status[0], status[1]),
-          owner ? null : h('span', { class: 'cust-wallet', dir: 'ltr' }, fmtMoney(u.wallet_balance || 0)))),
-      h('div', { class: 'cust-card-mid' },
-        h('div', { class: 'cust-stats', 'aria-label': 'مصرف' },
-          stat('سرور', limitText(usage.servers || 0, u.max_servers, '')),
-          stat('تانل', limitText(usage.tunnels || 0, u.max_tunnels, '')),
-          stat('رله', limitText(usage.relays || 0, u.max_relays, ''))),
+              h('span', { dir: 'ltr' }, u.email || 'بدون ایمیل'))))),
+      h('div', { class: 'cust-td cust-col-status', role: 'cell', 'data-label': 'وضعیت' },
+        badge(status[0], status[1])),
+      h('div', { class: 'cust-td cust-col-quota', role: 'cell', 'data-label': 'سهمیه' },
+        h('div', { class: 'cust-quota' },
+          quotaLine('سرور', usage.servers, u.max_servers),
+          quotaLine('تانل', usage.tunnels, u.max_tunnels),
+          quotaLine('رله', usage.relays, u.max_relays))),
+      h('div', { class: 'cust-td cust-col-wallet', role: 'cell', 'data-label': 'کیف پول' },
+        owner
+          ? h('span', { class: 'muted' }, '—')
+          : h('span', { class: 'cust-wallet', dir: 'ltr' }, fmtMoney(u.wallet_balance || 0))),
+      h('div', { class: 'cust-td cust-col-perms', role: 'cell', 'data-label': 'دسترسی' },
         h('div', { class: 'cust-perms', role: 'group', 'aria-label': 'دسترسی‌ها' },
           permBtn('allow_vpn', !!u.allow_vpn, 'VPN'),
           permBtn('allow_relay', !!u.allow_relay, 'رله'),
           permBtn('allow_os_update', !!u.allow_os_update, 'آپدیت'),
           permBtn('allow_term', !!u.allow_term, 'ترمینال'))),
-      actions ? h('div', { class: 'cust-card-bottom' }, actions) : null);
+      h('div', { class: 'cust-td cust-col-actions', role: 'cell', 'data-label': 'عملیات' }, actions));
   }
 
   function resetUserCreateForm() {

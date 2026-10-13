@@ -969,26 +969,28 @@
           </div>
 
           <div class="mgmt-list-wrap cust-list-wrap">
-            <div class="mgmt-list-head cust-list-head">
-              <div>
-                <p class="cust-kicker">حساب‌ها</p>
-                <h3 class="sub-head">فهرست مشتریان</h3>
-              </div>
-              <div class="cust-toolbar" role="search">
-                <label class="sr-only" for="users-search">جستجوی مشتری</label>
-                <input id="users-search" type="search" dir="rtl" placeholder="جستجو نام، ایمیل، یادداشت…" autocomplete="off" maxlength="80">
-                <label class="sr-only" for="users-filter">فیلتر وضعیت</label>
-                <select id="users-filter" aria-label="فیلتر وضعیت">
-                  <option value="all">همه</option>
-                  <option value="pending">در انتظار دسترسی</option>
-                  <option value="active">فعال</option>
-                  <option value="disabled">غیرفعال</option>
-                  <option value="expired">منقضی</option>
-                </select>
-              </div>
+            <div class="cust-panel">
+              <header class="cust-panel-h">
+                <div class="cust-panel-title">
+                  <p class="cust-kicker">حساب‌ها</p>
+                  <h3 class="sub-head">فهرست مشتریان</h3>
+                  <p id="users-summary" class="cust-summary muted" hidden></p>
+                </div>
+                <div class="cust-toolbar" role="search">
+                  <label class="sr-only" for="users-search">جستجوی مشتری</label>
+                  <input id="users-search" type="search" dir="rtl" placeholder="جستجو نام، ایمیل، یادداشت…" autocomplete="off" maxlength="80">
+                  <label class="sr-only" for="users-filter">فیلتر وضعیت</label>
+                  <select id="users-filter" aria-label="فیلتر وضعیت">
+                    <option value="all">همه</option>
+                    <option value="pending">در انتظار دسترسی</option>
+                    <option value="active">فعال</option>
+                    <option value="disabled">غیرفعال</option>
+                    <option value="expired">منقضی</option>
+                  </select>
+                </div>
+              </header>
+              <div id="users-list" class="list-area cust-list-area"></div>
             </div>
-            <p id="users-summary" class="cust-summary muted" hidden></p>
-            <div id="users-list" class="list-area"></div>
           </div>
         </div>
       </div>
