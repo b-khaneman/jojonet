@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.19 / panel 1.3.72
+- **Customers quota**: clearer tiled meters for server/tunnel/relay with used/max, closed state, and color cues.
+
 ## 1.6.18 / panel 1.3.71
 - **Orders**: when drilling into a username, show a clear close/back bar and Escape to return to the customer list (back control no longer scrolls out of view).
 

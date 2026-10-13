@@ -3258,9 +3258,48 @@
       return btn;
     };
 
-    const quotaLine = (label, used, max) => h('div', { class: 'cust-quota-line' },
-      h('span', { class: 'cust-quota-k' }, label),
-      h('span', { class: 'cust-quota-v', dir: 'ltr' }, limitText(used || 0, max, '')));
+    const quotaTile = (kind, label, mark, usedRaw, maxRaw) => {
+      const used = Number(usedRaw) || 0;
+      const hasCap = !(maxRaw == null || maxRaw === '');
+      const max = hasCap ? Number(maxRaw) : null;
+      const closed = hasCap && max === 0;
+      const unlimited = !hasCap;
+      let tone = 'ok';
+      let pct = 0;
+      if (closed) {
+        tone = used > 0 ? 'over' : 'off';
+        pct = used > 0 ? 100 : 0;
+      } else if (unlimited) {
+        tone = used > 0 ? 'open' : 'idle';
+        pct = used > 0 ? 28 : 0;
+      } else {
+        pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
+        if (used > max) tone = 'over';
+        else if (pct >= 90) tone = 'hot';
+        else if (pct >= 60) tone = 'warm';
+        else if (used === 0) tone = 'idle';
+      }
+      const valueText = closed
+        ? (used > 0 ? `${fmtNum(used)}/۰` : 'بسته')
+        : unlimited
+          ? fmtNum(used)
+          : `${fmtNum(used)}/${fmtNum(max)}`;
+      const tip = closed
+        ? `${label}: بسته${used ? ` · مصرف ${fmtNum(used)}` : ''}`
+        : unlimited
+          ? `${label}: نامحدود · مصرف ${fmtNum(used)}`
+          : `${label}: ${fmtNum(used)} از ${fmtNum(max)}`;
+      return h('div', {
+        class: `cust-qtile is-${kind} is-${tone}`,
+        title: tip,
+      },
+        h('span', { class: 'cust-qtile-mark', 'aria-hidden': 'true' }, mark),
+        h('span', { class: 'cust-qtile-body' },
+          h('span', { class: 'cust-qtile-k' }, label),
+          h('span', { class: 'cust-qtile-v', dir: 'ltr' }, valueText)),
+        h('span', { class: 'cust-qtile-bar', 'aria-hidden': 'true' },
+          h('span', { class: 'cust-qtile-fill', style: `width:${pct}%` })));
+    };
 
     let actions = h('span', { class: 'cust-actions-empty muted' }, '—');
     if (!owner) {
@@ -3348,10 +3387,10 @@
       h('div', { class: 'cust-td cust-col-status', role: 'cell', 'data-label': 'وضعیت' },
         badge(status[0], status[1])),
       h('div', { class: 'cust-td cust-col-quota', role: 'cell', 'data-label': 'سهمیه' },
-        h('div', { class: 'cust-quota' },
-          quotaLine('سرور', usage.servers, u.max_servers),
-          quotaLine('تانل', usage.tunnels, u.max_tunnels),
-          quotaLine('رله', usage.relays, u.max_relays))),
+        h('div', { class: 'cust-quota', role: 'group', 'aria-label': 'سهمیه' },
+          quotaTile('srv', 'سرور', 'S', usage.servers, u.max_servers),
+          quotaTile('tun', 'تانل', 'T', usage.tunnels, u.max_tunnels),
+          quotaTile('rel', 'رله', 'R', usage.relays, u.max_relays))),
       h('div', { class: 'cust-td cust-col-wallet', role: 'cell', 'data-label': 'کیف پول' },
         owner
           ? h('span', { class: 'muted' }, '—')
