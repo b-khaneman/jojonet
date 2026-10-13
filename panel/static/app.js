@@ -4100,63 +4100,110 @@
     return wrap;
   }
 
-  function orderSideBlock(title, side) {
-    if (!side) return h('div', { class: 'svc-fact' }, h('span', { class: 'svc-fact-k' }, title), h('span', { class: 'svc-fact-v' }, '—'));
-    const facts = [
-      secretFact('نام', side.name),
-      secretFact('آدرس', `${side.host || ''}:${side.port || 22}`, true),
-      secretFact('کاربر', side.username, true),
-      secretFact('دسترسی', side.has_access ? 'ارسال شده' : 'بدون رمز'),
-    ].filter(Boolean);
-    if (isOwner() && side.has_access) {
-      facts.push(secretFact('رمز SSH', side.password, true));
-      facts.push(secretFact('کلید خصوصی', side.private_key, true));
-      facts.push(secretFact('sudo', side.sudo_password, true));
-      if (side.access_error) facts.push(secretFact('خطا', side.access_error));
-    }
-    return h('div', { class: 'svc-fact' },
-      h('span', { class: 'svc-fact-k' }, title),
-      h('div', { style: 'display:grid;gap:.45rem;margin-top:.35rem' }, ...facts));
+  function copyBtn(text) {
+    const btn = h('button', { type: 'button', class: 'ord-copy', title: 'کپی' }, 'کپی');
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      navigator.clipboard.writeText(String(text)).then(
+        () => toast('کپی شد.', 'success'),
+        () => toast('کپی ممکن نشد.', 'error'),
+      );
+    });
+    return btn;
   }
 
-  function orderPaymentBlock(o) {
+  function ordRow(label, value, opts) {
+    const o = opts || {};
+    if (value == null || value === '') return null;
+    const raw = String(value);
+    const ltr = o.ltr !== false && (o.secret || o.mono || /[:.@\d]/.test(raw));
+    let revealed = !o.secret;
+    const valEl = h('span', {
+      class: `ord-val${o.secret && !revealed ? ' is-masked' : ''}`,
+      dir: ltr ? 'ltr' : 'rtl',
+    }, o.secret && !revealed ? '••••••••••••' : raw);
+    const actions = [];
+    if (o.secret) {
+      const tog = h('button', { type: 'button', class: 'ord-copy', title: 'نمایش یا پنهان' }, 'نمایش');
+      tog.addEventListener('click', (e) => {
+        e.preventDefault();
+        revealed = !revealed;
+        valEl.textContent = revealed ? raw : '••••••••••••';
+        valEl.classList.toggle('is-masked', !revealed);
+        tog.textContent = revealed ? 'پنهان' : 'نمایش';
+      });
+      actions.push(tog);
+    }
+    if (o.copy) actions.push(copyBtn(raw));
+    return h('div', { class: 'ord-row' },
+      h('span', { class: 'ord-key' }, label),
+      h('div', { class: 'ord-cell' }, valEl, actions.length ? h('div', { class: 'ord-tools' }, ...actions) : null));
+  }
+
+  function orderServerPanel(role, side) {
+    const title = role === 'iran' ? 'سرور ایران' : 'سرور خارج';
+    const mark = role === 'iran' ? 'IR' : 'EX';
+    if (!side) {
+      return h('section', { class: `ord-panel is-${role}` },
+        h('header', { class: 'ord-panel-h' },
+          h('span', { class: 'ord-panel-mark', 'aria-hidden': 'true' }, mark),
+          h('div', null,
+            h('p', { class: 'ord-panel-kicker' }, title),
+            h('h4', { class: 'ord-panel-title' }, 'ثبت نشده'))),
+        h('p', { class: 'ord-empty' }, 'مشخصات این سمت در سفارش نیست.'));
+    }
+    const rows = [
+      ordRow('نام', side.name || '—', { ltr: false }),
+      ordRow('آدرس', `${side.host || ''}:${side.port || 22}`, { copy: true, mono: true }),
+      ordRow('کاربر', side.username || '—', { copy: !!side.username, mono: true }),
+      ordRow('دسترسی', side.has_access ? 'رمز ارسال شده' : 'بدون رمز', { ltr: false }),
+    ];
+    if (isOwner() && side.has_access) {
+      if (side.password) rows.push(ordRow('رمز SSH', side.password, { copy: true, secret: true, mono: true }));
+      if (side.private_key) rows.push(ordRow('کلید خصوصی', side.private_key, { copy: true, secret: true, mono: true }));
+      if (side.sudo_password) rows.push(ordRow('sudo', side.sudo_password, { copy: true, secret: true, mono: true }));
+      if (side.access_error) rows.push(ordRow('خطا', side.access_error, { ltr: false }));
+    }
+    return h('section', { class: `ord-panel is-${role}` },
+      h('header', { class: 'ord-panel-h' },
+        h('span', { class: 'ord-panel-mark', 'aria-hidden': 'true' }, mark),
+        h('div', { class: 'ord-panel-titles' },
+          h('p', { class: 'ord-panel-kicker' }, title),
+          h('h4', { class: 'ord-panel-title' }, side.name || title))),
+      h('div', { class: 'ord-table', role: 'table', 'aria-label': title }, ...rows.filter(Boolean)));
+  }
+
+  function orderBillingPanel(o) {
     const price = Number(o.price) || 0;
     const paySt = o.payment_status || (price > 0 ? 'awaiting' : 'none');
     const [pk, pl] = ORDER_PAY_STATUS[paySt] || ['muted', paySt];
     const cur = o.currency || currencyLabel();
-    const facts = [
-      h('div', { class: 'svc-fact' },
-        h('span', { class: 'svc-fact-k' }, 'فاکتور'),
-        h('span', { class: 'svc-fact-v' }, price > 0 ? `${fmtNum(price)} ${cur}` : 'رایگان')),
-      h('div', { class: 'svc-fact' },
-        h('span', { class: 'svc-fact-k' }, 'پرداخت'),
-        h('span', { class: 'svc-fact-v order-pay-badge' }, badge(pk, pl))),
+    const rows = [
+      ordRow('مبلغ فاکتور', price > 0 ? `${fmtNum(price)} ${cur}` : 'رایگان', { ltr: price > 0 }),
+      h('div', { class: 'ord-row' },
+        h('span', { class: 'ord-key' }, 'وضعیت پرداخت'),
+        h('div', { class: 'ord-cell' }, badge(pk, pl))),
     ];
     if (o.payment_method) {
-      facts.push(h('div', { class: 'svc-fact' },
-        h('span', { class: 'svc-fact-k' }, 'روش'),
-        h('span', { class: 'svc-fact-v' }, o.payment_method === 'crypto' ? 'ولت / رمزارز' : 'کارت به کارت')));
+      rows.push(ordRow('روش واریز', o.payment_method === 'crypto' ? 'ولت / رمزارز' : 'کارت به کارت', { ltr: false }));
     }
-    if (o.payment_tracking) {
-      facts.push(secretFact('کد پیگیری', o.payment_tracking, true));
-    }
+    if (o.payment_tracking) rows.push(ordRow('کد پیگیری', o.payment_tracking, { copy: true, mono: true }));
     if (o.payment_amount && Number(o.payment_amount) !== price) {
-      facts.push(h('div', { class: 'svc-fact' },
-        h('span', { class: 'svc-fact-k' }, 'مبلغ اعلام‌شده'),
-        h('span', { class: 'svc-fact-v' }, `${fmtNum(o.payment_amount)} ${cur}`)));
+      rows.push(ordRow('مبلغ اعلام‌شده', `${fmtNum(o.payment_amount)} ${cur}`, { mono: true }));
     }
+    if (o.deposit_id) rows.push(ordRow('شناسه واریز', `#${o.deposit_id}`, { mono: true, copy: true }));
     if (isOwner() && price > 0) {
-      if (o.payment_card) facts.push(secretFact('کارت شما', o.payment_card, true));
-      if (o.payment_wallet_address) facts.push(secretFact('ولت شما', o.payment_wallet_address, true));
+      if (o.payment_card) rows.push(ordRow('کارت مقصد', o.payment_card, { copy: true, mono: true }));
+      if (o.payment_wallet_address) rows.push(ordRow('ولت مقصد', o.payment_wallet_address, { copy: true, mono: true }));
     }
-    if (o.deposit_id) {
-      facts.push(h('div', { class: 'svc-fact' },
-        h('span', { class: 'svc-fact-k' }, 'واریز'),
-        h('span', { class: 'svc-fact-v', dir: 'ltr' }, `#${o.deposit_id}`)));
-    }
-    return h('div', { class: 'svc-fact' },
-      h('span', { class: 'svc-fact-k' }, 'صورتحساب'),
-      h('div', { style: 'display:grid;gap:.45rem;margin-top:.35rem' }, ...facts));
+    return h('section', { class: 'ord-bill' },
+      h('header', { class: 'ord-bill-h' },
+        h('div', null,
+          h('p', { class: 'ord-panel-kicker' }, 'صورتحساب'),
+          h('h4', { class: 'ord-panel-title' }, price > 0 ? `${fmtNum(price)} ${cur}` : 'بدون هزینه')),
+        badge(pk, pl)),
+      h('div', { class: 'ord-table ord-table-bill' }, ...rows.filter(Boolean)));
   }
 
   function orderCard(o) {
@@ -4236,28 +4283,31 @@
       goBtn.addEventListener('click', () => openFulfillModal(o));
       actions.push(goBtn);
     }
-    const meta = [
-      h('span', null, ['وضعیت ', badge(kind, label)]),
-      h('span', null, ['مشتری ', h('b', null, o.customer_username || '—')]),
-      h('span', null, ['ثبت ', h('b', null, fmtTime(o.created_at))]),
+    const chips = [
+      h('span', { class: 'ord-chip' }, h('span', { class: 'ord-chip-k' }, 'مشتری'), h('b', null, o.customer_username || '—')),
+      h('span', { class: 'ord-chip' }, h('span', { class: 'ord-chip-k' }, 'ثبت'), h('b', null, fmtTime(o.created_at))),
     ];
-    if (o.tunnel_id) meta.push(h('span', null, ['تانل #', h('b', { dir: 'ltr' }, String(o.tunnel_id))]));
-    if (o.owner_note) meta.push(h('span', null, ['یادداشت مالک ', h('b', null, o.owner_note)]));
-    return h('article', { class: `svc-slip is-${tone}` },
-      h('div', { class: 'svc-slip-top' },
-        h('div', { style: 'display:flex;gap:.8rem;align-items:center;min-width:0' },
-          h('span', { class: 'svc-mark', 'aria-hidden': 'true' }, String(o.id)),
-          h('div', null,
-            h('p', { class: 'svc-kicker' }, o.mode || 'tunnel'),
-            h('h3', { class: 'svc-title' }, o.mode_label || o.mode || 'سفارش'))),
+    if (o.tunnel_id) {
+      chips.push(h('span', { class: 'ord-chip' },
+        h('span', { class: 'ord-chip-k' }, 'تانل'),
+        h('b', { dir: 'ltr' }, `#${o.tunnel_id}`)));
+    }
+    return h('article', { class: `ord-card is-${tone}` },
+      h('header', { class: 'ord-head' },
+        h('div', { class: 'ord-head-main' },
+          h('span', { class: 'ord-id', 'aria-hidden': 'true' }, String(o.id)),
+          h('div', { class: 'ord-head-text' },
+            h('p', { class: 'ord-kicker' }, (o.mode || 'tunnel').toUpperCase()),
+            h('h3', { class: 'ord-title' }, o.mode_label || o.mode || 'سفارش'))),
         badge(kind, label)),
-      h('div', { class: 'svc-meta' }, ...meta),
-      o.message ? h('div', { class: 'svc-msg' }, o.message) : null,
-      h('div', { class: 'svc-grid' },
-        orderPaymentBlock(o),
-        orderSideBlock('ایران', o.iran),
-        orderSideBlock('خارج', o.kharej)),
-      actions.length ? h('div', { class: 'svc-actions' }, ...actions) : null);
+      h('div', { class: 'ord-chips' }, ...chips),
+      o.message ? h('div', { class: 'ord-note' }, h('span', { class: 'ord-note-k' }, 'پیام مشتری'), h('p', null, o.message)) : null,
+      o.owner_note ? h('div', { class: 'ord-note is-owner' }, h('span', { class: 'ord-note-k' }, 'یادداشت مالک'), h('p', null, o.owner_note)) : null,
+      orderBillingPanel(o),
+      h('div', { class: 'ord-servers' },
+        orderServerPanel('iran', o.iran),
+        orderServerPanel('kharej', o.kharej)),
+      actions.length ? h('footer', { class: 'ord-actions' }, ...actions) : null);
   }
 
   function openFulfillModal(o) {

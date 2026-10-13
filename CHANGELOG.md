@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.5 / panel 1.3.58
+- **Order cards**: structured billing strip and equal Iran/Kharej tables with inline copy/reveal instead of nested boxes.
+
 ## 1.6.5 / panel 1.3.57
 - **Order invoice payment**: customers must pay (wallet balance or card/crypto tracking) before submitting a paid tunnel order; owners confirm deposit before approve/fulfill.
 - **Management UI**: owner tab split into Customers / Commerce / Access+SSL / Policies / Email panes instead of one crowded page.
