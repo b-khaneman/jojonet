@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.26 / panel 1.3.79
+- **Customers create tip**: keep the signup defaults note on one tidy line.
+
 ## 1.6.25 / panel 1.3.78
 - **Customers menu**: open the ⋯ menu with fixed positioning, flip upward when space is tight, and scroll inside if needed so items are not clipped.
 

@@ -6366,10 +6366,10 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
 
 .cust-create-h {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: .65rem 1.25rem;
+  gap: .85rem 1.5rem;
   margin-bottom: 1rem;
   padding-bottom: .9rem;
   border-bottom: 1px solid var(--border);
@@ -6382,9 +6382,18 @@ html[data-theme="day"] .mgmt-nav-btn[aria-selected="true"] {
 
 .cust-create-lead {
   margin: 0;
-  max-width: 28rem;
-  font-size: .88rem;
-  line-height: 1.55;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  font-size: .86rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-align: left;
+}
+
+html[dir="rtl"] .cust-create-lead {
+  text-align: left;
 }
 
 .cust-form {
@@ -7333,6 +7342,12 @@ button.perm-btn:hover {
 
   .cust-create-h {
     flex-direction: column;
+    flex-wrap: wrap;
     align-items: flex-start;
+  }
+
+  .cust-create-lead {
+    white-space: normal;
+    text-align: right;
   }
 }
