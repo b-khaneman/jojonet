@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.27 / panel 1.3.80
+- **Customers quota tiles**: taller cards so labels like «بسته» are fully visible.
+
 ## 1.6.26 / panel 1.3.79
 - **Customers create tip**: keep the signup defaults note on one tidy line.
 
