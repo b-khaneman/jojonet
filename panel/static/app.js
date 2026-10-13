@@ -3197,12 +3197,60 @@
     el.hidden = !all.length;
   }
 
+  function resetUserMenuPanel(panel) {
+    if (!panel) return;
+    panel.style.position = '';
+    panel.style.top = '';
+    panel.style.left = '';
+    panel.style.right = '';
+    panel.style.bottom = '';
+    panel.style.width = '';
+    panel.style.maxHeight = '';
+    panel.style.overflowY = '';
+    panel.style.zIndex = '';
+  }
+
+  function placeUserMenu(menu, panel, toggle) {
+    if (!menu || !panel || !toggle) return;
+    const tr = toggle.getBoundingClientRect();
+    const prevDisplay = panel.style.display;
+    panel.style.display = 'flex';
+    panel.style.position = 'fixed';
+    panel.style.visibility = 'hidden';
+    panel.style.zIndex = '120';
+    const pw = Math.max(panel.offsetWidth || 0, 12 * 16);
+    const ph = panel.offsetHeight || 220;
+    const gap = 6;
+    const spaceBelow = window.innerHeight - tr.bottom - gap;
+    const spaceAbove = tr.top - gap;
+    const openUp = spaceBelow < Math.min(ph, 220) && spaceAbove > spaceBelow;
+    let maxH = Math.max(120, (openUp ? spaceAbove : spaceBelow) - 4);
+    maxH = Math.min(maxH, window.innerHeight - 16);
+    panel.style.maxHeight = `${maxH}px`;
+    panel.style.overflowY = 'auto';
+    const height = Math.min(ph, maxH);
+    let top = openUp ? tr.top - height - gap : tr.bottom + gap;
+    top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+    const rtl = (document.documentElement.getAttribute('dir') || '').toLowerCase() === 'rtl';
+    let left = rtl ? tr.right - pw : tr.left;
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    panel.style.top = `${top}px`;
+    panel.style.left = `${left}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    panel.style.width = `${pw}px`;
+    panel.style.visibility = '';
+    panel.style.display = prevDisplay || '';
+    menu.classList.toggle('is-up', openUp);
+  }
+
   function closeUserMenus(except) {
     document.querySelectorAll('.cust-menu.is-open').forEach((el) => {
       if (except && el === except) return;
-      el.classList.remove('is-open');
+      el.classList.remove('is-open', 'is-up');
       const t = el.querySelector('.cust-menu-toggle');
       if (t) t.setAttribute('aria-expanded', 'false');
+      resetUserMenuPanel(el.querySelector('.cust-menu-panel'));
     });
   }
 
@@ -3370,6 +3418,13 @@
         closeUserMenus(menu);
         menu.classList.toggle('is-open', open);
         toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          placeUserMenu(menu, panel, toggle);
+          requestAnimationFrame(() => placeUserMenu(menu, panel, toggle));
+        } else {
+          menu.classList.remove('is-up');
+          resetUserMenuPanel(panel);
+        }
       });
       menu.append(toggle, panel);
       actions = h('div', { class: 'cust-row-actions' },
@@ -6989,6 +7044,8 @@
       });
     }
     document.addEventListener('click', () => closeUserMenus());
+    window.addEventListener('resize', () => closeUserMenus());
+    window.addEventListener('scroll', () => closeUserMenus(), true);
     const ordersSearch = $('#orders-search');
     if (ordersSearch) {
       ordersSearch.addEventListener('input', () => {

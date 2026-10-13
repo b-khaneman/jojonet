@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.25 / panel 1.3.78
+- **Customers menu**: open the ⋯ menu with fixed positioning, flip upward when space is tight, and scroll inside if needed so items are not clipped.
+
 ## 1.6.24 / panel 1.3.77
 - **Customers wallet**: show amount on the right and currency (تومان) on the left in RTL.
 

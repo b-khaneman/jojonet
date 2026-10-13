@@ -7069,21 +7069,14 @@ button.cust-perm:hover {
 
 .cust-menu-panel {
   display: none;
-  position: absolute;
-  top: calc(100% + .28rem);
-  left: 0;
-  z-index: 30;
-  min-width: 11rem;
-  padding: .3rem;
+  position: fixed;
+  z-index: 120;
+  min-width: 12rem;
+  padding: .35rem;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 12px;
   background: var(--surface);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .12);
-}
-
-html[dir="rtl"] .cust-menu-panel {
-  left: auto;
-  right: 0;
+  box-shadow: 0 16px 36px rgba(15, 35, 70, .16);
 }
 
 .cust-menu.is-open .cust-menu-panel {
