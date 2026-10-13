@@ -1001,7 +1001,8 @@ textarea::placeholder {
   font-weight: 700;
 }
 
-.user-card .role-owner {
+.user-card .role-owner,
+.role-chip.role-owner {
   background: rgba(79, 140, 255, .14);
   color: var(--primary);
 }
