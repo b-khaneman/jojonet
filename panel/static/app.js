@@ -5569,6 +5569,11 @@
     return mod.FitAddon || mod;
   }
 
+  function hxTermFocused() {
+    const el = document.activeElement;
+    return !!(el && el.closest && el.closest('.xterm'));
+  }
+
   function createHxTerm(side) {
     const dock = $(`#hx-${side}`);
     const screen = $(`#hx-${side}-screen`);
@@ -5582,9 +5587,13 @@
     const term = new Terminal({
       convertEol: true,
       cursorBlink: true,
+      cursorStyle: 'block',
       fontFamily: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.25,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: false,
+      allowProposedApi: true,
       theme: {
         background: '#020705',
         foreground: '#3dff9a',
@@ -5607,9 +5616,13 @@
     const fit = FitCls ? new FitCls() : null;
     if (fit) term.loadAddon(fit);
     term.open(screen);
+
     const api = {
       term,
       ws: null,
+      focus() {
+        try { term.focus(); } catch (_) {}
+      },
       setState(name, live) {
         if (stateEl) stateEl.textContent = name;
         dock.classList.toggle('is-live', !!live);
@@ -5618,6 +5631,40 @@
       },
       fit() {
         try { if (fit) fit.fit(); } catch (_) {}
+      },
+      async pasteFromClipboard() {
+        let text = '';
+        try {
+          text = await navigator.clipboard.readText();
+        } catch (_) {
+          toast('دسترسی به کلیپ‌بورد ممکن نشد. مجوز مرورگر را بررسی کنید.', 'error');
+          return;
+        }
+        if (!text) return;
+        const data = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        try {
+          if (typeof term.paste === 'function') term.paste(data);
+          else if (this.ws && this.ws.readyState === 1) {
+            this.ws.send(JSON.stringify({ t: 'i', d: data }));
+          }
+        } catch (_) {
+          if (this.ws && this.ws.readyState === 1) {
+            this.ws.send(JSON.stringify({ t: 'i', d: data }));
+          }
+        }
+        this.focus();
+      },
+      async copySelection() {
+        const sel = term.getSelection();
+        if (!sel) return false;
+        try {
+          await navigator.clipboard.writeText(sel);
+          toast('کپی شد.', 'success');
+          return true;
+        } catch (_) {
+          toast('کپی ممکن نشد.', 'error');
+          return false;
+        }
       },
       async bootSeq() {
         if (!boot) return;
@@ -5634,6 +5681,7 @@
           boot.textContent += `${line}\n`;
           await new Promise((r) => setTimeout(r, 80));
         }
+        boot.hidden = true;
       },
       disconnect() {
         if (this.ws) {
@@ -5661,7 +5709,10 @@
         const ws = new WebSocket(url);
         this.ws = ws;
         this.setState('در حال اتصال', false);
-        ws.addEventListener('open', () => this.setState('متصل', true));
+        ws.addEventListener('open', () => {
+          this.setState('متصل', true);
+          this.focus();
+        });
         ws.addEventListener('message', (ev) => {
           let msg;
           try { msg = JSON.parse(ev.data); } catch (_) { return; }
@@ -5677,9 +5728,59 @@
         });
       },
     };
+
     term.onData((data) => {
       if (api.ws && api.ws.readyState === 1) api.ws.send(JSON.stringify({ t: 'i', d: data }));
     });
+
+    // Windows-style shortcuts: Ctrl+V paste, Ctrl+C copy-when-selected, arrows pass through.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true;
+      const key = ev.key;
+      const ctrl = ev.ctrlKey || ev.metaKey;
+
+      if (ctrl && !ev.altKey && (key === 'v' || key === 'V')) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        api.pasteFromClipboard();
+        return false;
+      }
+      if (ev.shiftKey && key === 'Insert') {
+        ev.preventDefault();
+        api.pasteFromClipboard();
+        return false;
+      }
+      if (ctrl && !ev.altKey && (key === 'c' || key === 'C') && term.hasSelection()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        api.copySelection();
+        return false;
+      }
+      if (ctrl && ev.shiftKey && (key === 'c' || key === 'C')) {
+        ev.preventDefault();
+        api.copySelection();
+        return false;
+      }
+      // ArrowUp/Down/Left/Right, Home/End, PageUp/Down → let xterm send CSI to the shell.
+      return true;
+    });
+
+    screen.addEventListener('mousedown', () => api.focus());
+    screen.addEventListener('click', () => api.focus());
+    screen.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      if (term.hasSelection()) api.copySelection();
+      else api.pasteFromClipboard();
+    });
+    screen.addEventListener('paste', (ev) => {
+      const text = ev.clipboardData && ev.clipboardData.getData('text');
+      if (!text) return;
+      ev.preventDefault();
+      const data = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      if (typeof term.paste === 'function') term.paste(data);
+      else if (api.ws && api.ws.readyState === 1) api.ws.send(JSON.stringify({ t: 'i', d: data }));
+    });
+
     if (window.ResizeObserver) {
       new ResizeObserver(() => {
         api.fit();
@@ -5709,7 +5810,12 @@
     syncHxOffset();
     if (open) applyHxBox(side);
     const api = hxTerms[side];
-    if (open && api) setTimeout(() => api.fit(), 280);
+    if (open && api) {
+      setTimeout(() => {
+        api.fit();
+        api.focus();
+      }, 280);
+    }
   }
 
   function hxBoxKey(side) { return 'jn-hx-box-' + side; }
@@ -5851,6 +5957,8 @@
     window.addEventListener('resize', syncHxOffset);
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' || modalStack.length) return;
+      // Keep Esc for vim/shell when the terminal has focus.
+      if (hxTermFocused()) return;
       setHxOpen('left', false);
       setHxOpen('right', false);
     });

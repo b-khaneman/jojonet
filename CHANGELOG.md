@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.8 / panel 1.3.61
+- **Terminal**: Ctrl+V paste, Ctrl+C copy-when-selected, keep Esc in-shell, focus for arrow/history keys.
+
 ## 1.6.7 / panel 1.3.60
 - **Wallet**: visible top-up CTA and deposit form; tabled requests/ledger. Fix email inputs to match other fields. Repair broken CSS quote.
 
