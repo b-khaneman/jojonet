@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.16 / panel 1.3.69
+- **Orders**: owners can cancel pending or approved orders from the orders tab.
+
 ## 1.6.15 / panel 1.3.68
 - **Customers list**: card layout instead of cramped table; primary Edit/Wallet actions with overflow menu for the rest; clearer usage and permission rows.
 

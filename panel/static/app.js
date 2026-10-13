@@ -4690,13 +4690,27 @@
     const paySt = o.payment_status || 'none';
     const payReady = o.payment_ready !== false && paySt !== 'awaiting';
     const actions = [];
-    if (!isOwner() && o.status === 'pending') {
-      const cancelBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'لغو');
-      cancelBtn.addEventListener('click', () => act(cancelBtn, async () => {
-        await api('POST', `/api/orders/${enc(o.id)}/cancel`);
-        toast('سفارش لغو شد.', 'success');
-        await load('orders');
-      }));
+    if ((!isOwner() && o.status === 'pending') || (isOwner() && (o.status === 'pending' || o.status === 'approved'))) {
+      const cancelBtn = h('button', {
+        type: 'button',
+        class: isOwner() ? 'btn btn-sm btn-danger-ghost' : 'btn btn-sm',
+      }, 'لغو سفارش');
+      cancelBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: 'لغو سفارش',
+          message: isOwner()
+            ? `سفارش #${o.id} مربوط به «${o.customer_username || 'مشتری'}» لغو شود؟`
+            : `سفارش #${o.id} لغو شود؟`,
+          okText: 'لغو سفارش',
+          danger: true,
+        });
+        if (!ok) return;
+        act(cancelBtn, async () => {
+          await api('POST', `/api/orders/${enc(o.id)}/cancel`);
+          toast('سفارش لغو شد.', 'success');
+          await load('orders');
+        });
+      });
       actions.push(cancelBtn);
     }
     if (isOwner() && o.status === 'pending' && paySt === 'awaiting') {

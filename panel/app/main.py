@@ -2873,7 +2873,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/orders/{order_id}/cancel")
     async def cancel_order(order_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
         row = get_order(order_id, sess)
-        if row["status"] != "pending":
+        status = row["status"]
+        owner = is_owner(sess)
+        if owner:
+            if status not in ("pending", "approved"):
+                raise HTTPException(409, "فقط سفارش در انتظار یا تأییدشده قابل لغو است")
+        elif status != "pending":
             raise HTTPException(409, "فقط سفارش در انتظار قابل لغو است")
         did = row.get("deposit_id")
         if did and (row.get("payment_status") or "") == "awaiting":
@@ -2881,10 +2886,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if dep and dep["status"] == "pending":
                 db.update("deposit_requests", int(did), {
                     "status": "rejected",
-                    "owner_note": "لغو سفارش توسط مشتری",
+                    "owner_note": "لغو سفارش توسط مالک" if owner else "لغو سفارش توسط مشتری",
                     "decided_at": utcnow(),
                 })
-        db.update("service_orders", order_id, {"status": "cancelled", "decided_at": utcnow()})
+        note = "لغو توسط مالک پنل" if owner else row.get("owner_note")
+        db.update("service_orders", order_id, {
+            "status": "cancelled",
+            "decided_at": utcnow(),
+            **({"owner_note": note} if owner else {}),
+        })
         return order_out(get_order(order_id, sess), sess)
 
     @app.post("/api/orders/{order_id}/decide")

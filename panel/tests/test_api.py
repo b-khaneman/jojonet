@@ -800,6 +800,38 @@ def test_customer_orders_and_owner_decide_fulfill(client, admin, monkeypatch):
     cid = cancelled_src.json()["id"]
     assert client.post(f"/api/orders/{cid}/cancel", headers=cauth).json()["status"] == "cancelled"
 
+    # Owner can cancel pending and approved orders
+    more = client.post(
+        "/api/orders",
+        json={
+            **payload,
+            "iran": {**payload["iran"], "host": "10.5.5.5"},
+            "kharej": {**payload["kharej"], "host": "10.6.6.6"},
+        },
+        headers=cauth,
+    )
+    assert more.status_code == 200
+    oid2 = more.json()["id"]
+    client.post("/api/logout", headers=cauth)
+    owner_auth = login_as(client, admin[0], admin[1])
+    owner_cancel = client.post(f"/api/orders/{oid2}/cancel", headers=owner_auth)
+    assert owner_cancel.status_code == 200 and owner_cancel.json()["status"] == "cancelled"
+    again2 = client.post(
+        "/api/orders",
+        json={
+            **payload,
+            "iran": {**payload["iran"], "host": "10.7.7.7"},
+            "kharej": {**payload["kharej"], "host": "10.8.8.8"},
+        },
+        headers=login_as(client, "buyer1", "customer-pass-1"),
+    )
+    assert again2.status_code == 200
+    oid3 = again2.json()["id"]
+    client.post("/api/logout")
+    owner_auth = login_as(client, admin[0], admin[1])
+    assert client.post(f"/api/orders/{oid3}/decide", json={"action": "approve"}, headers=owner_auth).status_code == 200
+    assert client.post(f"/api/orders/{oid3}/cancel", headers=owner_auth).json()["status"] == "cancelled"
+
 
 def test_order_requires_invoice_payment_then_owner_confirms(client, admin, monkeypatch):
     from test_tenants import add_customer, login_as
