@@ -54,20 +54,32 @@ PREREQ_SCRIPT = r"""
 set -u
 export DEBIAN_FRONTEND=noninteractive
 command -v systemctl >/dev/null 2>&1 || { echo "systemd is required"; exit 4; }
+apt_ok=1
 if command -v apt-get >/dev/null 2>&1; then
     apt-get -o DPkg::Lock::Timeout=180 update -qq || echo "apt update had errors (continuing)"
     apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends \
         curl ca-certificates iproute2 nftables iptables openssl procps iputils-ping util-linux tar gzip unzip coreutils kmod \
-        || { echo "apt install failed"; exit 5; }
+        || { echo "apt install failed (will accept if core tools already present)"; apt_ok=0; }
 elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
     pm=$(command -v dnf || command -v yum)
     "$pm" install -y -q curl ca-certificates iproute nftables iptables openssl procps-ng iputils util-linux tar gzip unzip coreutils kmod \
-        || { echo "$pm install failed"; exit 5; }
+        || { echo "$pm install failed (will accept if core tools already present)"; apt_ok=0; }
 else
     echo "unsupported package manager (need apt, dnf or yum)"; exit 3
 fi
-for c in ip nft ping openssl tar curl unzip; do command -v "$c" >/dev/null 2>&1 || { echo "missing after install: $c"; exit 6; }; done
-echo "prerequisites OK"
+# Core tools required to upload/run jojonet; unzip is preferred but may be installed later by ENSURE_TOOLS.
+missing=""
+for c in ip nft ping openssl tar curl; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
+missing=${missing# }
+if [ -n "$missing" ]; then
+  echo "missing after install:$missing"
+  exit 6
+fi
+if [ "$apt_ok" != "1" ]; then
+  echo "prerequisites OK (partial apt; core tools present)"
+else
+  echo "prerequisites OK"
+fi
 """
 
 # Lightweight: always run before deploy even when jojonet version already matches.
@@ -521,15 +533,16 @@ class Orchestrator:
         info = await self.sysinfo(sess)
         return info.get("jojonet", "")
 
-    async def ensure_tools(self, job: Job, sess: RemoteSession, name: str) -> None:
+    async def ensure_tools(self, job: Job, sess: RemoteSession, name: str, *, required: bool = True) -> None:
         """Install unzip/tar/curl when missing — even if jojonet is already current."""
         res = await sess.run_root(ENSURE_TOOLS_SCRIPT, timeout=300)
-        if not res.ok:
-            detail = (res.stderr or res.stdout or "").strip()[:240]
+        if res.ok and "tools_ok" in (res.stdout or ""):
+            await job.log(f"[{name}] unzip/tar/curl آماده است")
+            return
+        detail = (res.stderr or res.stdout or "").strip()[:240]
+        if required:
             raise StepFailed(f"{name}: ابزارهای لازم نصب نشد ({detail or 'unzip/tar/curl'})")
-        if "tools_ok" not in (res.stdout or ""):
-            raise StepFailed(f"{name}: بررسی ابزارهای لازم ناموفق بود")
-        await job.log(f"[{name}] unzip/tar/curl آماده است")
+        await job.log(f"⚠ [{name}] ابزار اختیاری ناقص است ({detail or 'unzip'}) — ادامه با هسته موجود")
 
     async def ensure_ready(self, job: Job, sess: RemoteSession, row: dict[str, Any]) -> dict[str, str]:
         name = row["name"]
@@ -540,14 +553,15 @@ class Orchestrator:
         have = info.get("jojonet", "")
         if have and want and have == want:
             await job.log(f"[{name}] jojonet {have} نصب است")
-            await self.ensure_tools(job, sess, name)
+            await self.ensure_tools(job, sess, name, required=False)
             return info
         await job.log(f"[{name}] نصب پیش‌نیازها و jojonet {want or ''} (فعلی: {have or 'ندارد'})")
         await self.install_prereqs(job, sess, name)
         info["jojonet"] = await self.install_jojonet(job, sess, name)
         if want and info["jojonet"] != want:
             raise StepFailed(f"{name}: نسخه نصب‌شده ({info['jojonet'] or '?'}) با نسخه پنل ({want}) یکی نیست")
-        await self.ensure_tools(job, sess, name)
+        # unzip may be unavailable when apt mirrors/DNS are down; do not block jojonet upgrade.
+        await self.ensure_tools(job, sess, name, required=False)
         return info
 
     # ---------- server jobs ----------
