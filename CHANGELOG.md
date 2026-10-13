@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.7 / panel 1.3.60
+- **Wallet**: visible top-up CTA and deposit form; tabled requests/ledger. Fix email inputs to match other fields. Repair broken CSS quote.
+
 ## 1.6.6 / panel 1.3.59
 - **Customers UI**: sectioned create form and table list instead of cramped side layout.
 

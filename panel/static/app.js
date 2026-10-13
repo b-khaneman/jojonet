@@ -702,8 +702,7 @@
         : 'فاکتور را بپردازید (کیف پول یا کارت)، بعد سفارش را بفرستید تا مالک واریز را تأیید و تانل را بزند.';
     }
     updateOrderInvoice();
-    const depCard = $('#deposit-card');
-    if (depCard) depCard.hidden = owner;
+    paintWalletRoleUI();
     if (state.tab === 'users' && !owner) switchTab('servers');
     if (owner) {
       loadListen();
@@ -3520,12 +3519,54 @@
     return walletState.loading;
   }
 
+  function paintWalletRoleUI() {
+    const owner = isOwner();
+    const depCard = $('#deposit-card');
+    if (depCard) depCard.hidden = owner;
+    const ctaCard = $('#wallet-cta-card');
+    if (ctaCard) ctaCard.hidden = false;
+    const topup = $('#btn-wallet-topup');
+    const topupCta = $('#btn-wallet-topup-cta');
+    const lead = $('#wallet-lead');
+    const ctaText = $('#wallet-cta-text');
+    const ctaTitle = ctaCard && ctaCard.querySelector('.wallet-cta-title');
+    if (owner) {
+      if (lead) lead.textContent = 'موجودی و گردش حساب را ببینید. واریزهای مشتریان را از مدیریت → فروش و واریز تأیید کنید.';
+      if (ctaTitle) ctaTitle.textContent = 'تأیید واریز مشتریان';
+      if (ctaText) ctaText.textContent = 'درخواست‌های واریز مشتریان را در بخش فروش و واریز بررسی و شارژ کنید.';
+      if (topup) topup.textContent = 'واریزهای مشتریان';
+      if (topupCta) topupCta.textContent = 'رفتن به فروش و واریز';
+    } else {
+      if (lead) lead.textContent = 'موجودی را ببینید، واریز کنید و کد پیگیری را بفرستید تا بعد از تأیید مالک شارژ شود.';
+      if (ctaTitle) ctaTitle.textContent = 'افزایش موجودی';
+      if (ctaText) ctaText.textContent = 'کارت یا ولت مقصد را ببینید، واریز کنید، بعد مبلغ و کد پیگیری را ارسال کنید.';
+      if (topup) topup.textContent = 'افزایش موجودی';
+      if (topupCta) topupCta.textContent = 'شروع افزایش موجودی';
+    }
+  }
+
+  function focusWalletTopup() {
+    if (isOwner()) {
+      switchTab('users');
+      switchMgmtPane('commerce');
+      return;
+    }
+    const card = $('#deposit-card');
+    if (card) {
+      card.hidden = false;
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    const amount = $('#df-amount');
+    if (amount) setTimeout(() => amount.focus(), 280);
+  }
+
   function renderWallet() {
     const data = walletState.data;
     const amount = $('#wallet-amount');
     const cur = $('#wallet-currency-label');
     if (amount) amount.textContent = fmtNum((data && data.balance) || (state.me && state.me.wallet_balance) || 0);
     if (cur) cur.textContent = currencyLabel();
+    paintWalletRoleUI();
     const payInfo = $('#deposit-pay-info');
     const pay = (data && data.commerce && data.commerce.payment) || commerce().payment || {};
     if (payInfo) {
@@ -3537,20 +3578,26 @@
         ? bits.join(' — ')
         : 'مالک هنوز کارت یا ولت ثبت نکرده است. بعد از ثبت می‌توانید واریز کنید.';
     }
-    const depCard = $('#deposit-card');
-    if (depCard) depCard.hidden = isOwner();
     fillDepositModes();
     const myDep = $('#my-deposits');
     if (myDep) {
       const rows = (data && data.deposits) || [];
-      if (!rows.length) myDep.replaceChildren(emptyState('درخواست واریزی ندارید.', 'بعد از واریز، کد پیگیری را اینجا بفرستید.'));
-      else myDep.replaceChildren(h('div', { class: 'cards' }, rows.map(depositCard)));
+      if (!rows.length) {
+        myDep.replaceChildren(emptyState(
+          'درخواست واریزی ندارید.',
+          isOwner() ? 'واریزهای مشتریان در مدیریت → فروش و واریز دیده می‌شود.' : 'از دکمه افزایش موجودی واریز را ثبت کنید.',
+        ));
+      } else {
+        myDep.replaceChildren(h('div', { class: 'wallet-table', role: 'table', 'aria-label': 'درخواست‌های واریز' },
+          ...rows.map(depositCard)));
+      }
     }
     const led = $('#wallet-ledger');
     if (led) {
       const rows = (data && data.ledger) || [];
       if (!rows.length) led.replaceChildren(emptyState('گردش حسابی نیست.', 'بعد از واریز یا ساخت تانل اینجا دیده می‌شود.'));
-      else led.replaceChildren(h('div', { class: 'list-rows' }, rows.map(ledgerRow)));
+      else led.replaceChildren(h('div', { class: 'wallet-table', role: 'table', 'aria-label': 'گردش حساب' },
+        ...rows.map(ledgerRow)));
     }
   }
 
@@ -3602,33 +3649,36 @@
       });
       actions.push(okBtn, noBtn);
     }
-    return h('article', { class: `card svc-slip is-${st[0] === 'ok' ? 'ok' : (st[0] === 'err' ? 'bad' : (st[0] === 'warn' ? 'warn' : 'muted'))}` },
-      h('div', { class: 'svc-slip-top' },
-        h('div', null,
-          h('p', { class: 'svc-kicker' }, `واریز #${d.id}`),
-          h('h4', { class: 'svc-title' }, fmtMoney(d.amount)),
-          h('div', { class: 'svc-meta' },
-            h('span', null, 'روش: ', h('b', null, method)),
-            h('span', null, 'کد: ', h('b', { dir: 'ltr' }, d.tracking_code || '—')),
-            isOwner() ? h('span', null, 'مشتری: ', h('b', { dir: 'ltr' }, d.username || '—')) : null,
-            mode ? h('span', null, 'تانل: ', h('b', null, mode)) : null,
-            d.order_id ? h('span', null, 'سفارش: ', h('b', { dir: 'ltr' }, `#${d.order_id}`)) : null)),
-        badge(st[0], st[1])),
-      d.note ? h('p', { class: 'svc-msg' }, d.note) : null,
-      d.owner_note ? h('p', { class: 'svc-msg' }, `یادداشت مالک: ${d.owner_note}`) : null,
-      h('div', { class: 'svc-meta' }, h('span', null, fmtTime(d.created_at))),
-      actions.length ? h('div', { class: 'svc-actions' }, ...actions) : null);
+    const detail = [
+      method,
+      mode ? `تانل: ${mode}` : null,
+      d.order_id ? `سفارش #${d.order_id}` : null,
+      isOwner() && d.username ? `مشتری: ${d.username}` : null,
+      d.note || null,
+      d.owner_note ? `مالک: ${d.owner_note}` : null,
+      fmtTime(d.created_at),
+    ].filter(Boolean).join(' · ');
+    return h('article', { class: 'wallet-tr wallet-dep-tr', role: 'row' },
+      h('div', { class: 'wallet-td wallet-td-amt', role: 'cell' }, fmtMoney(d.amount)),
+      h('div', { class: 'wallet-td', role: 'cell' }, badge(st[0], st[1])),
+      h('div', { class: 'wallet-td', role: 'cell' },
+        h('div', { class: 'wallet-td-track' }, d.tracking_code || '—'),
+        h('p', { class: 'wallet-td-sub' }, detail)),
+      h('div', { class: 'wallet-td', role: 'cell' }, `#${d.id}`),
+      h('div', { class: 'wallet-td wallet-td-actions', role: 'cell' },
+        actions.length ? actions : h('span', { class: 'muted' }, '—')));
   }
 
   function ledgerRow(r) {
     const amt = Number(r.amount) || 0;
     const sign = amt >= 0 ? '+' : '';
-    return h('div', { class: 'ledger-row' },
-      h('div', { class: 'ledger-main' },
+    return h('div', { class: 'wallet-tr wallet-led-tr', role: 'row' },
+      h('div', { class: 'wallet-td wallet-td-note', role: 'cell' },
         h('strong', null, LEDGER_KIND[r.kind] || r.kind),
-        r.note ? h('span', { class: 'muted' }, r.note) : null),
-      h('div', { class: 'ledger-side' },
-        h('bdi', { class: amt >= 0 ? 'ledger-plus' : 'ledger-minus', dir: 'ltr' }, `${sign}${fmtNum(amt)}`),
+        r.note ? h('p', { class: 'wallet-td-sub' }, r.note) : null),
+      h('div', { class: 'wallet-td wallet-td-amt', role: 'cell' },
+        h('bdi', { class: amt >= 0 ? 'ledger-plus' : 'ledger-minus', dir: 'ltr' }, `${sign}${fmtNum(amt)}`)),
+      h('div', { class: 'wallet-td', role: 'cell' },
         h('span', { class: 'muted' }, fmtTime(r.created_at))));
   }
 
@@ -3656,7 +3706,8 @@
       box.replaceChildren(emptyState('درخواست واریز بازی نیست.', 'وقتی مشتری واریز کند اینجا می‌آید.'));
       return;
     }
-    box.replaceChildren(h('div', { class: 'cards' }, rows.map(depositCard)));
+    box.replaceChildren(h('div', { class: 'wallet-table', role: 'table', 'aria-label': 'واریزهای در انتظار' },
+      ...rows.map(depositCard)));
   }
 
   async function onDepositSubmit(e) {
@@ -6093,6 +6144,10 @@
     }
     const rw = $('#btn-refresh-wallet');
     if (rw) rw.addEventListener('click', (e) => act(e.currentTarget, () => loadWallet(), 'در حال بروزرسانی…'));
+    const topupBtn = $('#btn-wallet-topup');
+    if (topupBtn) topupBtn.addEventListener('click', focusWalletTopup);
+    const topupCta = $('#btn-wallet-topup-cta');
+    if (topupCta) topupCta.addEventListener('click', focusWalletTopup);
     $('#btn-logout').addEventListener('click', () => { closeAccountMenu(); logout(); });
     $('#btn-password').addEventListener('click', openPasswordForm);
     const userBtn = $('#btn-username');

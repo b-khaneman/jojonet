@@ -715,56 +715,94 @@
       <div class="section-head">
         <div>
           <h2>کیف پول</h2>
-          <p class="muted">موجودی خود را ببینید، برای شارژ واریز کنید و کد پیگیری را مثل تیکت برای مالک بفرستید. بعد از تأیید، موجودی شارژ می‌شود و با هر ساخت تانل همان مبلغ یک‌بار کم می‌شود.</p>
+          <p class="muted" id="wallet-lead">موجودی را ببینید، واریز کنید و کد پیگیری را بفرستید تا بعد از تأیید مالک شارژ شود.</p>
         </div>
         <div class="section-actions">
+          <button id="btn-wallet-topup" class="btn btn-sm btn-primary" type="button">افزایش موجودی</button>
           <button id="btn-refresh-wallet" class="btn btn-sm" type="button">بروزرسانی</button>
         </div>
       </div>
-      <div class="wallet-balance-card" id="wallet-balance-card">
-        <p class="wallet-kicker">موجودی فعلی</p>
-        <p class="wallet-amount" id="wallet-amount">۰</p>
-        <p class="muted" id="wallet-currency-label"></p>
-      </div>
-      <div class="card create-card" id="deposit-card">
-        <h3 class="card-title">درخواست افزایش موجودی</h3>
-        <p class="muted" id="deposit-pay-info">شماره کارت یا آدرس ولت مالک اینجا نشان داده می‌شود.</p>
-        <form id="deposit-form" class="form" novalidate>
-          <div id="df-error" class="form-error" role="alert" hidden></div>
-          <div class="form-grid">
-            <div class="field">
-              <label for="df-amount">مبلغ واریز</label>
-              <input id="df-amount" type="number" dir="ltr" min="1000" step="1000" required>
+
+      <div class="wallet-page">
+        <div class="wallet-hero">
+          <div class="wallet-balance-card" id="wallet-balance-card">
+            <p class="wallet-kicker">موجودی فعلی</p>
+            <p class="wallet-amount" id="wallet-amount">۰</p>
+            <p class="muted" id="wallet-currency-label"></p>
+          </div>
+          <div class="wallet-cta-card" id="wallet-cta-card">
+            <div>
+              <p class="wallet-kicker">شارژ حساب</p>
+              <h3 class="wallet-cta-title">افزایش موجودی</h3>
+              <p class="wallet-cta-text" id="wallet-cta-text">کارت یا ولت مقصد را ببینید، واریز کنید، بعد مبلغ و کد پیگیری را ارسال کنید.</p>
             </div>
-            <div class="field">
-              <label for="df-method">روش</label>
-              <select id="df-method" required>
-                <option value="card">کارت به کارت</option>
-                <option value="crypto">ولت / رمزارز</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="df-track">کد پیگیری / TX</label>
-              <input id="df-track" type="text" dir="ltr" required maxlength="120" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="df-mode">برای تانل (اختیاری)</label>
-              <select id="df-mode"><option value="">—</option></select>
-            </div>
-            <div class="field field-wide">
-              <label for="df-note">توضیح</label>
-              <input id="df-note" type="text" maxlength="1000" placeholder="مثلاً ساعت واریز">
+            <div class="wallet-cta-actions">
+              <button id="btn-wallet-topup-cta" class="btn btn-primary" type="button">شروع افزایش موجودی</button>
             </div>
           </div>
-          <div class="form-actions">
-            <button id="df-submit" class="btn btn-primary" type="submit">ارسال درخواست واریز</button>
+        </div>
+
+        <div class="card create-card wallet-deposit" id="deposit-card">
+          <header class="wallet-deposit-h">
+            <div>
+              <p class="wallet-kicker">فرم واریز</p>
+              <h3 class="card-title">درخواست افزایش موجودی</h3>
+            </div>
+          </header>
+          <div class="wallet-pay-box">
+            <span class="wallet-pay-box-k">مقصد واریز</span>
+            <p id="deposit-pay-info">شماره کارت یا آدرس ولت مالک اینجا نشان داده می‌شود.</p>
           </div>
-        </form>
+          <form id="deposit-form" class="form" novalidate>
+            <div id="df-error" class="form-error" role="alert" hidden></div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="df-amount">مبلغ واریز</label>
+                <input id="df-amount" type="number" dir="ltr" min="1000" step="1000" required placeholder="مثلاً 500000">
+              </div>
+              <div class="field">
+                <label for="df-method">روش</label>
+                <select id="df-method" required>
+                  <option value="card">کارت به کارت</option>
+                  <option value="crypto">ولت / رمزارز</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="df-track">کد پیگیری / TX</label>
+                <input id="df-track" type="text" dir="ltr" required maxlength="120" autocomplete="off" placeholder="کد پیگیری بانکی یا TX">
+              </div>
+              <div class="field">
+                <label for="df-mode">برای تانل (اختیاری)</label>
+                <select id="df-mode"><option value="">—</option></select>
+              </div>
+              <div class="field field-wide">
+                <label for="df-note">توضیح</label>
+                <input id="df-note" type="text" maxlength="1000" placeholder="مثلاً ساعت واریز">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button id="df-submit" class="btn btn-primary" type="submit">ارسال درخواست واریز</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="wallet-grid">
+          <section class="wallet-panel" aria-labelledby="wallet-dep-title">
+            <header class="wallet-panel-h">
+              <h3 class="sub-head" id="wallet-dep-title">درخواست‌های من</h3>
+              <p class="muted">وضعیت واریزها</p>
+            </header>
+            <div id="my-deposits" class="list-area"></div>
+          </section>
+          <section class="wallet-panel" aria-labelledby="wallet-led-title">
+            <header class="wallet-panel-h">
+              <h3 class="sub-head" id="wallet-led-title">گردش حساب</h3>
+              <p class="muted">واریز و کسرها</p>
+            </header>
+            <div id="wallet-ledger" class="list-area"></div>
+          </section>
+        </div>
       </div>
-      <h3 class="sub-head">درخواست‌های من</h3>
-      <div id="my-deposits" class="list-area"></div>
-      <h3 class="sub-head">گردش حساب</h3>
-      <div id="wallet-ledger" class="list-area"></div>
     </section>
 
     <section id="tab-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-jobs" hidden>
