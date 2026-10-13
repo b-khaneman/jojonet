@@ -654,8 +654,32 @@
           </div>
         </form>
       </div>
-      <h3 class="sub-head">سفارش‌ها</h3>
-      <div id="orders-list" class="svc-board" aria-live="polite"></div>
+      <div class="ord-admin" id="orders-admin-shell">
+        <div class="ord-admin-head">
+          <div>
+            <p class="cust-kicker">فهرست</p>
+            <h3 class="sub-head" id="orders-list-title">سفارش‌ها</h3>
+          </div>
+          <nav id="orders-crumb" class="ord-crumb" hidden aria-label="مسیر سفارش‌ها"></nav>
+        </div>
+        <div id="orders-toolbar" class="ord-toolbar" hidden>
+          <label class="sr-only" for="orders-search">جستجوی سفارش</label>
+          <input id="orders-search" type="search" dir="rtl" placeholder="جستجو نام کاربری، نوع تانل، کد پیگیری…" autocomplete="off" maxlength="80">
+          <label class="sr-only" for="orders-status">دسته وضعیت</label>
+          <select id="orders-status" aria-label="دسته وضعیت">
+            <option value="all">همه وضعیت‌ها</option>
+            <option value="action">نیاز به اقدام</option>
+            <option value="awaiting">در انتظار واریز</option>
+            <option value="pending">در انتظار تأیید</option>
+            <option value="approved">تأیید شده</option>
+            <option value="done">انجام‌شده</option>
+            <option value="closed">رد / لغو</option>
+          </select>
+          <p id="orders-summary" class="ord-summary muted" hidden></p>
+        </div>
+        <div id="orders-customers" class="ord-customers" hidden aria-live="polite"></div>
+        <div id="orders-list" class="svc-board" aria-live="polite"></div>
+      </div>
     </section>
 
     <section id="tab-tickets" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-tickets" hidden>

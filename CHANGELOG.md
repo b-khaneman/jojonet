@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.14 / panel 1.3.67
+- **Owner orders**: search, status categories, customer directory; click a username to open that user's order cards in the same layout.
+
 ## 1.6.13 / panel 1.3.66
 - **Faster boot**: stop SSH live-scan and Reality fan-out on every login; lazy-load xterm; defer secondary APIs; cache live scans and bundle version.
 

@@ -174,6 +174,10 @@
     notified: new Set(),
     usersQuery: '',
     usersFilter: 'all',
+    ordersQuery: '',
+    ordersStatus: 'all',
+    ordersCustomerId: null,
+    ordersCustomerName: null,
   };
   const hxTerms = { left: null, right: null };
 
@@ -716,6 +720,7 @@
     if ((state.tab === 'panels' || state.tab === 'outbounds') && !can('allow_vpn')) switchTab('servers');
     paintHeader();
     applyTermUI();
+    paintOrdersChrome();
     if (typeof window.jojoGuideRefresh === 'function') window.jojoGuideRefresh();
   }
 
@@ -4307,15 +4312,217 @@
     }
   }
 
+  function orderNeedsAction(o) {
+    if (!o || o.status !== 'pending') return false;
+    const pay = o.payment_status || 'none';
+    if (pay === 'awaiting') return true;
+    return o.payment_ready !== false;
+  }
+
+  function orderMatchesStatus(o, status) {
+    const st = status || 'all';
+    if (st === 'all') return true;
+    if (st === 'action') return orderNeedsAction(o);
+    if (st === 'awaiting') return o.status === 'pending' && (o.payment_status || '') === 'awaiting';
+    if (st === 'pending') {
+      return o.status === 'pending' && (o.payment_status || '') !== 'awaiting';
+    }
+    if (st === 'approved') return o.status === 'approved';
+    if (st === 'done') return o.status === 'done';
+    if (st === 'closed') return o.status === 'rejected' || o.status === 'cancelled';
+    return true;
+  }
+
+  function orderMatchesQuery(o, query) {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return true;
+    const hay = [
+      o.id, o.customer_username, o.mode, o.mode_label, o.status,
+      o.payment_status, o.payment_tracking, o.message, o.owner_note,
+      o.iran && o.iran.host, o.kharej && o.kharej.host,
+      o.iran && o.iran.name, o.kharej && o.kharej.name,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  }
+
+  function filteredOrders() {
+    const all = lists.orders.data || [];
+    return all.filter((o) => {
+      if (state.ordersCustomerId != null && Number(o.customer_id) !== Number(state.ordersCustomerId)) return false;
+      if (!orderMatchesStatus(o, state.ordersStatus)) return false;
+      if (!orderMatchesQuery(o, state.ordersQuery)) return false;
+      return true;
+    });
+  }
+
+  function orderCustomerGroups(rows) {
+    const map = new Map();
+    for (const o of rows) {
+      const id = o.customer_id;
+      let g = map.get(id);
+      if (!g) {
+        g = {
+          id,
+          username: o.customer_username || '?',
+          orders: [],
+          pending: 0,
+          awaiting: 0,
+          approved: 0,
+          done: 0,
+          closed: 0,
+          action: 0,
+        };
+        map.set(id, g);
+      }
+      g.orders.push(o);
+      if (o.status === 'pending' && (o.payment_status || '') === 'awaiting') g.awaiting += 1;
+      else if (o.status === 'pending') g.pending += 1;
+      else if (o.status === 'approved') g.approved += 1;
+      else if (o.status === 'done') g.done += 1;
+      else if (o.status === 'rejected' || o.status === 'cancelled') g.closed += 1;
+      if (orderNeedsAction(o)) g.action += 1;
+    }
+    for (const g of map.values()) {
+      g.orders.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    }
+    return [...map.values()].sort((a, b) => {
+      if (b.action !== a.action) return b.action - a.action;
+      const at = a.orders[0] && a.orders[0].created_at ? String(a.orders[0].created_at) : '';
+      const bt = b.orders[0] && b.orders[0].created_at ? String(b.orders[0].created_at) : '';
+      return bt.localeCompare(at);
+    });
+  }
+
+  function paintOrdersChrome() {
+    const toolbar = $('#orders-toolbar');
+    const customers = $('#orders-customers');
+    const crumb = $('#orders-crumb');
+    const title = $('#orders-list-title');
+    const summary = $('#orders-summary');
+    const owner = isOwner();
+    if (toolbar) toolbar.hidden = !owner;
+    if (!owner) {
+      if (customers) { customers.hidden = true; customers.replaceChildren(); }
+      if (crumb) { crumb.hidden = true; crumb.replaceChildren(); }
+      if (title) title.textContent = 'سفارش‌ها';
+      if (summary) summary.hidden = true;
+      return;
+    }
+    const viewing = state.ordersCustomerId != null;
+    if (customers) customers.hidden = viewing;
+    if (crumb) {
+      crumb.hidden = !viewing;
+      if (viewing) {
+        const back = h('button', { type: 'button', class: 'ord-crumb-link' }, 'همه مشتریان');
+        back.addEventListener('click', () => {
+          state.ordersCustomerId = null;
+          state.ordersCustomerName = null;
+          renderOrders();
+        });
+        crumb.replaceChildren(
+          back,
+          h('span', { class: 'ord-crumb-sep', 'aria-hidden': 'true' }, '/'),
+          h('span', { class: 'ord-crumb-now', dir: 'ltr' }, state.ordersCustomerName || 'مشتری'),
+        );
+      } else crumb.replaceChildren();
+    }
+    if (title) {
+      title.textContent = viewing
+        ? `سفارش‌های «${state.ordersCustomerName || 'مشتری'}»`
+        : 'مشتریان و سفارش‌ها';
+    }
+  }
+
+  function openOrdersCustomer(g) {
+    state.ordersCustomerId = g.id;
+    state.ordersCustomerName = g.username;
+    renderOrders();
+    const list = $('#orders-list');
+    if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function orderCustomerCard(g) {
+    const latest = g.orders[0];
+    const modes = [...new Set(g.orders.map((o) => o.mode_label || o.mode).filter(Boolean))].slice(0, 3);
+    const btn = h('button', { type: 'button', class: 'ord-cust-card' },
+      h('div', { class: 'ord-cust-main' },
+        h('span', { class: 'ord-cust-avatar', 'aria-hidden': 'true' }, (g.username || '?').slice(0, 1).toUpperCase()),
+        h('div', { class: 'ord-cust-text' },
+          h('div', { class: 'ord-cust-line' },
+            h('strong', { class: 'ord-cust-name', dir: 'ltr' }, g.username),
+            g.action ? badge('warn', `${fmtNum(g.action)} اقدام`) : null),
+          h('p', { class: 'ord-cust-meta' },
+            `${fmtNum(g.orders.length)} سفارش`,
+            latest ? ` · آخرین ${fmtTime(latest.created_at)}` : '',
+            modes.length ? ` · ${modes.join('، ')}` : ''))),
+      h('div', { class: 'ord-cust-stats', 'aria-label': 'تفکیک وضعیت' },
+        g.awaiting ? h('span', { class: 'ord-stat is-await' }, h('b', null, fmtNum(g.awaiting)), ' واریز') : null,
+        g.pending ? h('span', { class: 'ord-stat is-pend' }, h('b', null, fmtNum(g.pending)), ' تأیید') : null,
+        g.approved ? h('span', { class: 'ord-stat is-ok' }, h('b', null, fmtNum(g.approved)), ' آماده') : null,
+        g.done ? h('span', { class: 'ord-stat is-done' }, h('b', null, fmtNum(g.done)), ' انجام') : null,
+        g.closed ? h('span', { class: 'ord-stat is-off' }, h('b', null, fmtNum(g.closed)), ' بسته') : null),
+      h('span', { class: 'ord-cust-go', 'aria-hidden': 'true' }, 'مشاهده'));
+    btn.addEventListener('click', () => openOrdersCustomer(g));
+    return btn;
+  }
+
   function renderOrders() {
     const box = $(lists.orders.el);
     if (!box) return;
-    const data = lists.orders.data || [];
-    if (!data.length) {
-      box.replaceChildren(h('p', { class: 'ov-empty' }, isOwner() ? 'هنوز سفارشی ثبت نشده است.' : 'هنوز سفارشی نفرستاده‌اید.'));
+    paintOrdersChrome();
+    const all = lists.orders.data || [];
+    const summary = $('#orders-summary');
+    const customersBox = $('#orders-customers');
+
+    if (!isOwner()) {
+      if (!all.length) {
+        box.replaceChildren(h('p', { class: 'ov-empty' }, 'هنوز سفارشی نفرستاده‌اید.'));
+        return;
+      }
+      box.replaceChildren(...all.map(orderCard));
       return;
     }
-    box.replaceChildren(...data.map(orderCard));
+
+    const rows = filteredOrders();
+    if (summary) {
+      const actionN = (lists.orders.data || []).filter(orderNeedsAction).length;
+      summary.textContent = state.ordersCustomerId != null
+        ? `${fmtNum(rows.length)} سفارش این مشتری`
+        : `${fmtNum(orderCustomerGroups(rows).length)} مشتری · ${fmtNum(rows.length)} سفارش${actionN ? ` · ${fmtNum(actionN)} نیازمند اقدام` : ''}`;
+      summary.hidden = !all.length;
+    }
+
+    if (!all.length) {
+      if (customersBox) { customersBox.hidden = true; customersBox.replaceChildren(); }
+      box.replaceChildren(h('p', { class: 'ov-empty' }, 'هنوز سفارشی ثبت نشده است.'));
+      return;
+    }
+
+    if (state.ordersCustomerId != null) {
+      if (customersBox) { customersBox.hidden = true; customersBox.replaceChildren(); }
+      if (!rows.length) {
+        box.replaceChildren(emptyState('سفارشی با این فیلتر نیست.', 'جستجو یا دسته وضعیت را عوض کنید.'));
+        return;
+      }
+      box.replaceChildren(...rows.map(orderCard));
+      return;
+    }
+
+    const groups = orderCustomerGroups(rows);
+    box.replaceChildren();
+    if (!groups.length) {
+      if (customersBox) {
+        customersBox.hidden = false;
+        customersBox.replaceChildren(emptyState('نتیجه‌ای پیدا نشد.', 'جستجو یا دسته را عوض کنید.'));
+      }
+      return;
+    }
+    if (customersBox) {
+      customersBox.hidden = false;
+      customersBox.replaceChildren(
+        h('div', { class: 'ord-cust-board' }, ...groups.map(orderCustomerCard)),
+      );
+    }
   }
 
   function orderTone(status) {
@@ -4525,8 +4732,26 @@
       goBtn.addEventListener('click', () => openFulfillModal(o));
       actions.push(goBtn);
     }
+    const userChip = (() => {
+      const name = o.customer_username || '—';
+      if (!isOwner() || o.customer_id == null) {
+        return h('span', { class: 'ord-chip' }, h('span', { class: 'ord-chip-k' }, 'مشتری'), h('b', null, name));
+      }
+      const link = h('button', {
+        type: 'button',
+        class: 'ord-user-link',
+        dir: 'ltr',
+        title: `همه سفارش‌های ${name}`,
+      }, name);
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openOrdersCustomer({ id: o.customer_id, username: name, orders: [] });
+      });
+      return h('span', { class: 'ord-chip is-user' }, h('span', { class: 'ord-chip-k' }, 'مشتری'), link);
+    })();
     const chips = [
-      h('span', { class: 'ord-chip' }, h('span', { class: 'ord-chip-k' }, 'مشتری'), h('b', null, o.customer_username || '—')),
+      userChip,
       h('span', { class: 'ord-chip' }, h('span', { class: 'ord-chip-k' }, 'ثبت'), h('b', null, fmtTime(o.created_at))),
     ];
     if (o.tunnel_id) {
@@ -6616,6 +6841,20 @@
       usersFilter.addEventListener('change', () => {
         state.usersFilter = usersFilter.value || 'all';
         renderUsers();
+      });
+    }
+    const ordersSearch = $('#orders-search');
+    if (ordersSearch) {
+      ordersSearch.addEventListener('input', () => {
+        state.ordersQuery = ordersSearch.value || '';
+        renderOrders();
+      });
+    }
+    const ordersStatus = $('#orders-status');
+    if (ordersStatus) {
+      ordersStatus.addEventListener('change', () => {
+        state.ordersStatus = ordersStatus.value || 'all';
+        renderOrders();
       });
     }
     const orderForm = $('#order-form');
