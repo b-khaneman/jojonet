@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.5 / panel 1.3.55
+- **Prereqs**: if core tools are already on the VPS, skip apt entirely (avoids 15-minute hangs when Iran DNS/mirrors are down) and use short Acquire timeouts otherwise.
+
 ## 1.6.5 / panel 1.3.54
 - **Paqet / VXLAN**: allow alongside other modes to the same peer (only a same-mode duplicate restarts); GRE no longer blocks Paqet/VXLAN create.
 - **Spoof readiness**: clear per-interface `rp_filter` during the probe so local kernel drops are not reported as datacenter blocks.

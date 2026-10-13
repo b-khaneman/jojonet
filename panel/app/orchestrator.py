@@ -54,10 +54,19 @@ PREREQ_SCRIPT = r"""
 set -u
 export DEBIAN_FRONTEND=noninteractive
 command -v systemctl >/dev/null 2>&1 || { echo "systemd is required"; exit 4; }
+# If core tools are already present, skip apt entirely (Iran VPS often has broken mirror DNS).
+missing0=""
+for c in ip nft ping openssl tar curl; do command -v "$c" >/dev/null 2>&1 || missing0="$missing0 $c"; done
+missing0=${missing0# }
+if [ -z "$missing0" ]; then
+  echo "prerequisites OK (already present; skipping apt)"
+  exit 0
+fi
 apt_ok=1
+APT_FAST="-o DPkg::Lock::Timeout=60 -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
 if command -v apt-get >/dev/null 2>&1; then
-    apt-get -o DPkg::Lock::Timeout=180 update -qq || echo "apt update had errors (continuing)"
-    apt-get -o DPkg::Lock::Timeout=180 install -y -qq --no-install-recommends \
+    apt-get $APT_FAST update -qq || echo "apt update had errors (continuing)"
+    apt-get $APT_FAST install -y -qq --no-install-recommends \
         curl ca-certificates iproute2 nftables iptables openssl procps iputils-ping util-linux tar gzip unzip coreutils kmod \
         || { echo "apt install failed (will accept if core tools already present)"; apt_ok=0; }
 elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
@@ -521,7 +530,7 @@ class Orchestrator:
         return parse_kv(res.stdout)
 
     async def install_prereqs(self, job: Job, sess: RemoteSession, name: str) -> None:
-        res = await sess.run_root(PREREQ_SCRIPT, timeout=900, on_line=lambda l: job.log(f"[{name}] {l}"))
+        res = await sess.run_root(PREREQ_SCRIPT, timeout=240, on_line=lambda l: job.log(f"[{name}] {l}"))
         if not res.ok:
             raise StepFailed(f"نصب پیش‌نیازها روی {name} ناموفق بود (کد {res.rc})")
 
