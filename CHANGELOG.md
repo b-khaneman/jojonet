@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.9 / panel 1.3.62
+- **Terminal scroll**: fix xterm scrollback CSS, mouse wheel, Shift+PageUp/Down and Shift+Arrows.
+
 ## 1.6.8 / panel 1.3.61
 - **Terminal**: Ctrl+V paste, Ctrl+C copy-when-selected, keep Esc in-shell, focus for arrow/history keys.
 

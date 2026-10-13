@@ -5594,6 +5594,8 @@
       macOptionIsMeta: true,
       rightClickSelectsWord: false,
       allowProposedApi: true,
+      scrollSensitivity: 1,
+      fastScrollSensitivity: 5,
       theme: {
         background: '#020705',
         foreground: '#3dff9a',
@@ -5611,7 +5613,7 @@
         brightGreen: '#7dffb4',
         brightCyan: '#b4fff7',
       },
-      scrollback: 4000,
+      scrollback: 10000,
     });
     const fit = FitCls ? new FitCls() : null;
     if (fit) term.loadAddon(fit);
@@ -5631,6 +5633,12 @@
       },
       fit() {
         try { if (fit) fit.fit(); } catch (_) {}
+      },
+      scrollLines(n) {
+        try { term.scrollLines(n); } catch (_) {}
+      },
+      scrollPages(n) {
+        try { term.scrollPages(n); } catch (_) {}
       },
       async pasteFromClipboard() {
         let text = '';
@@ -5733,7 +5741,7 @@
       if (api.ws && api.ws.readyState === 1) api.ws.send(JSON.stringify({ t: 'i', d: data }));
     });
 
-    // Windows-style shortcuts: Ctrl+V paste, Ctrl+C copy-when-selected, arrows pass through.
+    // Windows-style shortcuts: Ctrl+V paste, Ctrl+C copy-when-selected, scrollback keys.
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       const key = ev.key;
@@ -5761,12 +5769,40 @@
         api.copySelection();
         return false;
       }
-      // ArrowUp/Down/Left/Right, Home/End, PageUp/Down → let xterm send CSI to the shell.
+      // Scrollback navigation (do not send to remote shell).
+      if (ev.shiftKey && (key === 'PageUp' || key === 'PageDown')) {
+        ev.preventDefault();
+        api.scrollPages(key === 'PageUp' ? -1 : 1);
+        return false;
+      }
+      if (ev.shiftKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
+        ev.preventDefault();
+        api.scrollLines(key === 'ArrowUp' ? -3 : 3);
+        return false;
+      }
+      if (ctrl && key === 'Home') {
+        ev.preventDefault();
+        try { term.scrollToTop(); } catch (_) {}
+        return false;
+      }
+      if (ctrl && key === 'End') {
+        ev.preventDefault();
+        try { term.scrollToBottom(); } catch (_) {}
+        return false;
+      }
+      // ArrowUp/Down/Left/Right, Home/End, PageUp/Down → CSI to the shell.
       return true;
     });
 
     screen.addEventListener('mousedown', () => api.focus());
     screen.addEventListener('click', () => api.focus());
+    screen.addEventListener('wheel', (ev) => {
+      // Keep page from scrolling; drive xterm scrollback directly.
+      ev.preventDefault();
+      ev.stopPropagation();
+      const line = Math.max(1, Math.round(Math.abs(ev.deltaY) / 40));
+      api.scrollLines(ev.deltaY < 0 ? -line : line);
+    }, { passive: false });
     screen.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       if (term.hasSelection()) api.copySelection();

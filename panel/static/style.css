@@ -3853,7 +3853,7 @@ html[data-theme="day"] .vpn-slip {
   pointer-events: none;
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 0;
   background:
     repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .18) 2px 3px);
   opacity: .28;
@@ -3865,7 +3865,7 @@ html[data-theme="day"] .vpn-slip {
   pointer-events: none;
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 0;
   background: linear-gradient(180deg, rgba(61, 255, 154, .06), transparent 18%, transparent 82%, rgba(0, 0, 0, .35));
 }
 
@@ -4014,16 +4014,44 @@ html[data-theme="day"] .vpn-slip {
   min-height: 0;
   padding: .35rem;
   cursor: text;
-}
-
-.hx-screen .xterm,
-.hx-screen .xterm-viewport,
-.hx-screen .xterm-screen {
-  height: 100%;
+  overflow: hidden;
 }
 
 .hx-screen .xterm {
+  height: 100%;
   padding: 0;
+}
+
+/* Viewport scrolls; do NOT force .xterm-screen to 100% or scrollback breaks. */
+.hx-screen .xterm-viewport {
+  height: 100% !important;
+  overflow-y: scroll !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #3dff9a #07140e;
+}
+
+.hx-screen .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.hx-screen .xterm-viewport::-webkit-scrollbar-track {
+  background: #07140e;
+}
+
+.hx-screen .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #245c3c;
+  border-radius: 8px;
+  border: 2px solid #07140e;
+}
+
+.hx-screen .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #3dff9a;
+}
+
+.hx-screen .xterm-screen {
+  height: auto !important;
 }
 
 .hx-screen .xterm:focus-within {
