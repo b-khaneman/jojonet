@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.22 / panel 1.3.75
+- **Customers panel**: larger equal-width header and table, clearer column rules, roomier cells, and a fuller search toolbar aligned to the grid.
+
 ## 1.6.21 / panel 1.3.74
 - **Debug pass**: normalize `jojonet` to LF (fixes broken bundle tar); pending customers no longer treat unlimited quotas as locked; orders directory keeps full customer totals under filters; customer action menus no longer clip; RTL accent borders use logical edges.
 
