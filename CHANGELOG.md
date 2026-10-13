@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.3 / panel 1.3.52
+- **Hysteria2**: pin amd64 SHA-256 for `app/v2.13.0` so non-interactive panel deploys accept the download.
+
+## 1.6.2 / panel 1.3.51
+- **Paqet**: recognize upstream binary name `paqet_linux_amd64` / `paqet_linux_arm64` inside release archives.
+- **Hysteria2**: default release tag `app/v2.13.0` (old `v2.6.1` 404s).
+
 ## 1.6.1 / panel 1.3.50
 - Soft-fail apt prereq install when mirrors/DNS are down if core tools (ip/nft/ping/openssl/tar/curl) are already present; unzip remains best-effort so jojonet upgrades are not blocked.
 ## 1.6.1 / panel 1.3.49

@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.2"
+readonly JOJONET_VERSION="1.6.3"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -101,6 +101,7 @@ DEFAULT_HY2_HOP_INTERVAL="30s"
 HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
 HY2_BIN="/usr/local/bin/hysteria"
 HY2_VERSION="${JOJONET_HY2_VERSION:-app/v2.13.0}"
+HY2_SHA256_AMD64="${JOJONET_HY2_SHA256_AMD64:-907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691}"
 DEFAULT_RATHOLE_CTRL_PORT=2333
 DEFAULT_RATHOLE_FWD="443"
 RATHOLE_CONFIG_DIR="$JOJONET_ROOT/rathole"
@@ -5954,6 +5955,7 @@ HY2_CONFIG_DIR="$JOJONET_ROOT/hysteria"
 HY2_BIN="/usr/local/bin/hysteria"
 HY2_REPO="apernet/hysteria"
 HY2_VERSION="${JOJONET_HY2_VERSION:-app/v2.13.0}"
+HY2_SHA256_AMD64="${JOJONET_HY2_SHA256_AMD64:-907ba8c9693edb104b20582681fb7dc15639d5b64a9cbb616a7b539190a86691}"
 DEFAULT_HY2_PORT=443
 DEFAULT_HY2_SNI="www.cloudflare.com"
 DEFAULT_HY2_HOP_RANGE="20000-50000"
@@ -6067,13 +6069,18 @@ install_hysteria2_binary() {
     if [[ -x "$HY2_BIN" ]]; then
         return 0
     fi
-    local arch tmpdir url fname
+    local arch tmpdir url fname expected=""
     arch=$(detect_cpu_arch_hy2) || { log_error "Unsupported CPU for Hysteria2"; return 1; }
     fname="hysteria-linux-${arch}"
     url="https://github.com/${HY2_REPO}/releases/download/${HY2_VERSION}/${fname}"
+    if [[ "$arch" == "amd64" ]]; then
+        expected="$HY2_SHA256_AMD64"
+    else
+        expected=$(lookup_checksum "$fname" || true)
+    fi
     tmpdir=$(mktemp -d /tmp/jojonet-hy2.XXXXXX) || return 1
     log_note "Downloading Hysteria2 ${HY2_VERSION} ($fname)..."
-    if ! download_verified "$url" "$tmpdir/$fname" "$fname"; then
+    if ! download_verified "$url" "$tmpdir/$fname" "$fname" "$expected"; then
         rm -rf "$tmpdir"
         return 1
     fi
