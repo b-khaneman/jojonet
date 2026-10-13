@@ -348,12 +348,20 @@ def script_role(geo_role: str, mode: str, users: str) -> str:
     return "iran" if geo_role == "kharej" else "kharej"
 
 
+_BUNDLE_VERSION_CACHE: dict[str, str | None] = {}
+
+
 def bundle_version(bundle_dir: Path) -> str | None:
+    key = str(Path(bundle_dir).resolve())
+    if key in _BUNDLE_VERSION_CACHE:
+        return _BUNDLE_VERSION_CACHE[key]
     try:
-        m = VERSION_RE.search((bundle_dir / "jojonet").read_text(encoding="utf-8", errors="replace"))
+        m = VERSION_RE.search((Path(bundle_dir) / "jojonet").read_text(encoding="utf-8", errors="replace"))
+        value = m.group(1) if m else None
     except OSError:
-        return None
-    return m.group(1) if m else None
+        value = None
+    _BUNDLE_VERSION_CACHE[key] = value
+    return value
 
 
 def build_bundle_tar(bundle_dir: Path) -> bytes:
@@ -1475,7 +1483,8 @@ class Orchestrator:
             async with await self.open(job, row) as sess:
                 if job is not None:
                     await job.log(f"[{row['name']}] اسکن تانل‌های زنده")
-                res = await sess.run_root(LIST_TUNNELS_JSON, timeout=60)
+                # Live scan should fail fast on dead hosts; not a full deploy.
+                res = await sess.run_root(LIST_TUNNELS_JSON, timeout=12)
                 if not res.ok:
                     out["error"] = f"خواندن لیست ناموفق بود (کد {res.rc})"
                     return out

@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import socket
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
@@ -2061,13 +2062,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         assert_capability(sess, "allow_vpn", "اوتباند برای این حساب غیرفعال است")
         return reality_bundle(get_tunnel(tunnel_id, sess))
 
+    _live_scan_cache: dict[str, tuple[float, list[dict[str, Any]], str]] = {}
+    _LIVE_SCAN_TTL = 45.0
+
     @app.get("/api/tunnels/live")
-    async def list_live_tunnels(sess: dict = Depends(require_auth)) -> dict[str, Any]:
+    async def list_live_tunnels(
+        request: Request,
+        sess: dict = Depends(require_auth),
+    ) -> dict[str, Any]:
         extra, params = owner_clause(sess)
+        force = str(request.query_params.get("force") or "").strip().lower() in ("1", "true", "yes")
+        cache_key = f"{sess.get('admin_id')}:{'o' if is_owner(sess) else 'u'}"
+        now = time.monotonic()
+        hit = _live_scan_cache.get(cache_key)
+        if not force and hit and (now - hit[0]) < _LIVE_SCAN_TTL:
+            return {"servers": hit[1], "scanned_at": hit[2], "cached": True}
         servers = db.all(f"SELECT * FROM servers WHERE 1=1{extra} ORDER BY role, name", params)
         tunnels = db.all(f"SELECT * FROM tunnels WHERE 1=1{extra}", params)
         scanned = await orch.scan_live_tunnels(servers, tunnels)
-        return {"servers": scanned, "scanned_at": utcnow()}
+        scanned_at = utcnow()
+        _live_scan_cache[cache_key] = (now, scanned, scanned_at)
+        return {"servers": scanned, "scanned_at": scanned_at, "cached": False}
 
     def mark_failed(tunnel_id: int, *, refund_if_fail: bool = False):
         def _done(ok: bool) -> None:

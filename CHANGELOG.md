@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.13 / panel 1.3.66
+- **Faster boot**: stop SSH live-scan and Reality fan-out on every login; lazy-load xterm; defer secondary APIs; cache live scans and bundle version.
+
 ## 1.6.12 / panel 1.3.65
 - **Registration lockdown**: public signup gets zero tunnel/relay/VPN/terminal quotas until the owner grants access.
 - **Customer admin**: full edit modal (quotas, caps, email, note), clickable permission chips, search/filter, custom password reset, clearer pending badges.

@@ -626,8 +626,13 @@
   /* ---------- list loaders ---------- */
 
   const lists = {
-    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); refreshMe(); } },
-    tunnels: { path: '/api/tunnels', el: '#tunnels-list', render: renderTunnels, after: renderOutbounds },
+    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); } },
+    tunnels: {
+      path: '/api/tunnels',
+      el: '#tunnels-list',
+      render: renderTunnels,
+      after: () => { if (state.tab === 'outbounds') renderOutbounds(); },
+    },
     relays: { path: '/api/relays', el: '#relays-list', render: renderRelays, after: updateRelayForm },
     orders: { path: '/api/orders', el: '#orders-list', render: renderOrders },
     tickets: { path: '/api/tickets', el: '#tickets-list', render: renderTickets },
@@ -706,11 +711,7 @@
     updateOrderInvoice();
     paintWalletRoleUI();
     if (state.tab === 'users' && !owner) switchTab('servers');
-    if (owner) {
-      loadListen();
-      loadSsl();
-      if (state.tab === 'users') switchMgmtPane(state.mgmtPane || 'customers', true);
-    }
+    if (owner && state.tab === 'users') switchMgmtPane(state.mgmtPane || 'customers', true);
     if (state.tab === 'relays' && !can('allow_relay')) switchTab('servers');
     if ((state.tab === 'panels' || state.tab === 'outbounds') && !can('allow_vpn')) switchTab('servers');
     paintHeader();
@@ -977,8 +978,8 @@
           h('span', { class: 'ov-clock-u' }, clock.unit),
           h('span', { class: 'ov-clock-s' }, clock.sub))),
       h('div', { class: 'ov-tiles' },
-        ovTile('سرورها', servers.length, locked ? 'سقف سرور بسته است' : (down ? `${fmtNum(down)} اتصال خطا` : (unchecked ? `${fmtNum(unchecked)} بررسی نشده` : (servers.length ? 'همه در دسترس' : 'هنوز سروری نیست')), locked ? 'warn' : serverTone),
-        ovTile('تانل‌ها', tunnels.length, locked ? 'سقف تانل بسته است' : (tbad ? `${fmtNum(tbad)} ناموفق` : (tbusy ? `${fmtNum(tbusy)} در حال انجام` : (tunnels.length ? `${fmtNum(tok)} سالم` : 'هنوز تانلی نیست')), locked ? 'warn' : tunnelTone),
+        ovTile('سرورها', servers.length, locked ? 'سقف سرور بسته است' : (down ? `${fmtNum(down)} اتصال خطا` : (unchecked ? `${fmtNum(unchecked)} بررسی نشده` : (servers.length ? 'همه در دسترس' : 'هنوز سروری نیست'))), locked ? 'warn' : serverTone),
+        ovTile('تانل‌ها', tunnels.length, locked ? 'سقف تانل بسته است' : (tbad ? `${fmtNum(tbad)} ناموفق` : (tbusy ? `${fmtNum(tbusy)} در حال انجام` : (tunnels.length ? `${fmtNum(tok)} سالم` : 'هنوز تانلی نیست'))), locked ? 'warn' : tunnelTone),
         ovTile('رله‌ها', relays.length, !can('allow_relay') && !isOwner() ? 'دسترسی رله خاموش است' : (rbad ? `${fmtNum(rbad)} ناموفق` : (relays.length ? `${fmtNum(rok)} سالم` : 'هنوز رله‌ای نیست')), relayTone),
         ovTile('کیف پول', me.wallet_balance || 0, commerce().sell_tunnels_enabled ? currencyLabel() : (isOwner() ? 'مالک بدون کسر' : 'فروش خاموش'), 'ok'),
         ovTile('عملیات', running, running ? 'در حال اجرا' : 'عملیاتی در جریان نیست', running ? 'warn' : 'ok')),
@@ -2074,7 +2075,7 @@
     liveState.error = null;
     if (!liveState.data) box.replaceChildren(loadingState());
     try {
-      const data = await api('GET', '/api/tunnels/live');
+      const data = await api('GET', force ? '/api/tunnels/live?force=1' : '/api/tunnels/live');
       liveState.data = data.servers || [];
       liveState.scannedAt = data.scanned_at || null;
       renderLiveTunnels();
@@ -5571,25 +5572,27 @@
     setVersions(state.me.panel_version, state.me.jojonet_version);
     resetLists();
     updateTunnelForm();
-    await mountGuide();
+    // Guide / live SSH scan / secondary tabs must not block first paint.
+    void mountGuide();
     const hashTab = (location.hash || '').slice(1);
     const startTab = TABS.includes(hashTab) && !$(`#tabbtn-${hashTab}`).hidden ? hashTab : 'overview';
     switchTab(startTab);
     loadInfo();
     load('servers');
     load('tunnels');
-    loadLiveTunnels();
     if (can('allow_relay')) load('relays');
     load('jobs');
-    load('orders');
-    load('tickets');
-    loadWallet(true);
-    if (isOwner()) {
-      load('users');
-      loadCommerceForm();
-    }
     paintWalletChip();
     startPolling();
+    const deferSecondary = () => {
+      if (!state.loggedIn) return;
+      if (startTab === 'orders' || startTab === 'tickets' || startTab === 'wallet' || startTab === 'users') return;
+      load('orders');
+      load('tickets');
+      loadWallet(true);
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(deferSecondary, { timeout: 2500 });
+    else setTimeout(deferSecondary, 900);
   }
 
   async function refreshMe() {
@@ -5655,7 +5658,11 @@
       load('tunnels', true);
       if (!liveState.data && !liveState.loading) loadLiveTunnels();
     }
-    if (state.loggedIn && name === 'outbounds') load('tunnels', true);
+    if (state.loggedIn && name === 'outbounds') {
+      load('tunnels', true);
+      renderOutbounds();
+    }
+    if (state.loggedIn && name === 'guide') void mountGuide();
     if (state.loggedIn && name === 'users' && isOwner()) {
       load('users', true);
       loadSsl();
@@ -5743,6 +5750,55 @@
     const mod = window.FitAddon;
     if (!mod) return null;
     return mod.FitAddon || mod;
+  }
+
+  function staticAssetVer() {
+    const s = document.querySelector('script[src*="app.js"]');
+    const m = s && s.src && s.src.match(/[?&]v=([^&]+)/);
+    return (m && m[1]) || String((state.me && state.me.panel_version) || '1');
+  }
+
+  let xtermLibPromise = null;
+  function ensureXtermLib() {
+    if (typeof Terminal === 'function') return Promise.resolve();
+    if (xtermLibPromise) return xtermLibPromise;
+    const ver = encodeURIComponent(staticAssetVer());
+    const cssHref = withBase(`/static/vendor/xterm.css?v=${ver}`);
+    const jsSrc = withBase(`/static/vendor/xterm.min.js?v=${ver}`);
+    const fitSrc = withBase(`/static/vendor/xterm-addon-fit.js?v=${ver}`);
+    xtermLibPromise = (async () => {
+      if (!document.querySelector(`link[href="${cssHref}"]`)) {
+        await new Promise((resolve, reject) => {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = cssHref;
+          link.onload = () => resolve();
+          link.onerror = () => reject(new Error('بارگذاری استایل ترمینال ناموفق بود'));
+          document.head.appendChild(link);
+        });
+      }
+      const loadJs = (src) => new Promise((resolve, reject) => {
+        if ([...document.scripts].some((s) => s.src === src)) return resolve();
+        const el = document.createElement('script');
+        el.src = src;
+        el.onload = () => resolve();
+        el.onerror = () => reject(new Error('بارگذاری اسکریپت ترمینال ناموفق بود'));
+        document.head.appendChild(el);
+      });
+      await loadJs(jsSrc);
+      await loadJs(fitSrc);
+      if (typeof Terminal !== 'function') throw new Error('ترمینال آماده نشد');
+    })().catch((err) => {
+      xtermLibPromise = null;
+      throw err;
+    });
+    return xtermLibPromise;
+  }
+
+  async function ensureHxTerm(side) {
+    await ensureXtermLib();
+    if (!hxTerms[side]) hxTerms[side] = createHxTerm(side);
+    return hxTerms[side];
   }
 
   function hxTermFocused() {
@@ -6013,9 +6069,17 @@
     document.documentElement.style.setProperty('--hx-top', `${Math.max(y, 48)}px`);
   }
 
-  function setHxOpen(side, open) {
+  async function setHxOpen(side, open) {
     const dock = $(`#hx-${side}`);
     if (!dock) return;
+    if (open) {
+      try {
+        await ensureHxTerm(side);
+      } catch (err) {
+        toast(err.message || 'ترمینال بارگذاری نشد.', 'error');
+        return;
+      }
+    }
     dock.classList.toggle('is-open', open);
     const fab = $(`#hx-toggle-${side}`);
     if (fab) fab.setAttribute('aria-pressed', open ? 'true' : 'false');
@@ -6151,8 +6215,7 @@
   }
 
   function bindHxTerms() {
-    hxTerms.left = createHxTerm('left');
-    hxTerms.right = createHxTerm('right');
+    // xterm (~280KB) loads only when a terminal dock is opened.
     bindHxMove('left');
     bindHxMove('right');
     for (const side of ['left', 'right']) {
@@ -6161,18 +6224,18 @@
       if (toggle) {
         toggle.addEventListener('click', () => {
           const dock = $(`#hx-${side}`);
-          setHxOpen(side, !(dock && dock.classList.contains('is-open')));
+          void setHxOpen(side, !(dock && dock.classList.contains('is-open')));
         });
       }
-      if (close) close.addEventListener('click', () => setHxOpen(side, false));
+      if (close) close.addEventListener('click', () => { void setHxOpen(side, false); });
     }
     window.addEventListener('resize', syncHxOffset);
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape' || modalStack.length) return;
       // Keep Esc for vim/shell when the terminal has focus.
       if (hxTermFocused()) return;
-      setHxOpen('left', false);
-      setHxOpen('right', false);
+      void setHxOpen('left', false);
+      void setHxOpen('right', false);
     });
     syncHxOffset();
   }

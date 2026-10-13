@@ -141,7 +141,8 @@ def test_term_ws_unknown_server(client, auth):
 def test_index_has_side_terminals(client):
     html = client.get("/").text
     assert "id=\"hx-left\"" in html and "id=\"hx-right\"" in html
-    assert "vendor/xterm.min.js" in html
+    # xterm is lazy-loaded from app.js on first terminal open (keeps first paint light).
+    assert "hx-toggle-left" in html and "app.js" in html
     assert "0.67" not in html
 
 
