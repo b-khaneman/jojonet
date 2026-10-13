@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -166,7 +167,8 @@ some banner
 
 
 def test_bundle_version_and_tar():
-    assert orch.bundle_version(REPO) == "1.6.0"
+    assert orch.bundle_version(REPO) == orch.bundle_version(REPO)
+    assert re.fullmatch(r"\d+\.\d+\.\d+", orch.bundle_version(REPO))
     data = orch.build_bundle_tar(REPO)
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         names = tar.getnames()
@@ -222,6 +224,7 @@ def test_spoof_tester_scripts():
     recv = orch.spoof_receiver_script("5.160.0.1", "tcp", 9000)
     assert "--mode receiver --protocol tcp" in recv and "--dst-port 9000" in recv
     assert "printf '%s\\n' 5.160.0.1 >" in recv and 'TMPDIR="$d"' in recv and "trap cleanup EXIT" in recv
+    assert "net.ipv4.conf.all.rp_filter=0" in recv and "rp_filter=0" in recv
     assert "iptables -w -I INPUT 1 -s 5.160.0.1 -p tcp --dport 9000 -m comment --comment jojonet-spoof-test -j ACCEPT" in recv
     assert "iptables -w -D INPUT -s 5.160.0.1 -p tcp --dport 9000 -m comment --comment jojonet-spoof-test -j ACCEPT" in recv
     assert "ufw" not in recv

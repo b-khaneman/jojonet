@@ -20,6 +20,7 @@ import pytest
 from app import orchestrator as orch_mod
 from app.sshclient import CmdResult
 from app.validators import MODES, SHARED_KEY_FILES, WG_MODES, WG_OBFS, conf_mode
+from conftest import REPO_DIR
 
 FLAG_TO_MODE = {v["flag"]: k for k, v in MODES.items()}
 SECRET_FILE = {
@@ -324,6 +325,8 @@ class FakeServer:
             if self.vpn_panels.get("pasarguard"):
                 return CmdResult(0, self.vpn_creds_block("pasarguard"), "")
             return CmdResult(1, "No VPN panel login found.\n", "")
+        if "unzip tar curl" in script and "tools_ok" in script:
+            return CmdResult(0, "tools_ok\n", "")
         raise AssertionError(f"unexpected command: {script[:200]}")
 
 
@@ -427,7 +430,7 @@ def test_deploy_verify_delete_every_mode(client, auth, world, mode):
     first = MODES[mode]["first"]
     deploy_order = [host for host, c in world.log if "JOJONET_AUTO=1" in c]
     assert deploy_order == (["1.2.3.4", "5.6.7.8"] if first == "kharej" else ["5.6.7.8", "1.2.3.4"])
-    assert ir.jojonet == de.jojonet == "1.6.0"
+    assert ir.jojonet == de.jojonet == orch_mod.bundle_version(REPO_DIR)
     if mode == "tun_tcp":
         kd = next(iter(ir.keys))
         assert kd == next(iter(de.keys)) and re.fullmatch(r"/etc/jojonet/keys/pair_\d+", kd)
@@ -611,12 +614,13 @@ def test_install_job_and_test_job(client, auth, world):
     iran, _ = make_servers(client, auth)
     job = wait_job(client, client.post(f"/api/servers/{iran['id']}/install", headers=auth).json()["job_id"])
     assert job["status"] == "ok", job["log"]
-    assert world.servers["5.6.7.8"].jojonet == "1.6.0"
+    ver = orch_mod.bundle_version(REPO_DIR)
+    assert world.servers["5.6.7.8"].jojonet == ver
     job = wait_job(client, client.post(f"/api/servers/{iran['id']}/test", headers=auth).json()["job_id"])
     assert job["status"] == "ok"
     srv = client.get("/api/servers").json()
     s = next(x for x in srv if x["id"] == iran["id"])
-    assert s["last_check"]["ok"] is True and "1.6.0" in s["last_check"]["info"]
+    assert s["last_check"]["ok"] is True and ver in s["last_check"]["info"]
 
 
 def test_v6_one_per_pair(client, auth, world):

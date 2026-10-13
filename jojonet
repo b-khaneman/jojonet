@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.4"
+readonly JOJONET_VERSION="1.6.5"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -4282,20 +4282,14 @@ quick_add_tunnel_paqet() {
     [[ "$peer_ip" == "$loc_ip" ]] && { echo -e "${RED}[!] Same IP.${NC}"; sleep 2; set -e; return 1; }
     rem_ip="$peer_ip"
 
-    if existing=$(find_tunnel_for_peer "$rem_ip"); then
-        local ex_mode
-        ex_mode=$(tunnel_mode_from_name "$existing")
-        if [[ "$ex_mode" == "paqet" ]]; then
-            local _rrc=0
-            restart_tunnel "$existing" || _rrc=$?
-            sleep 2
-            set -e
-            return "$_rrc"
-        fi
-        echo -e "${YELLOW}[!] Non-Paqet tunnel exists for $rem_ip [$existing]. Use Manage to delete first.${NC}"
-        sleep 3
+    # Same-mode only — Paqet can coexist with GRE/WireGuard/etc. on the same peer.
+    if existing=$(find_tunnel_for_peer "$rem_ip" "paqet"); then
+        echo -e "${YELLOW}[!] Paqet tunnel to $rem_ip already exists as [$existing]. Restarting...${NC}"
+        local _rrc=0
+        restart_tunnel "$existing" || _rrc=$?
+        sleep 2
         set -e
-        return 1
+        return "$_rrc"
     fi
 
     if role_conf=$(resolve_server_role "$loc_ip"); then
@@ -4435,20 +4429,14 @@ quick_add_tunnel_vxlan() {
     [[ "$peer_ip" == "$loc_ip" ]] && { echo -e "${RED}[!] Same IP.${NC}"; sleep 2; return 1; }
     rem_ip="$peer_ip"
 
-    if existing=$(find_tunnel_for_peer "$rem_ip"); then
-        local ex_mode
-        ex_mode=$(tunnel_mode_from_name "$existing")
-        if [[ "$ex_mode" == "vxlan" ]]; then
-            local _rrc=0
-            restart_tunnel "$existing" || _rrc=$?
-            sleep 2
-            set -e
-            return "$_rrc"
-        fi
-        echo -e "${YELLOW}[!] Non-VXLAN tunnel exists for $rem_ip [$existing]. Delete it first.${NC}"
-        sleep 3
+    # Same-mode only — VXLAN can coexist with GRE/WireGuard/etc. on the same peer.
+    if existing=$(find_tunnel_for_peer "$rem_ip" "vxlan"); then
+        echo -e "${YELLOW}[!] VXLAN tunnel to $rem_ip already exists as [$existing]. Restarting...${NC}"
+        local _rrc=0
+        restart_tunnel "$existing" || _rrc=$?
+        sleep 2
         set -e
-        return 1
+        return "$_rrc"
     fi
 
     if role_conf=$(resolve_server_role "$loc_ip"); then

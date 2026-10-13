@@ -155,7 +155,11 @@ def test_login_logout_and_csrf(client, admin):
     assert f"path={client.prefix}/" in cookie
     csrf = r.json()["csrf"]
     me = client.get("/api/me").json()
-    assert me["username"] == "admin" and me["csrf"] == csrf and me["jojonet_version"] == "1.6.0"
+    from app.orchestrator import bundle_version
+    from conftest import REPO_DIR
+
+    assert me["username"] == "admin" and me["csrf"] == csrf
+    assert me["jojonet_version"] == bundle_version(REPO_DIR)
     assert me["role"] == "owner" and me["days_left"] is None
     assert client.post("/api/servers", json=SERVER).status_code == 403
     assert client.post("/api/servers", json=SERVER, headers={"X-CSRF-Token": "bad"}).status_code == 403

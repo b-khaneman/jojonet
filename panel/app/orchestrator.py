@@ -198,6 +198,11 @@ def spoof_receiver_script(src_ip: str, proto: str, port: int) -> str:
 set -u
 d=$(mktemp -d /tmp/jnspoof.XXXXXX) || exit 3
 printf '%s\\n' {q_src} > "$d/src.txt"
+# Kernel uses max(all, iface) for rp_filter; loosen both so spoofed src is not dropped before INPUT.
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+iface=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{{for (i=1;i<NF;i++) if ($i=="dev") {{print $(i+1); exit}}}}')
+if [ -n "$iface" ]; then sysctl -w "net.ipv4.conf.$iface.rp_filter=0" >/dev/null 2>&1 || true; fi
 rule=""
 if command -v iptables >/dev/null 2>&1; then
     iptables -w -I INPUT 1 -s {q_src} {match} -m comment --comment jojonet-spoof-test -j ACCEPT >/dev/null 2>&1 && rule=1
@@ -900,8 +905,8 @@ class Orchestrator:
             if m:
                 return True, f"{label}: OK ({m.group(1)}/{m.group(2)} بسته)"
         return False, (
-            f"{label}: بسته‌ای با IP جعلی {src_ip} نرسید — دیتاسنتر {s_row['name']} جعل IP را مسدود می‌کند "
-            f"یا فایروال {r_row['name']} پروتکل {proto} را می‌بندد"
+            f"{label}: بسته‌ای با IP جعلی {src_ip} نرسید — ممکن است دیتاسنتر {s_row['name']} جعل IP را مسدود کند، "
+            f"یا روی {r_row['name']} فیلتر rp_filter/فایروال پروتکل {proto} را بیندازد"
         )
 
     async def spoof_readiness(

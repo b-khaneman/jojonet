@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.5 / panel 1.3.54
+- **Paqet / VXLAN**: allow alongside other modes to the same peer (only a same-mode duplicate restarts); GRE no longer blocks Paqet/VXLAN create.
+- **Spoof readiness**: clear per-interface `rp_filter` during the probe so local kernel drops are not reported as datacenter blocks.
+
 ## 1.6.4 / panel 1.3.53
 - **Wstunnel**: post-start runtime check accepts the userspace process / active unit (was wrongly requiring a TUN iface like GRE, so panel deploys rolled back a healthy service).
 
