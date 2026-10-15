@@ -1301,7 +1301,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         extra, params = owner_clause(sess) if sess is not None else ("", ())
         return {r["id"]: r["name"] for r in db.all(f"SELECT id, name FROM servers WHERE 1=1{extra}", params)}
 
-    def tunnel_out(row: dict[str, Any], names: dict[int, str] | None = None, owners: dict[int, str] | None = None) -> dict[str, Any]:
+    def tunnel_out(
+        row: dict[str, Any],
+        names: dict[int, str] | None = None,
+        owners: dict[int, str] | None = None,
+        *,
+        reveal_secrets: bool = False,
+    ) -> dict[str, Any]:
         names = server_names() if names is None else names
         out = {k: row[k] for k in (
             "id", "mode", "iran_id", "kharej_id", "status", "iran_iface", "kharej_iface",
@@ -1311,7 +1317,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         out["kharej_name"] = names.get(row["kharej_id"], "?")
         opts = row.get("options") or {}
         public_opts = dict(opts)
-        public_opts.pop("reality", None)
+        if not reveal_secrets:
+            public_opts.pop("reality", None)
         out["options"] = public_opts or None
         out["direct"] = bool(opts.get("direct")) or row["iran_id"] == row["kharej_id"]
         users = opts.get("users")
@@ -2020,6 +2027,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "این سرور رله فعال دارد؛ ابتدا رله‌ها را حذف کنید")
         db.execute("DELETE FROM servers WHERE id=?", (server_id,))
         return {"ok": True}
+
+    @app.get("/api/servers/{server_id}/secrets")
+    async def server_secrets(server_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        """Owner (or the server's customer) can read stored SSH secrets for support/edit."""
+        row = get_server(server_id, sess)
+        if not is_owner(sess) and row.get("owner_id") != sess["admin_id"]:
+            raise HTTPException(403, "دسترسی به رمز این سرور ندارید")
+        try:
+            password = vault.decrypt(row.get("secret_password")) if row.get("secret_password") else None
+            private_key = vault.decrypt(row.get("secret_key")) if row.get("secret_key") else None
+            key_passphrase = vault.decrypt(row.get("secret_passphrase")) if row.get("secret_passphrase") else None
+            sudo_password = vault.decrypt(row.get("secret_sudo")) if row.get("secret_sudo") else None
+        except ValueError as exc:
+            raise HTTPException(500, "رمزگشایی دسترسی ممکن نیست؛ کلید vault پنل را بررسی کنید") from exc
+        names = admin_names()
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "role": row["role"],
+            "host": row["host"],
+            "port": row["port"],
+            "username": row["username"],
+            "auth_type": row["auth_type"],
+            "owner_id": row.get("owner_id"),
+            "owner_username": names.get(row.get("owner_id"), "?") if row.get("owner_id") is not None else None,
+            "password": password,
+            "private_key": private_key,
+            "key_passphrase": key_passphrase,
+            "sudo_password": sudo_password,
+        }
 
     @app.post("/api/servers/{server_id}/test")
     async def test_server(server_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
@@ -3493,10 +3530,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             (user_id,),
         )
         names = server_names()
+        owners = admin_names()
+        server_rows = []
+        for s in servers:
+            item = server_out(s, owners)
+            try:
+                item["password"] = vault.decrypt(s.get("secret_password")) if s.get("secret_password") else None
+                item["private_key"] = vault.decrypt(s.get("secret_key")) if s.get("secret_key") else None
+                item["key_passphrase"] = vault.decrypt(s.get("secret_passphrase")) if s.get("secret_passphrase") else None
+                item["sudo_password"] = vault.decrypt(s.get("secret_sudo")) if s.get("secret_sudo") else None
+            except ValueError:
+                item["password"] = item["private_key"] = item["key_passphrase"] = item["sudo_password"] = None
+                item["secrets_error"] = "رمزگشایی ممکن نیست"
+            server_rows.append(item)
         return {
             "user": user_out(user),
-            "servers": [server_out(s) for s in servers],
-            "tunnels": [tunnel_out(t, names) for t in tunnels],
+            "servers": server_rows,
+            "tunnels": [tunnel_out(t, names, owners, reveal_secrets=True) for t in tunnels],
             "relays": [relay_out(r, names) for r in relays],
             "ledger": [
                 {

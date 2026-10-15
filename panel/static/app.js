@@ -1010,9 +1010,45 @@
     return lc.ok ? badge('ok', 'در دسترس') : badge('err', 'خطا در اتصال');
   }
 
+  function paintServersOwnerFilter() {
+    const wrap = $('#servers-owner-filter');
+    const sel = $('#servers-owner-select');
+    if (!wrap || !sel) return;
+    if (!isOwner()) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    const data = lists.servers.data || [];
+    const owners = new Map();
+    for (const s of data) {
+      const id = s.owner_id;
+      if (id == null) continue;
+      if (!owners.has(id)) owners.set(id, s.owner_username || `user-${id}`);
+    }
+    const prev = sel.value;
+    const opts = [h('option', { value: '' }, 'همه مشتریان و خودم')];
+    [...owners.entries()]
+      .sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'fa'))
+      .forEach(([id, name]) => opts.push(h('option', { value: String(id) }, name)));
+    sel.replaceChildren(...opts);
+    if (prev && [...owners.keys()].map(String).includes(prev)) sel.value = prev;
+    else sel.value = '';
+  }
+
+  function filteredServers() {
+    const data = lists.servers.data || [];
+    if (!isOwner()) return data;
+    const sel = $('#servers-owner-select');
+    const oid = sel && sel.value ? Number(sel.value) : null;
+    if (!oid) return data;
+    return data.filter((s) => Number(s.owner_id) === oid);
+  }
+
   function renderServers() {
     const box = $(lists.servers.el);
-    const data = lists.servers.data;
+    paintServersOwnerFilter();
+    const data = filteredServers();
     if (!data.length) {
       box.replaceChildren(emptyState('هنوز سروری اضافه نشده است.', 'با دکمه «افزودن سرور» یک سرور ایران و یک سرور خارج ثبت کنید.'));
       return;
@@ -1026,6 +1062,80 @@
           : emptyState(`سروری با نقش ${ROLE_LABEL[role]} ثبت نشده است.`));
     });
     box.replaceChildren(h('div', { class: 'server-groups' }, groups));
+  }
+
+  async function openServerSecrets(s) {
+    const body = h('div', { class: 'server-secrets' }, loadingState('در حال خواندن دسترسی…'));
+    const footerClose = h('button', { type: 'button', class: 'btn btn-primary' }, 'بستن');
+    const m = openModal({
+      title: `دسترسی SSH «${s.name}»`,
+      body,
+      footer: [footerClose],
+      sticky: true,
+    });
+    footerClose.addEventListener('click', () => m.close());
+    try {
+      const sec = await api('GET', `/api/servers/${enc(s.id)}/secrets`);
+      const rows = [];
+      const add = (label, value, opts) => {
+        if (value == null || value === '') {
+          rows.push(h('div', { class: 'user-fact' },
+            h('span', { class: 'user-fact-k' }, label),
+            h('span', { class: 'user-fact-v muted' }, 'ثبت نشده')));
+          return;
+        }
+        rows.push(secretRevealRow(label, String(value), opts));
+      };
+      rows.push(h('div', { class: 'user-fact' },
+        h('span', { class: 'user-fact-k' }, 'مالک'),
+        h('span', { class: 'user-fact-v' }, sec.owner_username || '—')));
+      rows.push(h('div', { class: 'user-fact' },
+        h('span', { class: 'user-fact-k' }, 'آدرس'),
+        h('span', { class: 'user-fact-v', dir: 'ltr' }, `${sec.host}:${sec.port}`)));
+      rows.push(h('div', { class: 'user-fact' },
+        h('span', { class: 'user-fact-k' }, 'کاربر SSH'),
+        h('span', { class: 'user-fact-v', dir: 'ltr' }, sec.username || '—')));
+      rows.push(h('div', { class: 'user-fact' },
+        h('span', { class: 'user-fact-k' }, 'نوع احراز'),
+        h('span', { class: 'user-fact-v' }, sec.auth_type === 'key' ? 'کلید SSH' : 'رمز عبور')));
+      add('رمز SSH', sec.password);
+      add('کلید خصوصی', sec.private_key, { multiline: true });
+      add('Passphrase کلید', sec.key_passphrase);
+      add('رمز sudo', sec.sudo_password);
+      body.replaceChildren(h('div', { class: 'user-facts' }, rows));
+    } catch (err) {
+      body.replaceChildren(h('p', { class: 'form-error' }, err.message || NET_ERR));
+    }
+  }
+
+  function secretRevealRow(label, value, opts) {
+    opts = opts || {};
+    let revealed = false;
+    const valEl = h('code', {
+      class: 'fp secret-val',
+      dir: 'ltr',
+    }, '••••••••••••');
+    if (opts.multiline) valEl.style.whiteSpace = 'pre-wrap';
+    const toggle = h('button', { type: 'button', class: 'btn btn-ghost btn-sm' }, 'نمایش');
+    toggle.addEventListener('click', () => {
+      revealed = !revealed;
+      valEl.textContent = revealed ? value : '••••••••••••';
+      toggle.textContent = revealed ? 'پنهان' : 'نمایش';
+    });
+    const copyBtn = h('button', { type: 'button', class: 'btn btn-ghost btn-sm' }, 'کپی');
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(value);
+        toast('کپی شد.', 'success');
+      } catch (_) {
+        toast('کپی ممکن نشد.', 'error');
+      }
+    });
+    return h('div', { class: 'user-fact secret-fact' },
+      h('span', { class: 'user-fact-k' }, label),
+      h('div', { class: 'secret-fact-body' },
+        valEl,
+        h('div', { class: 'card-actions' }, toggle, copyBtn)));
   }
 
   function serverCard(s) {
@@ -1072,6 +1182,9 @@
       });
     });
 
+    const secretsBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'دسترسی SSH');
+    secretsBtn.addEventListener('click', () => openServerSecrets(s));
+
     const editBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'ویرایش');
     editBtn.addEventListener('click', () => openServerForm(s));
 
@@ -1098,6 +1211,7 @@
           h('span', { class: `role-chip role-${s.role}` }, ROLE_LABEL[s.role] || s.role)),
         checkBadge(lc)),
       h('dl', { class: 'kv' },
+        kv('مالک', s.owner_username || '—'),
         kv('آدرس', ltr(`${s.host}:${s.port}`)),
         kv('کاربر', ltr(s.username)),
         kv('احراز هویت', s.auth_type === 'key' ? 'کلید SSH' : 'رمز عبور'),
@@ -1107,7 +1221,7 @@
         kv('گواهی SSL', sslSummary(s.last_ssl))),
       lc && lc.info ? h('p', { class: `check-info${lc.ok ? '' : ' is-err'}` }, infoText(lc.info)) : null,
       s.last_ssl && s.last_ssl.ok ? h('p', { class: 'check-info' }, sslDetail(s.last_ssl)) : null,
-      h('div', { class: 'card-actions' }, testBtn, installBtn, pingBtn, dnsBtn, sslBtn, updBtn, editBtn, delBtn));
+      h('div', { class: 'card-actions' }, secretsBtn, testBtn, installBtn, pingBtn, dnsBtn, sslBtn, updBtn, editBtn, delBtn));
   }
 
   function sslSummary(info) {
@@ -4434,23 +4548,48 @@
       title: `وضعیت کامل «${u.username}»`,
       body,
       footer: [h('button', { type: 'button', class: 'btn btn-primary', onclick: () => m.close() }, 'بستن')],
+      sticky: true,
     });
     try {
       const data = await api('GET', `/api/users/${enc(u.id)}/overview`);
       const user = data.user || u;
+      const serverBlocks = (data.servers || []).length
+        ? data.servers.map((s) => {
+          const revealBtn = h('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'دسترسی SSH');
+          revealBtn.addEventListener('click', () => openServerSecrets(s));
+          const editBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'ویرایش');
+          editBtn.addEventListener('click', () => { m.close(); openServerForm(s); });
+          const facts = [
+            h('div', { class: 'user-fact' }, h('span', { class: 'user-fact-k' }, 'نقش'), h('span', { class: 'user-fact-v' }, ROLE_LABEL[s.role] || s.role)),
+            h('div', { class: 'user-fact' }, h('span', { class: 'user-fact-k' }, 'آدرس'), h('span', { class: 'user-fact-v', dir: 'ltr' }, `${s.host}:${s.port}`)),
+            h('div', { class: 'user-fact' }, h('span', { class: 'user-fact-k' }, 'کاربر SSH'), h('span', { class: 'user-fact-v', dir: 'ltr' }, s.username || '—')),
+            h('div', { class: 'user-fact' }, h('span', { class: 'user-fact-k' }, 'احراز'), h('span', { class: 'user-fact-v' }, s.auth_type === 'key' ? 'کلید' : 'رمز')),
+          ];
+          if (s.password) facts.push(secretRevealRow('رمز SSH', s.password));
+          if (s.private_key) facts.push(secretRevealRow('کلید خصوصی', s.private_key, { multiline: true }));
+          if (s.key_passphrase) facts.push(secretRevealRow('Passphrase', s.key_passphrase));
+          if (s.sudo_password) facts.push(secretRevealRow('رمز sudo', s.sudo_password));
+          if (s.secrets_error) facts.push(h('p', { class: 'form-error' }, s.secrets_error));
+          return h('article', { class: 'card' },
+            h('div', { class: 'card-head' }, h('h4', { class: 'card-title' }, s.name)),
+            h('div', { class: 'user-facts' }, facts),
+            h('div', { class: 'card-actions' }, revealBtn, editBtn));
+        })
+        : [h('p', { class: 'muted' }, 'سروری نیست')];
       body.replaceChildren(
         h('div', { class: 'user-stats' },
           h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtMoney(user.wallet_balance || 0)), h('span', { class: 'user-stat-k' }, 'کیف پول')),
           h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtNum((data.servers || []).length)), h('span', { class: 'user-stat-k' }, 'سرور')),
           h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtNum((data.tunnels || []).length)), h('span', { class: 'user-stat-k' }, 'تانل')),
           h('div', { class: 'user-stat' }, h('span', { class: 'user-stat-n', dir: 'ltr' }, fmtNum((data.relays || []).length)), h('span', { class: 'user-stat-k' }, 'رله'))),
-        h('h4', { class: 'sub-head' }, 'سرورها'),
-        h('div', { class: 'list-rows' }, (data.servers || []).length
-          ? data.servers.map((s) => h('div', { class: 'ledger-row' }, h('strong', null, s.name), h('span', { dir: 'ltr' }, `${s.role} · ${s.host}`)))
-          : [h('p', { class: 'muted' }, 'سروری نیست')]),
+        h('p', { class: 'muted' }, 'رمز ورود به پنل این مشتری قابل نمایش نیست؛ در صورت نیاز از «بازنشانی رمز» استفاده کنید.'),
+        h('h4', { class: 'sub-head' }, 'سرورها و دسترسی SSH'),
+        h('div', { class: 'cards' }, serverBlocks),
         h('h4', { class: 'sub-head' }, 'تانل‌ها'),
         h('div', { class: 'list-rows' }, (data.tunnels || []).length
-          ? data.tunnels.map((t) => h('div', { class: 'ledger-row' }, h('strong', null, t.mode), h('span', null, t.status || '')))
+          ? data.tunnels.map((t) => h('div', { class: 'ledger-row' },
+            h('strong', null, t.mode),
+            h('span', null, `${t.status || ''} · ${t.iran_name || '?'} ↔ ${t.kharej_name || '?'}`)))
           : [h('p', { class: 'muted' }, 'تانلی نیست')]),
         h('h4', { class: 'sub-head' }, 'گردش حساب'),
         h('div', { class: 'list-rows' }, (data.ledger || []).slice(0, 12).map(ledgerRow)));
@@ -6964,6 +7103,8 @@
     if (emailBtn) emailBtn.addEventListener('click', openEmailForm);
     $('#btn-add-server').addEventListener('click', () => openServerForm(null));
     $('#btn-refresh-servers').addEventListener('click', (e) => act(e.currentTarget, () => load('servers'), 'در حال بروزرسانی…'));
+    const ownerFilter = $('#servers-owner-select');
+    if (ownerFilter) ownerFilter.addEventListener('change', () => renderServers());
     $('#btn-refresh-tunnels').addEventListener('click', (e) => act(e.currentTarget, () => Promise.all([load('tunnels'), load('servers'), loadLiveTunnels(true)]), 'در حال بروزرسانی…'));
     const scanLive = $('#btn-scan-live');
     if (scanLive) scanLive.addEventListener('click', (e) => act(e.currentTarget, () => loadLiveTunnels(true), 'در حال اسکن…'));

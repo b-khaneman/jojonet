@@ -981,6 +981,25 @@ textarea::placeholder {
   font-weight: 500;
 }
 
+.secret-fact {
+  flex-direction: column;
+  align-items: stretch;
+  gap: .35rem;
+}
+
+.secret-fact-body {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+
+.secret-fact-body .secret-val {
+  display: block;
+  max-height: 12rem;
+  overflow: auto;
+  word-break: break-all;
+}
+
 #users-list .cards {
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
 }

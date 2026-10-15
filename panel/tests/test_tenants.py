@@ -208,6 +208,24 @@ def test_two_customers_are_isolated(client, auth):
     assert {s["owner_username"] for s in all_srv} == {"cust1", "cust2"}
     assert client.post("/api/servers", json=SERVER, headers=owner).status_code == 409
 
+    # Owner can reveal customer SSH secrets for support
+    sid = next(s["id"] for s in all_srv if s["owner_username"] == "cust1")
+    secrets = client.get(f"/api/servers/{sid}/secrets", headers=owner)
+    assert secrets.status_code == 200, secrets.text
+    assert secrets.json()["password"] == "pw-iran"
+    assert secrets.json()["owner_username"] == "cust1"
+    ov = client.get(
+        f"/api/users/{next(s['owner_id'] for s in all_srv if s['owner_username'] == 'cust1')}/overview",
+        headers=owner,
+    )
+    assert ov.status_code == 200
+    assert any(s.get("password") == "pw-iran" for s in ov.json()["servers"])
+
+    # Customer cannot read another customer's secrets
+    client.post("/api/logout", headers=owner)
+    b2 = login_as(client, "cust2", "customer-pass-2")
+    assert client.get(f"/api/servers/{sid}/secrets", headers=b2).status_code == 404
+
 
 def test_term_policy_global_and_per_user(client, auth):
     me = client.get("/api/me").json()
