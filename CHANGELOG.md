@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.28 / panel 1.3.82
+- **Servers filter**: owner dropdown labels are «همه سرورها» and «سرورهای خودم (ادمین)», plus a live search box for name/IP/user/owner.
+
 ## 1.6.28 / panel 1.3.81
 - **Owner support access**: owners already see every customer's servers/tunnels/relays; now they can open stored SSH passwords/keys via «دسترسی SSH», filter servers by customer, and see decrypted secrets in the customer overview. Panel login passwords stay hashed (reset only).
 

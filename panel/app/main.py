@@ -1393,6 +1393,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def me_payload(sess: dict[str, Any]) -> dict[str, Any]:
         usage = usage_counts(sess["admin_id"])
         return {
+            "id": sess["admin_id"],
             "username": sess["username"],
             "email": sess.get("email") or None,
             "csrf": sess["csrf"],

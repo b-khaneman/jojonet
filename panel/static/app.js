@@ -1013,36 +1013,62 @@
   function paintServersOwnerFilter() {
     const wrap = $('#servers-owner-filter');
     const sel = $('#servers-owner-select');
-    if (!wrap || !sel) return;
-    if (!isOwner()) {
-      wrap.hidden = true;
-      return;
-    }
+    const ownerField = $('#servers-owner-field');
+    const hint = $('#servers-owner-hint');
+    if (!wrap) return;
     wrap.hidden = false;
+    const owner = isOwner();
+    if (ownerField) ownerField.hidden = !owner;
+    if (hint) hint.hidden = !owner;
+    if (!owner || !sel) return;
     const data = lists.servers.data || [];
+    const myId = state.me && state.me.id != null ? Number(state.me.id) : null;
     const owners = new Map();
     for (const s of data) {
       const id = s.owner_id;
       if (id == null) continue;
+      if (myId != null && Number(id) === myId) continue;
       if (!owners.has(id)) owners.set(id, s.owner_username || `user-${id}`);
     }
     const prev = sel.value;
-    const opts = [h('option', { value: '' }, 'همه مشتریان و خودم')];
+    const opts = [
+      h('option', { value: '' }, 'همه سرورها'),
+      h('option', { value: '__mine__' }, 'سرورهای خودم (ادمین)'),
+    ];
     [...owners.entries()]
       .sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'fa'))
       .forEach(([id, name]) => opts.push(h('option', { value: String(id) }, name)));
     sel.replaceChildren(...opts);
-    if (prev && [...owners.keys()].map(String).includes(prev)) sel.value = prev;
-    else sel.value = '';
+    const allowed = new Set(['', '__mine__', ...[...owners.keys()].map(String)]);
+    sel.value = allowed.has(prev) ? prev : '';
   }
 
   function filteredServers() {
-    const data = lists.servers.data || [];
-    if (!isOwner()) return data;
-    const sel = $('#servers-owner-select');
-    const oid = sel && sel.value ? Number(sel.value) : null;
-    if (!oid) return data;
-    return data.filter((s) => Number(s.owner_id) === oid);
+    let data = lists.servers.data || [];
+    if (isOwner()) {
+      const sel = $('#servers-owner-select');
+      const raw = sel ? sel.value : '';
+      if (raw === '__mine__') {
+        const myId = state.me && state.me.id != null ? Number(state.me.id) : null;
+        const myName = (state.me && state.me.username) || '';
+        data = data.filter((s) => {
+          if (myId != null && s.owner_id != null) return Number(s.owner_id) === myId;
+          return myName && s.owner_username === myName;
+        });
+      } else if (raw) {
+        const oid = Number(raw);
+        data = data.filter((s) => Number(s.owner_id) === oid);
+      }
+    }
+    const q = (($('#servers-search') && $('#servers-search').value) || '').trim().toLowerCase();
+    if (!q) return data;
+    return data.filter((s) => {
+      const hay = [
+        s.name, s.host, s.username, s.owner_username, s.role,
+        ROLE_LABEL[s.role], s.port, s.auth_type, s.hostkey_fingerprint,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    });
   }
 
   function renderServers() {
@@ -7105,6 +7131,14 @@
     $('#btn-refresh-servers').addEventListener('click', (e) => act(e.currentTarget, () => load('servers'), 'در حال بروزرسانی…'));
     const ownerFilter = $('#servers-owner-select');
     if (ownerFilter) ownerFilter.addEventListener('change', () => renderServers());
+    const serversSearch = $('#servers-search');
+    if (serversSearch) {
+      let searchTimer = 0;
+      serversSearch.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => renderServers(), 120);
+      });
+    }
     $('#btn-refresh-tunnels').addEventListener('click', (e) => act(e.currentTarget, () => Promise.all([load('tunnels'), load('servers'), loadLiveTunnels(true)]), 'در حال بروزرسانی…'));
     const scanLive = $('#btn-scan-live');
     if (scanLive) scanLive.addEventListener('click', (e) => act(e.currentTarget, () => loadLiveTunnels(true), 'در حال اسکن…'));

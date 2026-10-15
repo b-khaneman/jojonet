@@ -242,15 +242,20 @@
         <h3 class="card-title">گواهی SSL رایگان برای سرور شما</h3>
         <p class="muted">هر کاربر می‌تواند برای دامنهٔ خودش روی سرور خودش گواهی Let’s Encrypt بگیرد — رایگان و بدون نیاز به مالک. روی کارت سرور دکمهٔ «گواهی SSL رایگان» را بزنید. رکورد A باید مستقیم به IP همان سرور باشد، پروکسی ابری خاموش باشد و پورت ۸۰ آزاد باشد.</p>
       </div>
-      <div class="card create-card" id="servers-owner-filter" hidden>
+      <div class="card create-card" id="servers-owner-filter">
         <div class="form-grid">
-          <div class="field">
-            <label for="servers-owner-select">نمایش سرورهای مشتری</label>
+          <div class="field" id="servers-owner-field" hidden>
+            <label for="servers-owner-select">نمایش سرورها</label>
             <select id="servers-owner-select">
-              <option value="">همه مشتریان و خودم</option>
+              <option value="">همه سرورها</option>
+              <option value="__mine__">سرورهای خودم (ادمین)</option>
             </select>
           </div>
-          <div class="field field-wide">
+          <div class="field">
+            <label for="servers-search">جستجو</label>
+            <input id="servers-search" type="search" dir="rtl" autocomplete="off" placeholder="نام، IP، کاربر، مالک…">
+          </div>
+          <div class="field field-wide" id="servers-owner-hint" hidden>
             <p class="hint">به‌عنوان مالک، همه سرورهای مشتریان را می‌بینید و با «دسترسی SSH» می‌توانید رمز یا کلید ذخیره‌شده را برای پشتیبانی باز کنید. رمز ورود به پنل مشتری قابل دیدن نیست (هش شده است) و فقط از «بازنشانی رمز» عوض می‌شود.</p>
           </div>
         </div>
