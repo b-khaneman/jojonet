@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh AI-WARP routes every 6 hours
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+Persistent=true
+Unit=ai-warp-refresh.service
+
+[Install]
+WantedBy=timers.target

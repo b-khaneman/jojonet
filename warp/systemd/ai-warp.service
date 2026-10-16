@@ -1,0 +1,15 @@
+[Unit]
+Description=AI-WARP Cloudflare selective tunnel (WireGuard)
+Documentation=https://github.com/b-khaneman/jojonet/tree/main/warp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/wg-quick up aiwarp
+ExecStop=/usr/bin/wg-quick down aiwarp
+ExecReload=/usr/local/share/ai-warp/scripts/routes.sh up
+
+[Install]
+WantedBy=multi-user.target

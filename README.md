@@ -44,6 +44,18 @@ sudo jojonet --help
 
 ---
 
+## AI-WARP — آنلاک Gemini / Flow / ChatGPT / …
+
+یک دستور روی سرور **خارج** — بدون پرسش، بدون تغییر کانفیگ پنل یا CDN:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/b-khaneman/jojonet/main/warp/install.sh | sudo bash
+```
+
+راهنما: [warp/README.md](./warp/README.md)
+
+---
+
 ## آپدیت JojoNet (مهم)
 
 روی سرور:
