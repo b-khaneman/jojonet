@@ -199,6 +199,7 @@
     <button type="button" class="tab" role="tab" id="tabbtn-servers" data-tab="servers" aria-controls="tab-servers" aria-selected="false" tabindex="-1">سرورها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-tunnels" data-tab="tunnels" aria-controls="tab-tunnels" aria-selected="false" tabindex="-1">تانل‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-compare" data-tab="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1">آزمایشگاه</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-scanners" data-tab="scanners" aria-controls="tab-scanners" aria-selected="false" tabindex="-1">اسکنر</button>
     <button type="button" class="tab" role="tab" id="tabbtn-relays" data-tab="relays" aria-controls="tab-relays" aria-selected="false" tabindex="-1">رله‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-panels" data-tab="panels" aria-controls="tab-panels" aria-selected="false" tabindex="-1">پنل‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-outbounds" data-tab="outbounds" aria-controls="tab-outbounds" aria-selected="false" tabindex="-1">اوتباند</button>
@@ -316,6 +317,55 @@
           </label>
         </div>
         <div id="compare-results" class="jnlab-lanes" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section id="tab-scanners" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-scanners" hidden>
+      <div class="section-head">
+        <div>
+          <h2>اسکنر</h2>
+          <p class="muted">JojoSNI / JojoCF / JojoFastly — اسکن SNI و IP تمیز مخصوص Reality روی سرور انتخابی (ترجیحاً ایران).</p>
+        </div>
+      </div>
+      <div class="jnscan">
+        <form id="scan-form" class="jnscan-console" novalidate>
+          <div class="jnscan-kinds" id="scan-kinds" role="radiogroup" aria-label="نوع اسکنر"></div>
+          <div class="jnscan-row">
+            <div class="field">
+              <label for="scan-server">سرور اجرا</label>
+              <select id="scan-server" required></select>
+            </div>
+            <div class="field">
+              <label for="scan-workers">Workers</label>
+              <input id="scan-workers" type="number" min="1" max="800" value="120" dir="ltr">
+            </div>
+            <div class="field" id="scan-limit-wrap">
+              <label for="scan-limit">Limit (CF/Fastly)</label>
+              <input id="scan-limit" type="number" min="0" max="50000" value="800" dir="ltr" placeholder="0=تمام">
+            </div>
+            <div class="field">
+              <label for="scan-isp-top">Top سنجش ایران</label>
+              <input id="scan-isp-top" type="number" min="1" max="30" value="5" dir="ltr">
+            </div>
+          </div>
+          <label class="jnscan-check"><input type="checkbox" id="scan-iran-isp" checked> سنجش از نودهای داخل ایران بعد از یافتن نتایج</label>
+          <div class="jnscan-actions">
+            <button type="submit" class="btn btn-primary" id="scan-run">شروع اسکن</button>
+            <button type="button" class="btn btn-sm" id="scan-open-job" hidden>مشاهده در مانیتور</button>
+          </div>
+          <div id="scan-err" class="form-error" hidden></div>
+        </form>
+        <div id="scan-results" class="jnscan-results" aria-live="polite"></div>
+        <section class="jnscan-history" aria-labelledby="scan-history-title">
+          <div class="jnscan-history-head">
+            <div>
+              <h3 id="scan-history-title">تاریخچه اسکن</h3>
+              <p class="muted">اسکن‌های قبلی با تاریخ و ساعت — برای دیدن نتیجه روی ردیف کلیک کنید.</p>
+            </div>
+            <button type="button" class="btn btn-sm" id="scan-history-refresh">بروزرسانی</button>
+          </div>
+          <div id="scan-history" class="jnscan-history-list" aria-live="polite"></div>
+        </section>
       </div>
     </section>
 

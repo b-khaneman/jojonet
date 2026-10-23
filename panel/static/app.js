@@ -12,7 +12,7 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['overview', 'servers', 'tunnels', 'compare', 'relays', 'panels', 'outbounds', 'jobs', 'guide', 'orders', 'wallet', 'tickets', 'users'];
+  const TABS = ['overview', 'servers', 'tunnels', 'compare', 'scanners', 'relays', 'panels', 'outbounds', 'jobs', 'guide', 'orders', 'wallet', 'tickets', 'users'];
   const ORDER_STATUS = {
     pending: ['warn', 'در انتظار'],
     approved: ['info', 'تأیید شده'],
@@ -154,7 +154,27 @@
     os_update: 'آپدیت سیستم',
     vpn_panel: 'نصب پنل VPN',
     tunnel_compare: 'آزمایشگاه مسیر',
+    reality_scan: 'اسکنر Reality',
     server_ping: 'تست پینگ',
+  };
+
+  const SCAN_KINDS_DEFAULT = [
+    { id: 'sni', label: 'JojoSNI', desc: 'اسکن SNI مناسب Reality' },
+    { id: 'cf', label: 'JojoCF', desc: 'IP تمیز Cloudflare (رنج رسمی)' },
+    { id: 'fastly', label: 'JojoFastly', desc: 'IP تمیز Fastly (رنج رسمی)' },
+  ];
+
+  const scanState = {
+    kind: 'sni',
+    jobId: null,
+    es: null,
+    running: false,
+    result: null,
+    liveTop: [],
+    logLines: [],
+    showLog: false,
+    history: [],
+    historyLoading: false,
   };
 
   const compareState = {
@@ -669,7 +689,7 @@
   /* ---------- list loaders ---------- */
 
   const lists = {
-    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateCompareForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); } },
+    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateCompareForm(); updateScanForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); } },
     tunnels: {
       path: '/api/tunnels',
       el: '#tunnels-list',
@@ -2329,6 +2349,609 @@
       compareState.running = false;
       compareState.progress = null;
       updateCompareForm();
+      if (err && err.status !== 401) showErr(errBox, err.message || NET_ERR);
+    }
+  }
+
+  function scanCatalog() {
+    const fromInfo = state.info && Array.isArray(state.info.scanners) ? state.info.scanners : null;
+    return (fromInfo && fromInfo.length) ? fromInfo : SCAN_KINDS_DEFAULT;
+  }
+
+  function stopScanStream() {
+    if (scanState.es) {
+      try { scanState.es.close(); } catch { /* ignore */ }
+      scanState.es = null;
+    }
+  }
+
+  function updateScanForm() {
+    const box = $('#scan-kinds');
+    const sel = $('#scan-server');
+    const limWrap = $('#scan-limit-wrap');
+    const runBtn = $('#scan-run');
+    if (!box || !sel) return;
+    const catalog = scanCatalog();
+    if (!box.dataset.ready) {
+      box.replaceChildren();
+      for (const k of catalog) {
+        const id = `scan-kind-${k.id}`;
+        const lab = h('label', {
+          class: 'jnscan-kind' + (scanState.kind === k.id ? ' is-on' : ''),
+          for: id,
+        },
+          h('input', {
+            type: 'radio', name: 'scan-kind', id, value: k.id,
+            checked: scanState.kind === k.id ? true : undefined,
+          }),
+          h('span', { class: 'jnscan-kind-name' }, k.label),
+          h('span', { class: 'jnscan-kind-desc' }, k.desc || ''));
+        box.append(lab);
+      }
+      box.dataset.ready = '1';
+      box.querySelectorAll('input[type=radio]').forEach((inp) => {
+        inp.addEventListener('change', () => {
+          scanState.kind = inp.value;
+          box.querySelectorAll('.jnscan-kind').forEach((el) => {
+            const radio = el.querySelector('input');
+            el.classList.toggle('is-on', !!(radio && radio.value === scanState.kind));
+          });
+          if (limWrap) limWrap.hidden = scanState.kind === 'sni';
+        });
+      });
+    }
+    if (limWrap) limWrap.hidden = scanState.kind === 'sni';
+
+    // Same source as tunnel/compare forms — NOT state.servers (that key is never set).
+    const servers = (lists.servers.data || []).slice().sort((a, b) => {
+      if (a.role === 'iran' && b.role !== 'iran') return -1;
+      if (b.role === 'iran' && a.role !== 'iran') return 1;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'fa');
+    });
+    const loaded = !!lists.servers.loaded;
+    const opts = servers.map((s) => {
+      const role = s.role === 'iran' ? 'ایران' : (s.role === 'kharej' ? 'خارج' : (s.role || '?'));
+      return { value: s.id, label: `${s.name} — ${role} (${s.host})` };
+    });
+    const prev = sel.value;
+    const placeholder = !loaded
+      ? 'در حال بارگذاری سرورها…'
+      : (opts.length ? 'انتخاب سرور…' : 'سروری ثبت نشده است');
+    fillSelect(sel, opts, placeholder);
+    if (opts.length) {
+      const prefer = servers.find((s) => s.role === 'iran') || servers[0];
+      const keep = prev && opts.some((o) => String(o.value) === String(prev));
+      sel.value = keep ? prev : String(prefer.id);
+    }
+    sel.disabled = !opts.length || scanState.running;
+    if (runBtn) runBtn.disabled = !opts.length || scanState.running;
+  }
+
+  function scanCopy(text, okMsg) {
+    const value = String(text || '');
+    if (!value) {
+      toast('چیزی برای کپی نیست.', 'warn');
+      return;
+    }
+    navigator.clipboard.writeText(value).then(
+      () => toast(okMsg || 'کپی شد.', 'success'),
+      () => toast('کپی ممکن نشد.', 'error'),
+    );
+  }
+
+  function scanRowTarget(row) {
+    return String((row && (row.target || row.ip)) || '').trim();
+  }
+
+  function scanRows() {
+    if (scanState.result && Array.isArray(scanState.result.top) && scanState.result.top.length) {
+      return scanState.result.top;
+    }
+    return scanState.liveTop || [];
+  }
+
+  function scanRowsTsv(rows) {
+    const lines = ['#\ttarget\ttls_ms\ttls\talpn\tscore\thint'];
+    rows.forEach((row, i) => {
+      const target = scanRowTarget(row);
+      const ms = row.tls_ms != null ? Number(row.tls_ms).toFixed(1) : '';
+      const tls = row.tls13 === true || row.tls === '1.3' ? '1.3' : (row.tls || '');
+      const alpn = row.alpn || '';
+      const score = row.score != null ? String(row.score) : '';
+      const hint = row.reality_hint || row.hint || '';
+      lines.push([i + 1, target, ms, tls, alpn, score, hint].join('\t'));
+    });
+    return lines.join('\n');
+  }
+
+  function parseLiveScanLine(line) {
+    const s = String(line || '').trim();
+    if (!s || s.startsWith('JN_SCAN:') || s.startsWith('▶') || s.startsWith('✖')) return null;
+    if (/^(SNI|IP|هدف|سالم|خروجی|دامنه‌ها|رنج|دریافت|پینگ|تأخیر|سنجش|\[!]|✓|·)/.test(s)) return null;
+    if (s.includes('=====')) return null;
+    // SNI row: domain  ms  1.3|other  alpn  score  hint
+    let m = /^([a-zA-Z0-9][a-zA-Z0-9._-]*)\s+(\d+(?:\.\d+)?)\s+(1\.3|other)\s+(\S+)\s+(\d+)\s*(.*)$/.exec(s);
+    if (m) {
+      return {
+        target: m[1],
+        tls_ms: Number(m[2]),
+        tls13: m[3] === '1.3',
+        tls: m[3],
+        alpn: m[4] === '-' ? '' : m[4],
+        score: Number(m[5]),
+        reality_hint: (m[6] || '').trim(),
+      };
+    }
+    // CDN IP row
+    m = /^(\d{1,3}(?:\.\d{1,3}){3})\s+(\d+(?:\.\d+)?)\s+(1\.3|-)\s+(\S+)\s*$/.exec(s);
+    if (m) {
+      return {
+        target: m[1],
+        ip: m[1],
+        tls_ms: Number(m[2]),
+        tls13: m[3] === '1.3',
+        tls: m[3] === '-' ? '' : m[3],
+        alpn: m[4] === '-' ? '' : m[4],
+      };
+    }
+    return null;
+  }
+
+  function rebuildLiveTopFromLog() {
+    const map = new Map();
+    for (const line of scanState.logLines) {
+      const row = parseLiveScanLine(line);
+      if (!row) continue;
+      const key = scanRowTarget(row);
+      if (!key) continue;
+      map.set(key, row);
+    }
+    scanState.liveTop = Array.from(map.values());
+  }
+
+  function renderScanResults() {
+    const box = $('#scan-results');
+    if (!box) return;
+    const r = scanState.result;
+    const rows = scanRows();
+    const v = (r && r.vantage) || {};
+    const kind = (r && r.kind) || (SCAN_KINDS_DEFAULT.find((k) => k.id === scanState.kind) || {}).label || 'اسکنر';
+    const ok = r ? r.ok : rows.length;
+    const count = r ? r.count : null;
+
+    box.replaceChildren();
+    if (!scanState.running && !rows.length && !r) {
+      box.append(h('div', { class: 'jnscan-empty' },
+        h('p', { class: 'jnscan-empty-title' }, 'هنوز خروجی‌ای نیست'),
+        h('p', { class: 'muted' }, 'یک اسکنر را انتخاب کنید و شروع اسکن را بزنید. نتایج به‌صورت جدول زنده اینجا می‌آید.')));
+      return;
+    }
+
+    const hero = h('div', { class: 'jnscan-hero' + (scanState.running ? ' is-running' : ' is-done') });
+    const ring = h('div', { class: 'jnscan-ring', 'aria-hidden': 'true' },
+      h('span', { class: 'jnscan-ring-num', dir: 'ltr' }, ok != null ? String(ok) : '…'));
+    const body = h('div', { class: 'jnscan-hero-body' },
+      h('p', { class: 'jnscan-kicker' }, scanState.running ? 'در حال اجرا' : 'نتیجه آماده'),
+      h('h3', { class: 'jnscan-hero-title' }, kind),
+      h('p', { class: 'jnscan-hero-line' },
+        count != null
+          ? `سالم ${fmtNum(ok)} از ${fmtNum(count)}`
+          : (rows.length ? `${fmtNum(rows.length)} ردیف زنده` : 'در انتظار اولین نتیجه…')),
+      h('div', { class: 'jnscan-chips' },
+        v.isp ? h('span', { class: 'jnscan-chip' }, v.isp) : null,
+        v.asn != null ? h('span', { class: 'jnscan-chip', dir: 'ltr' }, `AS${v.asn}`) : null,
+        v.public_ip ? h('span', { class: 'jnscan-chip', dir: 'ltr' }, v.public_ip) : null));
+    hero.append(ring, body);
+    box.append(hero);
+
+    const toolbar = h('div', { class: 'jnscan-toolbar' });
+    const btnTargets = h('button', { type: 'button', class: 'btn btn-sm btn-primary', disabled: !rows.length || undefined }, 'کپی هدف‌ها');
+    const btnTsv = h('button', { type: 'button', class: 'btn btn-sm', disabled: !rows.length || undefined }, 'کپی جدول');
+    const btnBest = h('button', { type: 'button', class: 'btn btn-sm', disabled: !rows.length || undefined }, 'کپی بهترین');
+    const btnJson = h('button', { type: 'button', class: 'btn btn-sm', disabled: !rows.length || undefined }, 'کپی JSON');
+    const btnLog = h('button', { type: 'button', class: 'btn btn-sm btn-ghost' },
+      scanState.showLog ? 'پنهان کردن لاگ' : 'نمایش لاگ خام');
+    btnTargets.addEventListener('click', () => {
+      scanCopy(rows.map(scanRowTarget).filter(Boolean).join('\n'), `${rows.length} هدف کپی شد.`);
+    });
+    btnTsv.addEventListener('click', () => scanCopy(scanRowsTsv(rows), 'جدول کپی شد.'));
+    btnBest.addEventListener('click', () => {
+      const best = scanRowTarget(rows[0]);
+      scanCopy(best, best ? 'بهترین هدف کپی شد.' : 'ردیفی نیست.');
+    });
+    btnJson.addEventListener('click', () => scanCopy(JSON.stringify(rows, null, 2), 'JSON کپی شد.'));
+    btnLog.addEventListener('click', () => {
+      scanState.showLog = !scanState.showLog;
+      renderScanResults();
+    });
+    toolbar.append(btnTargets, btnTsv, btnBest, btnJson, btnLog);
+    box.append(toolbar);
+
+    if (!rows.length) {
+      box.append(h('p', { class: 'muted jnscan-wait' },
+        scanState.running
+          ? 'اسکن شروع شده؛ به‌محض پیدا شدن هدف سالم، جدول پر می‌شود…'
+          : `اسکن تمام شد ولی ردیف سالمی نبود (سالم: ${ok ?? 0}).`));
+    } else {
+      const wrap = h('div', { class: 'jnscan-table-wrap' });
+      const table = h('table', { class: 'jnscan-pro' });
+      table.append(
+        h('colgroup', null,
+          h('col', { class: 'jnscan-col-rank' }),
+          h('col', { class: 'jnscan-col-target' }),
+          h('col', { class: 'jnscan-col-ms' }),
+          h('col', { class: 'jnscan-col-tls' }),
+          h('col', { class: 'jnscan-col-alpn' }),
+          h('col', { class: 'jnscan-col-score' }),
+          h('col', { class: 'jnscan-col-hint' }),
+          h('col', { class: 'jnscan-col-act' })),
+        h('thead', null, h('tr', null,
+          h('th', { class: 'jnscan-th-rank' }, '#'),
+          h('th', { class: 'jnscan-th-target' }, 'هدف'),
+          h('th', { class: 'jnscan-th-ms' }, 'تأخیر'),
+          h('th', { class: 'jnscan-th-tls' }, 'TLS'),
+          h('th', { class: 'jnscan-th-alpn' }, 'ALPN'),
+          h('th', { class: 'jnscan-th-score' }, 'امتیاز'),
+          h('th', { class: 'jnscan-th-hint' }, 'وضعیت'),
+          h('th', { class: 'jnscan-th-act' }, 'کپی'))));
+      const tbody = h('tbody');
+      rows.forEach((row, idx) => {
+        const target = scanRowTarget(row) || '—';
+        const ms = row.tls_ms != null ? `${Number(row.tls_ms).toFixed(1)} ms` : '—';
+        const tls = row.tls13 === true || row.tls === '1.3' ? '1.3' : (row.tls || '—');
+        const alpn = row.alpn || '—';
+        const score = row.score != null ? String(row.score) : '—';
+        const hint = row.reality_hint || row.hint || (row.tls13 || row.tls === '1.3' ? 'مناسب' : '');
+        const copyBtn = h('button', {
+          type: 'button',
+          class: 'btn btn-sm jnscan-row-copy',
+          title: 'کپی این هدف',
+        }, 'کپی');
+        copyBtn.addEventListener('click', () => scanCopy(target, 'کپی شد.'));
+        const tr = h('tr', { class: idx === 0 ? 'is-best' : null },
+          h('td', { class: 'jnscan-rank' }, String(idx + 1)),
+          h('td', { class: 'jnscan-target' },
+            h('code', { class: 'jnscan-code', dir: 'ltr' }, target)),
+          h('td', { class: 'jnscan-ms' },
+            h('span', { class: 'jnscan-pill jnscan-pill-ms', dir: 'ltr' }, ms)),
+          h('td', { class: 'jnscan-tls' },
+            h('span', { class: 'jnscan-pill' + (tls === '1.3' ? ' is-ok' : ''), dir: 'ltr' }, tls)),
+          h('td', { class: 'jnscan-alpn' },
+            h('span', { class: 'jnscan-mono', dir: 'ltr' }, alpn)),
+          h('td', { class: 'jnscan-score' },
+            h('span', { class: 'jnscan-mono', dir: 'ltr' }, score)),
+          h('td', { class: 'jnscan-hint-cell' },
+            hint ? h('span', { class: 'jnscan-hint' }, hint) : h('span', { class: 'muted' }, '—')),
+          h('td', { class: 'jnscan-act' }, copyBtn));
+        tbody.append(tr);
+      });
+      table.append(tbody);
+      wrap.append(table);
+      box.append(wrap);
+    }
+
+    if (r && Array.isArray(r.iran_isp) && r.iran_isp.length) {
+      const ispBox = h('div', { class: 'jnscan-isp' },
+        h('div', { class: 'jnscan-isp-head' },
+          h('h4', null, 'سنجش نودهای ایران'),
+          h('button', {
+            type: 'button',
+            class: 'btn btn-sm',
+            onClick: () => scanCopy(JSON.stringify(r.iran_isp, null, 2), 'نتیجه نودهای ایران کپی شد.'),
+          }, 'کپی ISP')));
+      const ispWrap = h('div', { class: 'jnscan-table-wrap' });
+      const ispTable = h('table', { class: 'jnscan-pro jnscan-pro-compact' });
+      ispTable.append(h('thead', null, h('tr', null,
+        h('th', null, 'هدف'), h('th', null, 'نودها'))));
+      const ispBody = h('tbody');
+      for (const item of r.iran_isp) {
+        const isp = item.iran_isp || {};
+        const chips = Object.keys(isp).map((lab) => {
+          const info = isp[lab] || {};
+          const ok = info.ms != null;
+          return h('span', {
+            class: 'jnscan-pill' + (ok ? ' is-ok' : ' is-down'),
+            title: lab,
+            dir: 'ltr',
+          }, `${lab.split('/').pop() || lab}: ${ok ? `${info.ms}ms` : 'قطع'}`);
+        });
+        ispBody.append(h('tr', null,
+          h('td', { dir: 'ltr' }, h('code', { class: 'jnscan-code' }, item.target || '—')),
+          h('td', { class: 'jnscan-isp-summary' },
+            chips.length ? h('div', { class: 'jnscan-chips' }, ...chips) : h('span', { class: 'muted' }, '—'))));
+      }
+      ispTable.append(ispBody);
+      ispWrap.append(ispTable);
+      ispBox.append(ispWrap);
+      box.append(ispBox);
+    }
+
+    if (scanState.showLog && scanState.logLines.length) {
+      const logBox = h('details', { class: 'jnscan-logbox', open: true },
+        h('summary', null, `لاگ خام (${fmtNum(Math.min(scanState.logLines.length, 200))} خط)`),
+        h('pre', { class: 'jnscan-log', dir: 'ltr' }, scanState.logLines.slice(-200).join('\n')));
+      box.append(logBox);
+    }
+  }
+
+  function renderScanHistory() {
+    const box = $('#scan-history');
+    if (!box) return;
+    if (scanState.historyLoading && !scanState.history.length) {
+      box.replaceChildren(loadingState('در حال بارگذاری تاریخچه…'));
+      return;
+    }
+    const items = scanState.history || [];
+    if (!items.length) {
+      box.replaceChildren(h('div', { class: 'jnscan-empty jnscan-history-empty' },
+        h('p', { class: 'jnscan-empty-title' }, 'تاریخچه‌ای نیست'),
+        h('p', { class: 'muted' }, 'بعد از اولین اسکن، اینجا با تاریخ و ساعت ثبت می‌شود.')));
+      return;
+    }
+    const wrap = h('div', { class: 'jnscan-table-wrap' });
+    const table = h('table', { class: 'jnscan-pro jnscan-history-table' });
+    table.append(
+      h('colgroup', null,
+        h('col', { class: 'jnscan-hcol-when' }),
+        h('col', { class: 'jnscan-hcol-title' }),
+        h('col', { class: 'jnscan-hcol-server' }),
+        h('col', { class: 'jnscan-hcol-status' }),
+        h('col', { class: 'jnscan-hcol-act' })),
+      h('thead', null, h('tr', null,
+        h('th', { class: 'jnscan-th-when' }, 'تاریخ و ساعت'),
+        h('th', { class: 'jnscan-th-title' }, 'اسکن'),
+        h('th', { class: 'jnscan-th-server' }, 'سرور'),
+        h('th', { class: 'jnscan-th-status' }, 'وضعیت'),
+        h('th', { class: 'jnscan-th-act' }, 'عملیات'))));
+    const tbody = h('tbody');
+    for (const item of items) {
+      const [bKind, bLabel] = JOB_STATUS[item.status] || ['muted', item.status || 'نامشخص'];
+      const active = scanState.jobId != null && Number(scanState.jobId) === Number(item.id);
+      const openBtn = h('button', { type: 'button', class: 'btn btn-sm' + (active ? ' btn-primary' : '') },
+        active ? 'در حال نمایش' : 'نمایش نتیجه');
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void openScanHistoryItem(item.id);
+      });
+      const monBtn = h('button', { type: 'button', class: 'btn btn-sm btn-ghost' }, 'مانیتور');
+      monBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openJobView(item.id);
+      });
+      const tr = h('tr', {
+        class: 'jnscan-history-row' + (active ? ' is-active' : ''),
+        role: 'button',
+        tabindex: '0',
+        onclick: () => { void openScanHistoryItem(item.id); },
+        onkeydown: (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            void openScanHistoryItem(item.id);
+          }
+        },
+      },
+        h('td', { class: 'jnscan-when' }, fmtStamp(item.created_at)),
+        h('td', { class: 'jnscan-htitle' }, item.title || 'اسکنر'),
+        h('td', { class: 'jnscan-hserver' }, item.server_name || '—'),
+        h('td', { class: 'jnscan-hstatus' }, badge(bKind, bLabel, isActive(item.status))),
+        h('td', { class: 'jnscan-act' },
+          h('div', { class: 'jnscan-history-acts' }, openBtn, monBtn)));
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    wrap.append(table);
+    box.replaceChildren(wrap);
+  }
+
+  async function loadScanHistory(force) {
+    if (!state.loggedIn) return;
+    if (scanState.historyLoading && !force) return;
+    scanState.historyLoading = true;
+    renderScanHistory();
+    try {
+      const r = await api('GET', '/api/scan/history?limit=40');
+      scanState.history = (r && Array.isArray(r.items)) ? r.items : [];
+    } catch (err) {
+      if (!scanState.history.length) {
+        const box = $('#scan-history');
+        if (box) box.replaceChildren(h('p', { class: 'muted' }, 'بارگذاری تاریخچه ناموفق بود.'));
+      }
+      toast(err.message || 'تاریخچه اسکن لود نشد.', 'error');
+    } finally {
+      scanState.historyLoading = false;
+      renderScanHistory();
+    }
+  }
+
+  async function openScanHistoryItem(jobId) {
+    if (!jobId) return;
+    if (scanState.running && Number(scanState.jobId) !== Number(jobId)) {
+      toast('صبر کنید تا اسکن جاری تمام شود.', 'warn');
+      return;
+    }
+    try {
+      const job = await api('GET', `/api/jobs/${enc(jobId)}`);
+      if (!job) throw Object.assign(new Error('کار پیدا نشد.'), { status: 404 });
+      if (!scanState.running || Number(scanState.jobId) !== Number(jobId)) {
+        stopScanStream();
+        scanState.running = isActive(job.status);
+        scanState.jobId = job.id;
+        scanState.result = null;
+        scanState.liveTop = [];
+        scanState.logLines = [];
+        scanState.showLog = false;
+        ingestScanLog(job.log || '', true);
+        updateScanForm();
+        renderScanResults();
+        renderScanHistory();
+        const openBtn = $('#scan-open-job');
+        if (openBtn) {
+          openBtn.hidden = false;
+          openBtn.onclick = () => openJobView(job.id);
+        }
+        if (isActive(job.status) && !scanState.es) {
+          const es = new EventSource(withBase(`/api/jobs/${enc(job.id)}/stream`));
+          scanState.es = es;
+          let finished = false;
+          const finish = (status) => {
+            if (finished) return;
+            finished = true;
+            scanState.running = false;
+            updateScanForm();
+            renderScanResults();
+            stopScanStream();
+            if (status) notifyDone(job.id, status, 'اسکنر');
+            load('jobs', true);
+            void loadScanHistory(true);
+          };
+          es.addEventListener('snapshot', (ev) => {
+            const job2 = parseData(ev);
+            if (!job2) return;
+            ingestScanLog(job2.log || '', true);
+            if (job2.status === 'ok' || job2.status === 'failed') finish(job2.status);
+          });
+          es.addEventListener('log', (ev) => {
+            const d = parseData(ev);
+            if (d && d.line) ingestScanLog(d.line, false);
+          });
+          es.addEventListener('done', (ev) => {
+            const d = parseData(ev);
+            finish((d && d.status) || 'ok');
+          });
+          es.onerror = () => {
+            if (!finished) finish(null);
+          };
+        }
+        toast('نتیجه اسکن بارگذاری شد.', 'success');
+        const results = $('#scan-results');
+        if (results) results.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    } catch (err) {
+      toast(err.message || 'باز کردن تاریخچه ناموفق بود.', 'error');
+    }
+  }
+
+  function ingestScanLog(text, replace) {
+    if (!text) return;
+    if (replace) {
+      scanState.logLines = [];
+    }
+    const lines = String(text).split(/\r?\n/);
+    for (const line of lines) {
+      if (!line) continue;
+      const cleaned = line.includes('\r') ? line.split('\r').pop() : line;
+      if (!cleaned) continue;
+      scanState.logLines.push(cleaned);
+      if (cleaned.startsWith('JN_SCAN:')) {
+        try {
+          const payload = JSON.parse(cleaned.slice(8));
+          if (payload && payload.type === 'result') {
+            scanState.result = payload;
+            if (Array.isArray(payload.top) && payload.top.length) {
+              scanState.liveTop = payload.top.slice();
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    if (scanState.logLines.length > 800) scanState.logLines = scanState.logLines.slice(-600);
+    if (!(scanState.result && Array.isArray(scanState.result.top) && scanState.result.top.length)) {
+      rebuildLiveTopFromLog();
+    }
+    renderScanResults();
+  }
+
+  async function onScanSubmit(e) {
+    e.preventDefault();
+    const errBox = $('#scan-err');
+    hideErr(errBox);
+    const serverId = Number($('#scan-server').value);
+    if (!serverId) return showErr(errBox, 'سرور را انتخاب کنید.');
+    const kind = scanState.kind || 'sni';
+    const workers = Number($('#scan-workers').value) || 120;
+    const ispTop = Number($('#scan-isp-top').value) || 5;
+    let limit = Number($('#scan-limit').value);
+    if (!Number.isFinite(limit) || limit < 0) limit = 800;
+    if (kind === 'sni') limit = 0;
+    stopScanStream();
+    scanState.running = true;
+    scanState.result = null;
+    scanState.liveTop = [];
+    scanState.logLines = [];
+    scanState.showLog = false;
+    scanState.jobId = null;
+    updateScanForm();
+    renderScanResults();
+    const openBtn = $('#scan-open-job');
+    if (openBtn) openBtn.hidden = true;
+    try {
+      const body = {
+        server_id: serverId,
+        kind,
+        workers,
+        iran_isp: $('#scan-iran-isp').checked,
+        isp_top: ispTop,
+        top: 20,
+      };
+      if (kind !== 'sni') body.limit = limit || 800;
+      const r = await api('POST', '/api/scan', body);
+      if (!r || r.job_id == null) throw Object.assign(new Error('شروع اسکن ناموفق بود.'), { status: 500 });
+      scanState.jobId = r.job_id;
+      trackJob(r.job_id);
+      if (openBtn) {
+        openBtn.hidden = false;
+        openBtn.onclick = () => openJobView(r.job_id);
+      }
+      toast('اسکنر شروع شد.', 'success');
+      const job = await api('GET', `/api/jobs/${enc(r.job_id)}`);
+      ingestScanLog(job && job.log, true);
+      void loadScanHistory(true);
+      if (job && !isActive(job.status)) {
+        scanState.running = false;
+        updateScanForm();
+        renderScanResults();
+        load('jobs', true);
+        return;
+      }
+      const es = new EventSource(withBase(`/api/jobs/${enc(r.job_id)}/stream`));
+      scanState.es = es;
+      let finished = false;
+      const finish = (status) => {
+        if (finished) return;
+        finished = true;
+        scanState.running = false;
+        updateScanForm();
+        renderScanResults();
+        stopScanStream();
+        if (status) notifyDone(r.job_id, status, 'اسکنر');
+        load('jobs', true);
+        void loadScanHistory(true);
+      };
+      es.addEventListener('snapshot', (ev) => {
+        const job2 = parseData(ev);
+        if (!job2) return;
+        ingestScanLog(job2.log || '', true);
+        if (job2.status === 'ok' || job2.status === 'failed') finish(job2.status);
+      });
+      es.addEventListener('log', (ev) => {
+        const d = parseData(ev);
+        if (d && d.line) ingestScanLog(d.line, false);
+      });
+      es.addEventListener('done', (ev) => {
+        const d = parseData(ev);
+        finish((d && d.status) || 'ok');
+      });
+      es.onerror = async () => {
+        try {
+          const j = await api('GET', `/api/jobs/${enc(r.job_id)}`);
+          ingestScanLog(j && j.log, true);
+          if (j && !isActive(j.status)) finish(j.status);
+        } catch { /* ignore */ }
+      };
+      load('jobs', true);
+    } catch (err) {
+      scanState.running = false;
+      updateScanForm();
       if (err && err.status !== 401) showErr(errBox, err.message || NET_ERR);
     }
   }
@@ -6725,6 +7348,12 @@
       updateCompareForm();
       if (!$('#compare-results').childElementCount) renderCompareResults();
     }
+    if (state.loggedIn && name === 'scanners') {
+      updateScanForm();
+      void load('servers', true).then(() => updateScanForm());
+      void loadScanHistory();
+      if (!$('#scan-results').childElementCount) renderScanResults();
+    }
     if (state.loggedIn && name === 'outbounds') {
       load('tunnels', true);
       renderOutbounds();
@@ -7766,6 +8395,12 @@
         });
       }
       if (exportBtn) exportBtn.addEventListener('click', exportCompareJson);
+    }
+    const scanForm = $('#scan-form');
+    if (scanForm) scanForm.addEventListener('submit', onScanSubmit);
+    const scanHistBtn = $('#scan-history-refresh');
+    if (scanHistBtn) {
+      scanHistBtn.addEventListener('click', (e) => act(e.currentTarget, () => loadScanHistory(true), 'در حال بروزرسانی…'));
     }
     $('#relay-form').addEventListener('submit', onCreateRelay);
     for (const btn of document.querySelectorAll('.vpn-panel-card')) {

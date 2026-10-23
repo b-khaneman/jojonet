@@ -1537,6 +1537,164 @@ class Orchestrator:
                 await job.log("----------------------")
                 await job.ok(3, f"گواهی روی {row['name']} نصب شد")
 
+    async def ensure_jojonet_scan(self, job: Job, sess: RemoteSession, name: str) -> None:
+        """Install / refresh /usr/local/bin/jojonet-scan from the panel bundle."""
+        local = Path(self.settings.bundle_dir) / "jojonet-scan"
+        if not local.is_file():
+            raise StepFailed(f"فایل jojonet-scan در بسته پنل ({self.settings.bundle_dir}) نیست")
+        data = local.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        script = (
+            "set -euo pipefail\n"
+            "python3 -c "
+            "\"import base64,sys,pathlib; "
+            "pathlib.Path('/usr/local/bin/jojonet-scan').write_bytes(base64.b64decode(sys.stdin.read())); "
+            f"print('jojonet-scan', {len(data)})\" "
+            "&& chmod 755 /usr/local/bin/jojonet-scan "
+            "&& mkdir -p /usr/local/share/jojonet "
+            "&& cp -f /usr/local/bin/jojonet-scan /usr/local/share/jojonet/jojonet-scan "
+            "&& python3 /usr/local/bin/jojonet-scan --version"
+        )
+        res = await sess.run_root(script, input_data=b64, timeout=120, on_line=lambda l: job.log(f"[{name}] {l}"))
+        if not res.ok:
+            raise StepFailed(f"نصب jojonet-scan روی {name} ناموفق بود (کد {res.rc})")
+
+    async def job_reality_scan(
+        self,
+        job: Job,
+        server_id: int,
+        kind: str,
+        *,
+        workers: int = 120,
+        limit: int | None = 800,
+        iran_isp: bool = True,
+        isp_top: int = 5,
+        top: int = 20,
+    ) -> None:
+        """Run JojoSNI / JojoCF / JojoFastly on one server; stream logs + JN_SCAN summary."""
+        meta = SCAN_KINDS.get(kind)
+        if meta is None:
+            raise StepFailed("نوع اسکنر نامعتبر است")
+        row = self.server(server_id)
+        name = row["name"]
+        workers = max(1, min(int(workers or 120), 800))
+        isp_top = max(1, min(int(isp_top or 5), 30))
+        top = max(5, min(int(top or 20), 50))
+        lim = None if limit is None or int(limit) <= 0 else max(50, min(int(limit), 50000))
+
+        await job.start(0)
+        async with await self.open(job, row) as sess:
+            await job.ok(0)
+            await job.start(1)
+            await self.ensure_jojonet_scan(job, sess, name)
+            await job.ok(1)
+
+            stamp = utcnow().replace(":", "").replace("-", "").replace("T", "")[:14]
+            if kind == "sni":
+                out = f"/tmp/jojonet-panel-sni-{stamp}.json"
+                summary_path = out
+                parts = [
+                    "python3 -u /usr/local/bin/jojonet-scan sni",
+                    f"--workers {workers}",
+                    f"--top {top}",
+                    f"--out {shlex.quote(out)}",
+                ]
+            else:
+                out = f"/tmp/jojonet-panel-{kind}-{stamp}.jsonl"
+                # Must match jojonet-scan: Path(out).with_suffix(".summary.json")
+                summary_path = Path(out).with_suffix(".summary.json").as_posix()
+                parts = [
+                    f"python3 -u /usr/local/bin/jojonet-scan {kind}",
+                    f"--workers {workers}",
+                    f"--top {top}",
+                    f"--out {shlex.quote(out)}",
+                    "--resume",
+                ]
+                if lim is not None:
+                    parts.append(f"--limit {lim}")
+            if iran_isp:
+                parts.append("--iran-isp")
+                parts.append(f"--isp-top {isp_top}")
+            cmd = " ".join(parts)
+
+            async def _scan_line(line: str) -> None:
+                # Progress meters use \\r; keep last segment only and skip noise.
+                text = (line or "").replace("\r", "\n").strip()
+                if not text:
+                    return
+                last = text.split("\n")[-1].strip()
+                if not last:
+                    return
+                if last.startswith("\r") or "scanned=" in last and last.endswith("   "):
+                    last = last[-180:]
+                await job.log(last if len(last) < 500 else last[:500])
+
+            await job.start(2)
+            await job.log(SCAN_BEGIN)
+            await job.log(
+                "JN_SCAN:"
+                + json.dumps(
+                    {"type": "start", "kind": kind, "label": meta["label"], "server": name},
+                    ensure_ascii=False,
+                )
+            )
+            await job.log(f"[{name}] {cmd}")
+            timeout = 900 if kind == "sni" else 1200
+            res = await sess.run_root(cmd, timeout=timeout, on_line=_scan_line)
+            if not res.ok:
+                await job.log(SCAN_END)
+                raise StepFailed(f"اسکن {meta['label']} ناموفق بود (کد {res.rc})")
+            await job.ok(2)
+
+            await job.start(3)
+            # CDN summary uses "top"; SNI uses "results".
+            pull_script = f"""
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path({summary_path!r})
+d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {{}}
+rows = d.get("results") or d.get("top") or d.get("best") or []
+top = []
+for r in rows[:20]:
+    if not isinstance(r, dict):
+        continue
+    item = {{}}
+    for k in ("target", "ip", "tls_ms", "score", "alpn", "tls13", "reality_hint", "extra"):
+        if k in r and r[k] is not None:
+            item[k] = r[k]
+    if "score" not in item and isinstance(r.get("extra"), dict):
+        item["score"] = r["extra"].get("score")
+        item["reality_hint"] = r["extra"].get("reality_hint")
+    if "target" not in item and item.get("ip"):
+        item["target"] = item["ip"]
+    top.append(item)
+out = {{
+    "type": "result",
+    "kind": d.get("scanner") or {meta["label"]!r},
+    "ok": d.get("ok"),
+    "count": d.get("count") or d.get("scanned"),
+    "vantage": d.get("vantage") or {{}},
+    "path": str(p),
+    "top": top,
+    "iran_isp": d.get("iran_isp") or [],
+}}
+print("JN_SCAN:" + json.dumps(out, ensure_ascii=False))
+PY
+"""
+            pull = await sess.run_root(pull_script, timeout=60)
+            got_result = False
+            for line in (pull.stdout or "").splitlines():
+                if line.startswith("JN_SCAN:"):
+                    got_result = True
+                    await job.log(line)
+            if not pull.ok:
+                await job.log(f"[{name}] خواندن خلاصه ناموفق بود (کد {pull.rc})")
+            elif not got_result:
+                await job.log(f"[{name}] فایل خلاصه خالی/ناموجود بود: {summary_path}")
+            await job.log(f"[{name}] خروجی: {summary_path}")
+            await job.log(SCAN_END)
+            await job.ok(3, f"{meta['label']} تمام شد")
+
     async def job_compare(
         self,
         job: Job,
@@ -1924,6 +2082,19 @@ COMPARE_STEPS = [
     "سنجش حالت‌به‌حالت",
     "جمع‌بندی و پیشنهاد",
 ]
+SCAN_STEPS = [
+    "اتصال SSH",
+    "آماده‌سازی jojonet-scan",
+    "اجرای اسکنر",
+    "خواندن نتیجه",
+]
+SCAN_KINDS = {
+    "sni": {"id": "sni", "label": "JojoSNI", "desc": "اسکن SNI مناسب Reality"},
+    "cf": {"id": "cf", "label": "JojoCF", "desc": "IP تمیز Cloudflare (رنج رسمی)"},
+    "fastly": {"id": "fastly", "label": "JojoFastly", "desc": "IP تمیز Fastly (رنج رسمی)"},
+}
+SCAN_BEGIN = "===== JOJONET_SCAN ====="
+SCAN_END = "===== END_JOJONET_SCAN ====="
 OS_UPDATE_STEPS = ["اتصال SSH", "آپدیت بسته‌های سیستم"]
 ENABLE_BOOT_STEPS = ["اتصال SSH", "فعال‌سازی ماندگاری بعد از ریبوت"]
 REMOTE_DELETE_STEPS = ["حذف از سرور"]

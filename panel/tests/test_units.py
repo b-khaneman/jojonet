@@ -84,6 +84,22 @@ def test_compare_parsers_and_catalog():
     assert orch.COMPARE_STEPS and len(orch.COMPARE_STEPS) >= 3
 
 
+def test_scan_kinds_and_summary_path():
+    from pathlib import Path
+
+    assert set(orch.SCAN_KINDS) == {"sni", "cf", "fastly"}
+    assert len(orch.SCAN_STEPS) == 4
+    for kind in ("cf", "fastly"):
+        out = f"/tmp/jojonet-panel-{kind}-20261023120000.jsonl"
+        summary = Path(out).with_suffix(".summary.json").as_posix()
+        assert summary.endswith(".summary.json")
+        assert summary.endswith(f"jojonet-panel-{kind}-20261023120000.summary.json")
+    # CDN JSON uses "top"; pull script must accept it
+    sample = {"scanner": "JojoCF", "ok": 2, "scanned": 10, "top": [{"ip": "1.1.1.1", "tls_ms": 12.3}]}
+    rows = sample.get("results") or sample.get("top") or sample.get("best") or []
+    assert rows[0]["ip"] == "1.1.1.1"
+
+
 def test_vault_roundtrip(tmp_path):
     v = Vault(tmp_path / "vault.key")
     token = v.encrypt("hello")

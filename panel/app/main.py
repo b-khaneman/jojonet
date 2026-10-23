@@ -40,6 +40,8 @@ from .orchestrator import (
     OS_UPDATE_STEPS,
     PING_TEST_STEPS,
     REMOTE_DELETE_STEPS,
+    SCAN_KINDS,
+    SCAN_STEPS,
     SERVER_SSL_STEPS,
     VPN_PANEL_LABELS,
     VPN_PANEL_STEPS,
@@ -609,6 +611,16 @@ class CompareIn(BaseModel):
         if not out:
             raise ValueError("هیچ حالت معتبری برای مقایسه انتخاب نشده است")
         return out
+
+
+class ScanIn(BaseModel):
+    server_id: int
+    kind: Literal["sni", "cf", "fastly"]
+    workers: int = Field(default=120, ge=1, le=800)
+    limit: int | None = Field(default=800, ge=0, le=50000)
+    iran_isp: bool = True
+    isp_top: int = Field(default=5, ge=1, le=30)
+    top: int = Field(default=20, ge=5, le=50)
 
 
 class SpoofCheckIn(BaseModel):
@@ -1952,6 +1964,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "jojonet_version": bundle_version(settings.bundle_dir),
             "modes": [{"id": k, "label": v["label"], "first": v["first"], "desc": v["desc"]} for k, v in MODES.items()],
             "compare_modes": compare_mod.compare_public_catalog(),
+            "scanners": [{"id": k, "label": v["label"], "desc": v["desc"]} for k, v in SCAN_KINDS.items()],
             "xray_nets": list(XRAY_NETS),
             "dnstt_modes": list(DNSTT_MODES),
             "relay_engines": list(RELAY_ENGINES),
@@ -1986,6 +1999,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             COMPARE_STEPS,
             lambda job: orch.job_compare(job, data.iran_id, data.kharej_id, modes),
             server_id=data.iran_id,
+        )
+        return {"job_id": job_id}
+
+    @app.get("/api/scan/kinds")
+    async def scan_kinds(_: dict = Depends(require_auth)) -> dict[str, Any]:
+        return {"kinds": [{"id": k, "label": v["label"], "desc": v["desc"]} for k, v in SCAN_KINDS.items()]}
+
+    @app.post("/api/scan")
+    async def start_scan(data: ScanIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        server = get_server(data.server_id, sess)
+        meta = SCAN_KINDS[data.kind]
+        lim = data.limit
+        if data.kind == "sni":
+            lim = None
+        job_id = create_job(
+            sess,
+            "reality_scan",
+            f"اسکنر {meta['label']}: {server['name']}",
+            SCAN_STEPS,
+            lambda job: orch.job_reality_scan(
+                job,
+                data.server_id,
+                data.kind,
+                workers=data.workers,
+                limit=lim,
+                iran_isp=data.iran_isp,
+                isp_top=data.isp_top,
+                top=data.top,
+            ),
+            server_id=data.server_id,
         )
         return {"job_id": job_id}
 
@@ -2555,6 +2598,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return attach_owner(out, row, owners)
 
     # ---------- jobs ----------
+    @app.get("/api/scan/history")
+    async def scan_history(limit: int = 40, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        lim = max(1, min(int(limit or 40), 100))
+        oid = None if is_owner(sess) else sess["admin_id"]
+        owners = admin_names()
+        names = server_names(sess)
+        rows = []
+        for r in jobs.list(lim, owner_id=oid, kind="reality_scan"):
+            out = job_out(r, owners)
+            sid = r.get("server_id")
+            out["server_name"] = names.get(sid, "?") if sid is not None else "—"
+            rows.append(out)
+        return {"items": rows}
+
     @app.get("/api/jobs")
     async def list_jobs(limit: int = 50, sess: dict = Depends(require_auth)) -> list[dict[str, Any]]:
         owners = admin_names()

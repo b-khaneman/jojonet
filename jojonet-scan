@@ -20,12 +20,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 TOOL = "jojonet-scan"
+CHECK_HOST = "https://check-host.net"
 
 CF_IPV4_URL = "https://www.cloudflare.com/ips-v4"
 CF_IPV6_URL = "https://www.cloudflare.com/ips-v6"
 FASTLY_URL = "https://api.fastly.com/public-ip-list"
+# Official Fastly IPv4 prefixes (fallback when api.fastly.com is slow/blocked from Iran).
+FASTLY_FALLBACK_V4 = [
+    "23.235.32.0/20",
+    "43.249.72.0/22",
+    "90.98.0.0/17",
+    "90.98.128.0/18",
+    "103.244.50.0/24",
+    "103.245.222.0/23",
+    "103.245.224.0/24",
+    "104.156.80.0/20",
+    "140.248.64.0/18",
+    "140.248.128.0/17",
+    "146.75.0.0/17",
+    "151.101.0.0/16",
+    "157.52.64.0/18",
+    "167.82.0.0/17",
+    "167.82.128.0/20",
+    "167.82.160.0/20",
+    "167.82.224.0/20",
+    "172.111.64.0/18",
+    "185.31.16.0/22",
+    "199.27.72.0/21",
+    "199.232.0.0/16",
+]
 
 # Built-in Reality-oriented SNI candidates (public sites; TLS1.3 / H2 friendly).
 DEFAULT_SNI_LIST = [
@@ -78,10 +103,11 @@ DEFAULT_SNI_LIST = [
     "updates.cdn-apple.com",
 ]
 
-# ASN → Persian label for Iranian access networks (local vantage point).
+# ASN → Persian label for Iranian access / hosting networks (local + check-host).
 IRAN_ASN: dict[int, str] = {
     44244: "همراه‌اول (MCI)",
     197207: "ایرانسل (MTN)",
+    49100: "ایرانسل (MTN)",
     50810: "شاتل",
     56402: "آسیاتک",
     12880: "مخابرات ایران (ITC)",
@@ -93,14 +119,24 @@ IRAN_ASN: dict[int, str] = {
     39501: "پارس‌آنلاین",
     16322: "پارس‌آنلاین",
     42337: "رسپینا",
-    49100: "ایرانسل",
     49666: "تلکام",
     60631: "پارس‌ارتباطات",
     24631: "آریان‌تلیا",
     39074: "های‌وب",
     44889: "مبین‌نت",
     51074: "فن‌آوا",
+    # check-host.net Iran vantage ASNs (city probes)
+    47430: "ایران/تهران",
+    209279: "ایران/اصفهان",
+    213953: "ایران/شیراز",
+    212077: "ایران/شیراز",
+    214431: "ایران/تهران",
+    206596: "ایران/قم",
+    213727: "ایران/تهران",
 }
+
+# Prefer these labels when sorting Iran-ISP columns.
+_PRIORITY_ISP = ("همراه", "ایرانسل", "رایتل", "شاتل", "آسیاتک", "مخابرات")
 
 
 @dataclass
@@ -230,8 +266,26 @@ def fetch_cloudflare_cidrs(*, ipv6: bool = False) -> list[ipaddress._BaseNetwork
 
 
 def fetch_fastly_cidrs(*, ipv6: bool = False) -> list[ipaddress._BaseNetwork]:
-    raw = json.loads(_http_get(FASTLY_URL))
     nets: list[ipaddress._BaseNetwork] = []
+    raw: dict[str, Any] | None = None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw = json.loads(_http_get(FASTLY_URL, timeout=45.0))
+            break
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            last_err = exc
+            time.sleep(1.5 * (attempt + 1))
+    if raw is None:
+        print(f"  [!] Fastly API ناموفق ({last_err}) — استفاده از فهرست پشتیبان رسمی.", flush=True)
+        for cidr in FASTLY_FALLBACK_V4:
+            try:
+                nets.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                continue
+        if not nets:
+            raise RuntimeError(f"لیست رنج Fastly خالی بود: {last_err}")
+        return nets
     keys = ["addresses"]
     if ipv6:
         keys.append("ipv6_addresses")
@@ -313,9 +367,15 @@ async def probe_tls(
     try:
         # Resolve if hostname
         if not _is_ip(host):
-            infos = await asyncio.get_running_loop().getaddrinfo(
-                host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+            loop = asyncio.get_running_loop()
+            # Prefer IPv4 — IPv6 on many Iran networks is broken / blackholed.
+            infos = await loop.getaddrinfo(
+                host, port, family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
             )
+            if not infos:
+                infos = await loop.getaddrinfo(
+                    host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+                )
             if not infos:
                 res.error = "resolve-failed"
                 return res
@@ -513,6 +573,255 @@ def result_dict(r: ProbeResult, vantage: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _http_get_json(url: str, timeout: float = 30.0) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": f"JojoNet-Scan/{VERSION}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def fetch_iran_probe_nodes() -> list[dict[str, Any]]:
+    """Iran check-host nodes with ASN → Persian ISP label when known."""
+    data = _http_get_json(f"{CHECK_HOST}/nodes/hosts")
+    nodes = data.get("nodes") or data
+    out: list[dict[str, Any]] = []
+    for name, meta in nodes.items():
+        if not isinstance(meta, dict):
+            continue
+        loc = meta.get("location") or []
+        if not loc or loc[0] != "ir":
+            continue
+        asn_raw = str(meta.get("asn") or "")
+        m = re.search(r"(\d+)", asn_raw)
+        asn = int(m.group(1)) if m else None
+        city = loc[2] if len(loc) > 2 else (loc[1] if len(loc) > 1 else "Iran")
+        label = IRAN_ASN.get(asn or -1) or f"ایران/{city}"
+        out.append(
+            {
+                "node": name,
+                "asn": asn,
+                "ip": meta.get("ip") or "",
+                "city": city,
+                "label": label,
+            }
+        )
+    out.sort(key=lambda x: x["node"])
+    return out
+
+
+def check_host_tcp(host: str, port: int, nodes: list[dict[str, Any]], *, wait_s: float = 45.0) -> dict[str, Any]:
+    """TCP :port check from selected Iran nodes. Returns {label: ms|None, ...}."""
+    if not nodes:
+        return {}
+    q = [f"host={host}:{port}"]
+    for n in nodes:
+        q.append(f"node={n['node']}")
+    url = f"{CHECK_HOST}/check-tcp?" + "&".join(q)
+    try:
+        started = _http_get_json(url, timeout=25)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        return {"_error": str(exc)}
+    if isinstance(started, dict) and started.get("error"):
+        return {"_error": str(started.get("error")), "raw": started}
+    req_id = started.get("request_id") if isinstance(started, dict) else None
+    if not req_id:
+        return {"_error": "no-request-id", "raw": started}
+    deadline = time.time() + wait_s
+    payload: dict[str, Any] = {}
+    best_done = 0
+    while time.time() < deadline:
+        time.sleep(2.0)
+        try:
+            payload = _http_get_json(f"{CHECK_HOST}/check-result/{req_id}", timeout=25)
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(payload, dict) or not payload:
+            continue
+        done = sum(1 for v in payload.values() if v is not None)
+        if done > best_done:
+            best_done = done
+        # Finish early when every node answered, or majority answered and stalled
+        if done >= len(payload):
+            break
+        if done >= max(1, (len(payload) + 1) // 2) and time.time() + 8.0 >= deadline:
+            break
+    by_label: dict[str, Any] = {}
+    node_map = {n["node"]: n for n in nodes}
+    for node_name, rows in (payload or {}).items():
+        meta = node_map.get(node_name) or {"label": node_name, "city": "?"}
+        label = str(meta.get("label") or node_name)
+        key = label
+        if key in by_label:
+            key = f"{label}/{meta.get('city')}"
+        ms = None
+        err = None
+        if isinstance(rows, list) and rows:
+            row0 = rows[0] or {}
+            if isinstance(row0, dict):
+                if "time" in row0:
+                    try:
+                        ms = round(float(row0["time"]) * 1000.0, 1)
+                    except (TypeError, ValueError):
+                        ms = None
+                err = row0.get("error")
+        elif rows is None:
+            err = "timeout"
+        by_label[key] = {"ms": ms, "error": err, "node": node_name, "city": meta.get("city"), "asn": meta.get("asn")}
+    return by_label
+
+
+def _pick_iran_nodes(nodes: list[dict[str, Any]], *, limit: int = 4) -> list[dict[str, Any]]:
+    """Prefer diverse Iranian cities; keep list small to avoid check-host rate limits."""
+    if len(nodes) <= limit:
+        return nodes
+    prefer_cities = ("Tehran", "Shiraz", "Isfahan", "Qom", "Tabriz", "Mashhad")
+    picked: list[dict[str, Any]] = []
+    seen_city: set[str] = set()
+    for city in prefer_cities:
+        for n in nodes:
+            if n.get("city") == city and city not in seen_city:
+                picked.append(n)
+                seen_city.add(city)
+                break
+        if len(picked) >= limit:
+            return picked[:limit]
+    for n in nodes:
+        if n in picked:
+            continue
+        picked.append(n)
+        if len(picked) >= limit:
+            break
+    return picked[:limit]
+
+
+def enrich_iran_isp(targets: list[str], *, port: int, top: int) -> list[dict[str, Any]]:
+    """For each target, measure TCP latency from Iran probe nodes (multi-city)."""
+    try:
+        all_nodes = fetch_iran_probe_nodes()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [!] خواندن نودهای ایران ناموفق: {exc}", file=sys.stderr)
+        return []
+    nodes = _pick_iran_nodes(all_nodes, limit=4)
+    if not nodes:
+        print("  [!] نود ایران برای سنجش در دسترس نبود.", file=sys.stderr)
+        return []
+    n_targets = min(top, len(targets))
+    print(f"  سنجش از داخل ایران روی {n_targets} هدف / {len(nodes)} نود شهری…", flush=True)
+    for n in nodes:
+        print(f"    · {n['label']} — {n['city']} (AS{n['asn'] or '?'}, {n['node']})")
+    rows: list[dict[str, Any]] = []
+    for i, target in enumerate(targets[:top], 1):
+        print(f"  [{i}/{n_targets}] {target} …", flush=True)
+        isp = check_host_tcp(target, port, nodes)
+        if isp.get("_error"):
+            err = str(isp.get("_error"))
+            print(f"     [!] {err}")
+            if "limit" in err.lower() or (isinstance(isp.get("raw"), dict) and isp["raw"].get("error") == "limit_exceeded"):
+                print("     محدودیت rate check-host — ادامه با نتایج قبلی.")
+                break
+            # also detect limit in raw start response stored oddly
+        if isinstance(isp, dict) and not any(not k.startswith("_") for k in isp):
+            # empty / failed start
+            raw = isp.get("raw") if isinstance(isp.get("raw"), dict) else {}
+            if raw.get("error") == "limit_exceeded" or "limit" in str(isp.get("_error", "")).lower():
+                print("     محدودیت rate check-host — ادامه با نتایج قبلی.")
+                break
+        rows.append({"target": target, "iran_isp": {k: v for k, v in isp.items() if not str(k).startswith("_")}})
+        bits = []
+        for lab, info in (rows[-1]["iran_isp"] or {}).items():
+            if info.get("ms") is not None:
+                bits.append(f"{lab}={info['ms']}ms")
+            else:
+                bits.append(f"{lab}=قطع")
+        print("     " + (" | ".join(bits[:8]) if bits else "بدون پاسخ"))
+        if i < n_targets:
+            time.sleep(2.5)  # breathe for check-host free tier
+    # If every cell is empty, check-host nodes likely stalled — keep JSON but warn clearly.
+    any_ms = False
+    for r in rows:
+        for info in (r.get("iran_isp") or {}).values():
+            if isinstance(info, dict) and info.get("ms") is not None:
+                any_ms = True
+                break
+    if rows and not any_ms:
+        print(
+            "  [!] نودهای check-host الان نتیجه TCP برنگرداندند "
+            "(سرویس/نود موقتاً از دسترس خارج است).",
+            flush=True,
+        )
+        print(
+            "  ✓ معیار اصلی همان تأخیر TLS از شبکهٔ فعلی سرور است "
+            "(برای همراه‌اول/ایرانسل روی همان اینترنت اجرا کنید).",
+            flush=True,
+        )
+    return rows
+
+
+def print_iran_isp_table(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    # collect columns
+    labels: list[str] = []
+    for r in rows:
+        for lab in (r.get("iran_isp") or {}):
+            if lab.startswith("_"):
+                continue
+            if lab not in labels:
+                labels.append(lab)
+    def sort_key(lab: str) -> tuple:
+        for i, key in enumerate(_PRIORITY_ISP):
+            if key in lab:
+                return (i, lab)
+        return (len(_PRIORITY_ISP), lab)
+
+    labels.sort(key=sort_key)
+    print()
+    print("  تأخیر از نودهای داخل ایران (TCP:443) — شهرها/مسیرها:")
+    print("  (برای پینگ دقیق همراه‌اول/ایرانسل، اسکن را روی همان اینترنت موبایل هم اجرا کنید)")
+    hdr = f"  {'هدف':<28}" + "".join(f" {lab[:14]:>14}" for lab in labels[:8])
+    print(hdr)
+    print("  " + "-" * min(len(hdr), 120))
+    for r in rows:
+        isp = r.get("iran_isp") or {}
+        line = f"  {str(r.get('target') or ''):<28}"
+        for lab in labels[:8]:
+            info = isp.get(lab) or {}
+            ms = info.get("ms")
+            cell = f"{ms:.0f}" if isinstance(ms, (int, float)) else "—"
+            line += f" {cell:>14}"
+        print(line)
+
+
+async def cmd_isp(_: argparse.Namespace) -> int:
+    print(f"تشخیص اپراتور | JojoNet-scan {VERSION}")
+    v = detect_vantage()
+    print(f"  IP عمومی: {v.get('public_ip') or '?'}")
+    print(f"  ASN: AS{v.get('asn') or '?'}")
+    print(f"  اپراتور/شبکه: {v.get('isp')}")
+    print(f"  کشور: {v.get('country') or '?'}")
+    asn = v.get("asn")
+    if asn in (44244,):
+        print("  ✓ این سرور روی مسیر همراه‌اول (MCI) دیده می‌شود.")
+    elif asn in (197207, 49100):
+        print("  ✓ این سرور روی مسیر ایرانسل (MTN) دیده می‌شود.")
+    else:
+        print("  برای تست واقعی همراه اول/ایرانسل، اسکنر را با اینترنت همان اپراتور اجرا کنید.")
+        print("  اسکنرهای CF/Fastly/SNI با --iran-isp تأخیر را از چند نود داخل ایران هم می‌گیرند.")
+    try:
+        nodes = fetch_iran_probe_nodes()
+        print(f"  نودهای سنجش ایران در دسترس: {len(nodes)}")
+        for n in nodes:
+            print(f"    - {n['label']} / {n['city']} ({n['node']})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [!] خواندن نودهای ایران ناموفق: {exc}")
+    return 0
+
+
 async def cmd_sni(args: argparse.Namespace) -> int:
     vantage = detect_vantage()
     print(f"JojoSNI — اسکنر SNI مخصوص Reality | JojoNet-scan {VERSION}")
@@ -568,6 +877,18 @@ async def cmd_sni(args: argparse.Namespace) -> int:
         )
     if not ok_rows:
         print("  هیچ SNI سالمی پیدا نشد.")
+        return 0
+
+    if getattr(args, "iran_isp", False):
+        isp_top = int(getattr(args, "isp_top", 5) or 5)
+        targets = [r.target for r in ok_rows[:isp_top]]
+        try:
+            isp_rows = enrich_iran_isp(targets, port=args.port, top=isp_top)
+            print_iran_isp_table(isp_rows)
+            payload["iran_isp"] = isp_rows
+            out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [!] سنجش اپراتور ایران ناموفق: {exc}", file=sys.stderr)
     return 0
 
 
@@ -687,6 +1008,18 @@ async def cmd_cdn(args: argparse.Namespace, *, provider: str) -> int:
         )
     if not best:
         print("  هیچ IP سالمی پیدا نشد (فایروال/مسیر یا SNI را چک کنید).")
+        return 0
+
+    if getattr(args, "iran_isp", False):
+        isp_top = int(getattr(args, "isp_top", 5) or 5)
+        targets = [str(b.get("ip") or b.get("target")) for b in best[:isp_top]]
+        try:
+            isp_rows = enrich_iran_isp(targets, port=args.port, top=isp_top)
+            print_iran_isp_table(isp_rows)
+            summary["iran_isp"] = isp_rows
+            summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [!] سنجش اپراتور ایران ناموفق: {exc}", file=sys.stderr)
     return 0
 
 
@@ -704,6 +1037,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--port", type=int, default=443)
         sp.add_argument("--top", type=int, default=20, help="print top N results")
         sp.add_argument("--out", type=str, default="", help="output path")
+        sp.add_argument("--iran-isp", action="store_true", help="probe top results from Iran city nodes")
+        sp.add_argument("--isp-top", type=int, default=5, help="how many top targets to probe from Iran")
 
     sni = sub.add_parser("sni", help="JojoSNI — اسکن دامنه/SNI مناسب Reality")
     add_common(sni)
@@ -726,6 +1061,9 @@ def build_parser() -> argparse.ArgumentParser:
     fy.add_argument("--ipv6", action="store_true")
     fy.set_defaults(func=lambda a: asyncio.run(cmd_cdn(a, provider="fastly")))
 
+    isp = sub.add_parser("isp", help="تشخیص اپراتور همین سرور + نودهای ایران")
+    isp.set_defaults(func=lambda a: asyncio.run(cmd_isp(a)))
+
     return p
 
 
@@ -735,10 +1073,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.workers < 1:
-        args.workers = 1
-    if args.workers > 2000:
-        args.workers = 2000
+    workers = getattr(args, "workers", None)
+    if workers is not None:
+        if workers < 1:
+            args.workers = 1
+        if workers > 2000:
+            args.workers = 2000
     try:
         return int(args.func(args) or 0)
     except KeyboardInterrupt:

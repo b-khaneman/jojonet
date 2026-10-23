@@ -7762,3 +7762,535 @@ button.perm-btn:hover {
     justify-items: start;
   }
 }
+
+/* Reality scanners tab */
+.jnscan {
+  display: grid;
+  gap: 1rem;
+}
+
+.jnscan-console {
+  display: grid;
+  gap: .9rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.jnscan-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .65rem;
+}
+
+.jnscan-kind {
+  position: relative;
+  display: grid;
+  gap: .25rem;
+  padding: .85rem .9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+  cursor: pointer;
+}
+
+.jnscan-kind input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.jnscan-kind.is-on,
+.jnscan-kind:has(input:checked) {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.jnscan-kind-name {
+  font-weight: 800;
+}
+
+.jnscan-kind-desc {
+  font-size: .82rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.jnscan-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .75rem;
+}
+
+.jnscan-check {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .92rem;
+}
+
+.jnscan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem;
+  align-items: center;
+}
+
+.jnscan-results {
+  display: grid;
+  gap: .9rem;
+}
+
+.jnscan-empty {
+  padding: 1.4rem 1.2rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
+
+.jnscan-empty-title {
+  margin: 0 0 .35rem;
+  font-weight: 800;
+}
+
+.jnscan-hero {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1rem 1.2rem;
+  align-items: center;
+  padding: 1.05rem 1.2rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(420px 160px at 100% 0%, color-mix(in srgb, var(--primary) 16%, transparent), transparent 70%),
+    var(--surface);
+}
+
+.jnscan-hero.is-running {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.jnscan-hero.is-done {
+  border-color: color-mix(in srgb, var(--accent, var(--primary)) 40%, var(--border));
+}
+
+.jnscan-ring {
+  width: 4.4rem;
+  height: 4.4rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.jnscan-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    conic-gradient(var(--primary) 0 72%, color-mix(in srgb, var(--border) 70%, transparent) 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px));
+}
+
+.jnscan-ring-num {
+  position: relative;
+  z-index: 1;
+  font-weight: 800;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.jnscan-hero.is-running .jnscan-ring::before {
+  animation: jnscan-spin 1.2s linear infinite;
+}
+
+@keyframes jnscan-spin {
+  to { transform: rotate(360deg); }
+}
+
+.jnscan-kicker {
+  margin: 0;
+  font-size: .75rem;
+  letter-spacing: .04em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.jnscan-hero-title {
+  margin: .2rem 0 .25rem;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.jnscan-hero-line {
+  margin: 0 0 .55rem;
+  color: var(--muted);
+  font-size: .92rem;
+}
+
+.jnscan-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+}
+
+.jnscan-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: .2rem .55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2, var(--surface)) 80%, transparent);
+  font-size: .78rem;
+  font-weight: 650;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jnscan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  align-items: center;
+}
+
+.jnscan-wait {
+  margin: 0;
+  padding: .85rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.jnscan-table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.jnscan-pro {
+  width: 100%;
+  min-width: 52rem;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: .9rem;
+}
+
+.jnscan-col-rank { width: 3.2rem; }
+.jnscan-col-target { width: auto; }
+.jnscan-col-ms { width: 7.4rem; }
+.jnscan-col-tls { width: 5.2rem; }
+.jnscan-col-alpn { width: 5rem; }
+.jnscan-col-score { width: 5rem; }
+.jnscan-col-hint { width: 9.5rem; }
+.jnscan-col-act { width: 4.8rem; }
+
+.jnscan-pro th,
+.jnscan-pro td {
+  padding: .65rem .55rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.jnscan-pro thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--surface) 88%, var(--primary) 12%);
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+
+.jnscan-pro tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.jnscan-pro tbody tr:hover {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+
+.jnscan-pro tbody tr.is-best {
+  background: color-mix(in srgb, var(--accent, var(--primary)) 10%, transparent);
+}
+
+.jnscan-th-rank,
+.jnscan-rank {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.jnscan-th-target,
+.jnscan-target {
+  text-align: start;
+}
+
+.jnscan-target .jnscan-code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.jnscan-th-hint,
+.jnscan-hint-cell {
+  text-align: center;
+}
+
+.jnscan-code,
+.jnscan-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .86rem;
+  font-weight: 650;
+}
+
+.jnscan-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.8rem;
+  padding: .18rem .45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: .78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.jnscan-pill-ms {
+  min-width: 5.4rem;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+}
+
+.jnscan-pill.is-ok {
+  background: color-mix(in srgb, var(--ok, #22c55e) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ok, #22c55e) 35%, var(--border));
+  color: color-mix(in srgb, var(--ok, #16a34a) 70%, var(--text));
+}
+
+.jnscan-pill.is-down {
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 32%, var(--border));
+  color: color-mix(in srgb, var(--danger, #dc2626) 65%, var(--text));
+}
+
+.jnscan-score {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.jnscan-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, var(--primary)) 14%, transparent);
+  font-size: .78rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jnscan-row-copy {
+  min-width: 3.4rem;
+  margin-inline: auto;
+}
+
+.jnscan-th-act,
+.jnscan-act {
+  text-align: center;
+}
+
+.jnscan-isp {
+  display: grid;
+  gap: .65rem;
+  padding: .9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.jnscan-isp-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.jnscan-isp-head h4 {
+  margin: 0;
+  font-size: .98rem;
+}
+
+.jnscan-pro-compact {
+  min-width: 28rem;
+}
+
+.jnscan-isp-summary {
+  font-size: .82rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.jnscan-history {
+  display: grid;
+  gap: .75rem;
+  margin-top: .35rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.jnscan-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.jnscan-history-head h3 {
+  margin: 0 0 .2rem;
+  font-size: 1.02rem;
+}
+
+.jnscan-history-head .muted {
+  margin: 0;
+  font-size: .86rem;
+}
+
+.jnscan-history-list {
+  min-height: 2.5rem;
+}
+
+.jnscan-history-empty {
+  padding: 1rem;
+}
+
+.jnscan-history-table {
+  min-width: 40rem;
+}
+
+.jnscan-hcol-when { width: 9.5rem; }
+.jnscan-hcol-title { width: auto; }
+.jnscan-hcol-server { width: 9rem; }
+.jnscan-hcol-status { width: 6.5rem; }
+.jnscan-hcol-act { width: 12rem; }
+
+.jnscan-th-when,
+.jnscan-when,
+.jnscan-th-title,
+.jnscan-htitle,
+.jnscan-th-server,
+.jnscan-hserver {
+  text-align: start;
+}
+
+.jnscan-when .tn-stamp {
+  display: inline-flex;
+  flex-direction: column;
+  gap: .1rem;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.jnscan-when .tn-stamp-date {
+  font-weight: 750;
+}
+
+.jnscan-when .tn-stamp-time {
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.jnscan-history-row {
+  cursor: pointer;
+}
+
+.jnscan-history-row.is-active {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.jnscan-history-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: .3rem;
+  justify-content: center;
+  align-items: center;
+}
+
+.jnscan-htitle,
+.jnscan-hserver {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jnscan-logbox {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: .35rem .7rem .7rem;
+}
+
+.jnscan-logbox summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: .88rem;
+  padding: .45rem 0;
+  color: var(--muted);
+}
+
+.jnscan-log {
+  margin: .2rem 0 0;
+  max-height: 16rem;
+  overflow: auto;
+  padding: .75rem .85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 78%, #000 22%);
+  font-size: .76rem;
+  direction: ltr;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .jnscan-kinds,
+  .jnscan-row {
+    grid-template-columns: 1fr;
+  }
+
+  .jnscan-hero {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+}

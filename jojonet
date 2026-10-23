@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.37"
+readonly JOJONET_VERSION="1.6.38"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -1628,49 +1628,56 @@ run_jojonet_scan() {
     python3 "$JOJONET_SCAN_BIN" "$@"
 }
 
-menu_reality_scanners() {
-    print_banner "Reality Scanners — JojoSNI / JojoCF / JojoFastly"
-    echo -e "  ${CYAN}تأخیر از همین سرور اندازه‌گیری می‌شود.${NC}"
-    echo -e "  ${CYAN}برای پینگ همراه‌اول / ایرانسل / … اسکنر را روی همان شبکه اجرا کنید؛"
-    echo -e "  خروجی‌ها ISP مبدأ را برچسب می‌زنند.${NC}"
+menu_scanners() {
+    print_banner "اسکنر"
+    echo -e "  ${CYAN}JojoSNI / JojoCF / JojoFastly — مخصوص Reality${NC}"
+    echo -e "  ${CYAN}بعد از یافتن IP/SNI سالم، تأخیر از نودهای ایران (همراه‌اول/ایرانسل/…) هم سنجیده می‌شود.${NC}"
     echo ""
-    menu_line "1) JojoSNI — اسکنر SNI مناسب Reality"
-    menu_line "2) JojoCF — اسکنر IP تمیز Cloudflare (تمام رنج رسمی)"
-    menu_line "3) JojoFastly — اسکنر IP تمیز Fastly (تمام رنج رسمی)"
-    menu_line "0) Back"
+    menu_line "1) JojoSNI — اسکنر SNI"
+    menu_line "2) JojoCF — اسکنر IP تمیز Cloudflare"
+    menu_line "3) JojoFastly — اسکنر IP تمیز Fastly"
+    menu_line "4) تشخیص اپراتور همین سرور"
+    menu_line "0) بازگشت"
     echo ""
-    local c="" workers="" out="" lim=""
-    read -r -p "  Select: " c || return 0
+    local c="" workers="" out="" lim="" topn=""
+    read -r -p "  انتخاب: " c || return 0
     case "$c" in
         1)
             read -r -p "  Workers [100]: " workers || true
             workers=${workers:-100}
             out="/root/jojonet-sni-$(date +%Y%m%d-%H%M%S).json"
-            run_jojonet_scan sni --workers "$workers" --out "$out" || true
+            run_jojonet_scan sni --workers "$workers" --out "$out" --iran-isp || true
             ;;
         2)
             read -r -p "  Workers [300]: " workers || true
             workers=${workers:-300}
-            read -r -p "  Limit (خالی=تمام رنج؛ مثلاً 500 برای تست): " lim || true
+            read -r -p "  Limit (خالی=تمام رنج؛ پیشنهاد تست: 800): " lim || true
+            read -r -p "  Top برای سنجش از داخل ایران [5]: " topn || true
+            topn=${topn:-5}
             out="/root/jojonet-cf-$(date +%Y%m%d-%H%M%S).jsonl"
             if [[ -n "${lim:-}" ]]; then
-                run_jojonet_scan cf --workers "$workers" --limit "$lim" --out "$out" --resume || true
+                run_jojonet_scan cf --workers "$workers" --limit "$lim" --out "$out" --resume --iran-isp --isp-top "$topn" || true
             else
-                echo -e "  ${YELLOW}اسکن کامل رنج Cloudflare ممکن است طولانی باشد؛ Ctrl+C سپس --resume.${NC}"
-                run_jojonet_scan cf --workers "$workers" --out "$out" --resume || true
+                echo -e "  ${YELLOW}اسکن کامل ممکن است طولانی باشد؛ Ctrl+C سپس با --resume ادامه دهید.${NC}"
+                run_jojonet_scan cf --workers "$workers" --out "$out" --resume --iran-isp --isp-top "$topn" || true
             fi
             ;;
         3)
             read -r -p "  Workers [300]: " workers || true
             workers=${workers:-300}
-            read -r -p "  Limit (خالی=تمام رنج؛ مثلاً 500 برای تست): " lim || true
+            read -r -p "  Limit (خالی=تمام رنج؛ پیشنهاد تست: 800): " lim || true
+            read -r -p "  Top برای سنجش از داخل ایران [5]: " topn || true
+            topn=${topn:-5}
             out="/root/jojonet-fastly-$(date +%Y%m%d-%H%M%S).jsonl"
             if [[ -n "${lim:-}" ]]; then
-                run_jojonet_scan fastly --workers "$workers" --limit "$lim" --out "$out" --resume || true
+                run_jojonet_scan fastly --workers "$workers" --limit "$lim" --out "$out" --resume --iran-isp --isp-top "$topn" || true
             else
-                echo -e "  ${YELLOW}اسکن کامل رنج Fastly ممکن است طولانی باشد؛ Ctrl+C سپس --resume.${NC}"
-                run_jojonet_scan fastly --workers "$workers" --out "$out" --resume || true
+                echo -e "  ${YELLOW}اسکن کامل ممکن است طولانی باشد؛ Ctrl+C سپس با --resume ادامه دهید.${NC}"
+                run_jojonet_scan fastly --workers "$workers" --out "$out" --resume --iran-isp --isp-top "$topn" || true
             fi
+            ;;
+        4)
+            run_jojonet_scan isp || true
             ;;
         *) return 0 ;;
     esac
@@ -13214,7 +13221,7 @@ main_menu() {
         menu_line "30) Direct Kharej — DNSTT/ICMP/relay on one foreign server (no Iran VPS)"
         menu_line "31) VPN panels — 3x-ui Sanaei / X-UI classic / PasarGuard"
         menu_line "32) Kernel overlays — IPIP / GRETAP / EoIP / GENEVE / L2TPv3 / JojoCloak"
-        menu_line "33) Reality scanners — JojoSNI / JojoCF / JojoFastly"
+        menu_line "33) اسکنر"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -13321,7 +13328,7 @@ main_menu() {
                     *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
                 esac
                 ;;
-            33) menu_reality_scanners || true ;;
+            33) menu_scanners || true ;;
             25) relay_menu || true ;;
             26) server_tools_menu || true ;;
             27)

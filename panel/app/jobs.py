@@ -161,14 +161,29 @@ class JobManager:
         self.flush_log(job_id)
         return self.db.one("SELECT * FROM jobs WHERE id=?", (job_id,))
 
-    def list(self, limit: int = 50, owner_id: int | None = None) -> list[dict[str, Any]]:
+    def list(
+        self,
+        limit: int = 50,
+        owner_id: int | None = None,
+        kind: str | None = None,
+    ) -> list[dict[str, Any]]:
         sql = (
             "SELECT id, kind, title, status, server_id, tunnel_id, owner_id, created_at, finished_at "
             "FROM jobs"
         )
-        if owner_id is None:
-            return self.db.all(sql + " ORDER BY id DESC LIMIT ?", (limit,))
-        return self.db.all(sql + " WHERE owner_id=? ORDER BY id DESC LIMIT ?", (owner_id, limit))
+        where: list[str] = []
+        params: list[Any] = []
+        if owner_id is not None:
+            where.append("owner_id=?")
+            params.append(owner_id)
+        if kind is not None:
+            where.append("kind=?")
+            params.append(kind)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        return self.db.all(sql, tuple(params))
 
     def subscribe(self, job_id: int) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=5000)
