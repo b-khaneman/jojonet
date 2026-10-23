@@ -1,7 +1,26 @@
 # Changelog
 
+## 1.6.36 / panel 1.3.98
+- **JojoCloak**: نام و پرچم‌های خارجی حذف شد؛ فقط `jojocloak` / `--jojocloak` و برچسب JojoCloak در CLI و پنل.
+- **Path Lab**: رفع ریشه‌ای سنجش (کلید WG، IPv6 نامعتبر، GRE تداخل، `pkill -f` که bash را می‌کشت و iperf صفر می‌شد، هدف SIT/TCP، timeout روی L2TPv3) — QA زنده ۱۶/۱۶ با پهنای باند واقعی.
+- **UI**: برچسب‌های آزمایشگاه «سرور ایران / سرور خارج».
+
+## 1.6.35 / panel 1.3.92
+- **JojoCloak**: پوشش اختصاصی JojoNet (WireGuard + FakeTCP cloak) با `--jojocloak`.
+
+## 1.6.34 / panel 1.3.91
+- **L2TPv3**: آدرس overlay بعد از `up` با `ip addr replace` ست می‌شود (قبلاً روی بعضی کرنل‌ها IPv4 بعد از استارت گم می‌شد).
+- **EoIPv6/SIT**: قبل از ساخت، SIT یتیم Path-Lab (`jncmpsit`) و SIT هم‌peer پاک می‌شود.
+
+## 1.6.33 / panel 1.3.90
+- **Critical**: runnerهای `jojonet-run-instance` / `jojonet-run-vxlan` / v6 — حذف `local` در بدنهٔ سطح‌بالا (باش فقط داخل تابع مجاز است) که باعث fail استارت IPIP/GRETAP/EoIP/GENEVE/L2TPv3 می‌شد.
+
+## 1.6.32 / panel 1.3.89
+- **Path Lab UI**: تب «آزمایشگاه» با تایل پروتکل، امتیاز Jojo، فیلتر/مرتب‌سازی، خروجی JSON — دیزاین اختصاصی JojoNet (نه کپی UI مرجع).
+- **Root fixes**: `resolve_tunnel_ips` از پیشوند per-mode استفاده می‌کند (جلوگیری از برخورد IP با GRE)؛ پوشش کامل EoIPv6 در health/delete/peer-change؛ آزمایشگاه: L2TPv3 با `peer_tunnel_id` یکسان دو طرف + کیس EoIPv6؛ پنل conflict IPv6 شامل eoip6.
+
 ## 1.6.31 / panel 1.3.88
-- **New permanent tunnels** (CLI + panel, full deploy/NAT/boot): IPIP4, GRETAP, EoIP, GENEVE, L2TPv3, EoIPv6, NeoObfs (WG+udp2raw). Menu 32 / flags `--ipip --gretap --eoip --geneve --l2tpv3 --eoip6 --neoobfs`. Compare «ساخت همین تانل» maps to these modes.
+- **New permanent tunnels** (CLI + panel, full deploy/NAT/boot): IPIP4, GRETAP, EoIP, GENEVE, L2TPv3, EoIPv6, JojoCloak. Menu 32 / flags `--ipip --gretap --eoip --geneve --l2tpv3 --eoip6 --jojocloak`. Compare «ساخت همین تانل» maps to these modes.
 
 ## 1.6.30 / panel 1.3.87
 - **Tunnel compare**: web panel tab «مقایسه» runs temporary overlays (direct, 6to4, IPIP, GRE/GRE6, VXLAN, GENEVE, L2TPv3, WireGuard, TCP, GRETAP, IPIP6) with iperf3/ping, live bars, and «ساخت همین تانل». CLI: `sudo jojonet --compare <PEER_IP>` (SSH to peer). API: `POST /api/compare`.

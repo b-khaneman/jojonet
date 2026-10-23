@@ -90,13 +90,13 @@ COMPARE_MODES: list[dict[str, Any]] = [
         "mtu": 1420,
     },
     {
-        "id": "neoobfs",
-        "label": "NeoObfs",
-        "create_mode": "neoobfs",
+        "id": "jojocloak",
+        "label": "JojoCloak",
+        "create_mode": "jojocloak",
         "kind": "overlay",
-        "type": "neoobfs",
+        "type": "jojocloak",
         "mtu": 1200,
-        "note": "رمزنگاری + مبهم‌سازی (WG + udp2raw)",
+        "note": "پوشش JojoNet — سنجش WG خام؛ مبهم‌سازی دائم در ساخت JojoCloak",
     },
     {
         "id": "tun_tcp",
@@ -153,6 +153,18 @@ def compare_mode_ids() -> list[str]:
     return [m["id"] for m in COMPARE_MODES]
 
 
+# L2 Ethernet-ish vs L3 routed overlays (for Path Lab tiles).
+_COMPARE_L2 = frozenset({"vxlan", "geneve", "l2tpv3", "gretap", "eoip", "eoip6"})
+
+
+def compare_layer(mode_id: str) -> str:
+    if mode_id == "direct":
+        return "bare"
+    if mode_id in _COMPARE_L2:
+        return "L2"
+    return "L3"
+
+
 def compare_public_catalog() -> list[dict[str, Any]]:
     return [
         {
@@ -160,6 +172,8 @@ def compare_public_catalog() -> list[dict[str, Any]]:
             "label": m["label"],
             "create_mode": m.get("create_mode"),
             "note": m.get("note") or "",
+            "layer": compare_layer(m["id"]),
+            "mtu": m.get("mtu"),
         }
         for m in COMPARE_MODES
     ]
@@ -207,18 +221,35 @@ echo TOOLS_OK
 """
 
 
+def _kill_iperf_snippet() -> str:
+    """Kill iperf3 server on IPERF_PORT without pkill -f (which matches bash -c and suicides)."""
+    return f"""
+# Prefer fuser/ss — never pkill -f the iperf cmdline (kills the wrapping bash -c).
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k {IPERF_PORT}/tcp >/dev/null 2>&1 || true
+fi
+for p in $(pidof iperf3 2>/dev/null); do
+  cmd=$(tr '\\0' ' ' < /proc/"$p"/cmdline 2>/dev/null || true)
+  case "$cmd" in
+    *iperf3*-s*-p*{IPERF_PORT}*|*iperf3*-s*{IPERF_PORT}*) kill "$p" 2>/dev/null || true ;;
+  esac
+done
+"""
+
+
 def cleanup_script() -> str:
-    return r"""
+    return f"""
 set +e
-pkill -f 'iperf3 -s -p 15201' >/dev/null 2>&1 || true
-pkill -f 'jncmp-tcp' >/dev/null 2>&1 || true
-for d in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^jncmp'); do
+{_kill_iperf_snippet()}
+pkill -x jncmp-tcp >/dev/null 2>&1 || true
+for d in $(ip -o link show 2>/dev/null | awk -F': ' '{{print $2}}' | cut -d@ -f1 | grep -E '^jncmp'); do
   ip link del "$d" 2>/dev/null || true
+  ip tunnel del "$d" 2>/dev/null || true
 done
-ip l2tp show tunnel 2>/dev/null | awk '/Tunnel/{print $2}' | while read -r tid; do
-  [[ "$tid" =~ ^9[0-9]{3}$ ]] && ip l2tp del tunnel tunnel_id "$tid" 2>/dev/null || true
+ip l2tp show tunnel 2>/dev/null | awk '/Tunnel/{{print $2}}' | while read -r tid; do
+  [[ "$tid" =~ ^9[0-9]{{3}}$ ]] && ip l2tp del tunnel tunnel_id "$tid" 2>/dev/null || true
 done
-rm -f /tmp/jncmp-*.conf /tmp/jncmp-*.key /tmp/jncmp-*.pub 2>/dev/null
+rm -f /tmp/jncmp-*.conf /tmp/jncmp-*.key /tmp/jncmp-*.pub /run/jncmp-wg*.key 2>/dev/null
 echo CLEAN_OK
 """
 
@@ -255,7 +286,8 @@ if [[ "$TARGET" == *:* ]]; then
   IPERF_FAM=(-6)
 fi
 
-ping_out=$("${{PING_BIN[@]}}" -c "$COUNT" -W 2 "$TARGET" 2>&1 || true)
+# Bound wall time so a wedged L2 path cannot hang the whole job
+ping_out=$(timeout 55 "${{PING_BIN[@]}}" -c "$COUNT" -W 2 "$TARGET" 2>&1 || true)
 loss=$(printf '%s\\n' "$ping_out" | sed -n 's/.*, \\([0-9.]\\+%\\) packet loss.*/\\1/p' | tr -d '%' | head -1)
 rtt=$(printf '%s\\n' "$ping_out" | sed -n 's/.*= \\([0-9.]\\+\\)\\/\\([0-9.]\\+\\)\\/\\([0-9.]\\+\\)\\/\\([0-9.]\\+\\).*/\\1 \\2 \\3 \\4/p' | tail -1)
 min_ms=$(echo "$rtt" | awk '{{print $1+0}}')
@@ -266,9 +298,12 @@ mdev_ms=$(echo "$rtt" | awk '{{print $4+0}}')
 
 dl_mbps=0
 ul_mbps=0
-# download: server sends to client (-R)
-dl_json=$(iperf3 "${{IPERF_FAM[@]}}" -c "$TARGET" -p "$IPERF_PORT" -t "$SEC" -J -R 2>/dev/null || true)
-ul_json=$(iperf3 "${{IPERF_FAM[@]}}" -c "$TARGET" -p "$IPERF_PORT" -t "$SEC" -J 2>/dev/null || true)
+# download: server sends to client (-R) — timeout avoids L2/WG hang
+IPERF_TO=$((SEC + 12))
+CT=()
+iperf3 --help 2>&1 | grep -q -- '--connect-timeout' && CT=(--connect-timeout 3000)
+dl_json=$(timeout "$IPERF_TO" iperf3 "${{IPERF_FAM[@]}}" -c "$TARGET" -p "$IPERF_PORT" -t "$SEC" -J -R "${{CT[@]}}" 2>/dev/null || true)
+ul_json=$(timeout "$IPERF_TO" iperf3 "${{IPERF_FAM[@]}}" -c "$TARGET" -p "$IPERF_PORT" -t "$SEC" -J "${{CT[@]}}" 2>/dev/null || true)
 if command -v jq >/dev/null 2>&1; then
   dl_mbps=$(printf '%s' "$dl_json" | jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' 2>/dev/null || echo 0)
   ul_mbps=$(printf '%s' "$ul_json" | jq -r '.end.sum_sent.bits_per_second // 0' 2>/dev/null || echo 0)
@@ -286,18 +321,32 @@ printf 'MEASURE ok=%s loss=%s ping=%s jitter=%s dl=%s ul=%s\\n' \\
 
 def start_iperf_server_script() -> str:
     return f"""
-set -euo pipefail
-pkill -f 'iperf3 -s -p {IPERF_PORT}' >/dev/null 2>&1 || true
+set +e
+{_kill_iperf_snippet()}
+sleep 0.2
+# Daemonize; verify listen — do not use pkill -f on this cmdline
 iperf3 -s -p {IPERF_PORT} -D
-sleep 0.3
-echo IPERF_UP
+sleep 0.4
+if ss -ltn 2>/dev/null | awk '{{print $4}}' | grep -Eq '[:.]{IPERF_PORT}$'; then
+  echo IPERF_UP
+  exit 0
+fi
+# Fallback if -D did not stick under this SSH session
+nohup iperf3 -s -p {IPERF_PORT} >/tmp/jncmp-iperf.log 2>&1 &
+sleep 0.4
+if ss -ltn 2>/dev/null | awk '{{print $4}}' | grep -Eq '[:.]{IPERF_PORT}$'; then
+  echo IPERF_UP
+else
+  echo IPERF_FAIL
+  exit 1
+fi
 """
 
 
 def stop_iperf_server_script() -> str:
     return f"""
 set +e
-pkill -f 'iperf3 -s -p {IPERF_PORT}' >/dev/null 2>&1 || true
+{_kill_iperf_snippet()}
 echo IPERF_DOWN
 """
 
@@ -320,9 +369,12 @@ def setup_overlay_script(
     mtu_i = int(mtu)
     is_kh = role == "kharej"
     ov = "10.66.200.1/30" if is_kh else "10.66.200.2/30"
-    ov6_local = "fd6a:cmp::1/64" if is_kh else "fd6a:cmp::2/64"
-    ov6_peer = "fd6a:cmp::2" if is_kh else "fd6a:cmp::1"
-    tid = 9001 if is_kh else 9002
+    # Must be valid hex IPv6 — e.g. "cmp" is NOT hex and ip(8) rejects it.
+    ov6_local = "fd6a:c0a::1/64" if is_kh else "fd6a:c0a::2/64"
+    ov6_local_ip = ov6_local.split("/", 1)[0]
+    ov6_peer = "fd6a:c0a::2" if is_kh else "fd6a:c0a::1"
+    # L2TPv3 requires the same tunnel_id on both ends; only session ids cross.
+    tid = 9001
     sid = 1 if is_kh else 2
     peer_sid = 2 if is_kh else 1
     wg_priv_q = shlex.quote(wg_priv)
@@ -340,12 +392,14 @@ TYPE={shlex.quote(mode_type)}
 
 # cleanup previous
 ip link del jncmp 2>/dev/null || true
+ip tunnel del jncmp 2>/dev/null || true
 ip link del jncmp6 2>/dev/null || true
 ip link del jncmpsit 2>/dev/null || true
 ip link del jncmpwg 2>/dev/null || true
 ip l2tp del tunnel tunnel_id {tid} 2>/dev/null || true
 ip l2tp del tunnel tunnel_id 9001 2>/dev/null || true
 ip l2tp del tunnel tunnel_id 9002 2>/dev/null || true
+rm -f /run/jncmp-wg.key /tmp/jncmp-wg.key 2>/dev/null || true
 
 note=""
 case "$TYPE" in
@@ -354,9 +408,14 @@ case "$TYPE" in
     exit 0
     ;;
   gre)
-    ip link add jncmp type gre remote "$PEER" local "$LOCAL" ttl 255
-    ip addr add "$OV" dev jncmp
+    # key isolates Path Lab from any permanent GRE with same endpoints
+    ip link add jncmp type gre remote "$PEER" local "$LOCAL" ttl 255 key 40420 \
+      || ip link add jncmp type gre remote "$PEER" local "$LOCAL" ttl 255 || {{
+      echo SETUP ok=0 if=none ov= note="ساخت GRE ناموفق (تداخل یا کرنل)"
+      exit 0
+    }}
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
   gretap|eoip)
@@ -367,35 +426,33 @@ case "$TYPE" in
     else
       ip link add jncmp type gretap remote "$PEER" local "$LOCAL" ttl 255
     fi
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note="$note"
     ;;
   ipip)
     ip link add jncmp type ipip remote "$PEER" local "$LOCAL" ttl 255
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
   sit)
     ip link add jncmpsit type sit remote "$PEER" local "$LOCAL" ttl 255
-    ip link set jncmpsit up
-    ip -6 addr add {ov6_local} dev jncmpsit
-    ip link set jncmpsit mtu "$MTU"
-    # measure over v4 overlay via sit peer mapping: use nested ipip6-like — put v4 on sit via 6to4 style
-    # For speedtest use IPv6 endpoint
-    echo SETUP ok=1 if=jncmpsit ov={ov6_peer} note=
+    ip link set jncmpsit mtu "$MTU" up
+    ip -6 addr replace {ov6_local} dev jncmpsit
+    # Kharej must advertise ITS own addr — Iran pings kh_info.ov
+    echo SETUP ok=1 if=jncmpsit ov={ov6_local_ip} note=
     ;;
   sit_udp)
     # FOU/GUE may be unavailable; fall back to VXLAN on chosen UDP port
     if ip link add jncmp type vxlan id 4042 remote "$PEER" local "$LOCAL" dstport "$PORT" 2>/dev/null; then
       note="روی VXLAN UDP $PORT"
     else
-      echo SETUP ok=0 if= none ov= note="کرنل VXLAN/FOU پشتیبانی نمی‌کند"
+      echo SETUP ok=0 if=none ov= note="کرنل VXLAN/FOU پشتیبانی نمی‌کند"
       exit 0
     fi
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note="$note"
     ;;
   vxlan)
@@ -404,46 +461,48 @@ case "$TYPE" in
       ip link add jncmp type vxlan id 4042 remote "$PEER" local "$LOCAL" dstport "$alt"
       PORT=$alt
     }}
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note="$note"
     ;;
   geneve)
-    ip link add jncmp type geneve id 4042 remote "$PEER" || {{
+    ip link add jncmp type geneve id 4042 remote "$PEER" local "$LOCAL" 2>/dev/null \
+      || ip link add jncmp type geneve id 4042 remote "$PEER" || {{
       echo SETUP ok=0 if=none ov= note="کرنل GENEVE پشتیبانی نمی‌کند"
       exit 0
     }}
-    # geneve remote-only; bind via route
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
   gre6)
     ip link add jncmpsit type sit remote "$PEER" local "$LOCAL" ttl 255
     ip link set jncmpsit up
-    ip -6 addr add {ov6_local} dev jncmpsit
-    ip link add jncmp type ip6gre remote {ov6_peer} local ${{ov6_local%%/*}} ttl 64 || {{
+    ip -6 addr replace {ov6_local} dev jncmpsit
+    ip link add jncmp type ip6gre remote {ov6_peer} local {ov6_local_ip} ttl 64 || {{
       echo SETUP ok=0 if=none ov= note="ساخت GRE6 ناموفق"
       exit 0
     }}
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
   ipip6)
     ip link add jncmpsit type sit remote "$PEER" local "$LOCAL" ttl 255
     ip link set jncmpsit up
-    ip -6 addr add {ov6_local} dev jncmpsit
-    ip link add jncmp type ip6tnl mode ipip6 remote {ov6_peer} local ${{ov6_local%%/*}} || {{
+    ip -6 addr replace {ov6_local} dev jncmpsit
+    ip link add jncmp type ip6tnl mode ipip6 remote {ov6_peer} local {ov6_local_ip} || {{
       echo SETUP ok=0 if=none ov= note="ساخت IPIP6 ناموفق"
       exit 0
     }}
-    ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
   l2tpv3)
-    ip l2tp add tunnel tunnel_id {tid} remote "$PEER" local "$LOCAL" encap udp udp_sport "$PORT" udp_dport "$PORT" || {{
+    modprobe l2tp_eth 2>/dev/null || true
+    modprobe l2tp_netlink 2>/dev/null || true
+    ip l2tp add tunnel tunnel_id {tid} peer_tunnel_id {tid} remote "$PEER" local "$LOCAL" encap udp udp_sport "$PORT" udp_dport "$PORT" || {{
       echo SETUP ok=0 if=none ov= note="ساخت L2TPv3 ناموفق (ماژول/پورت)"
       exit 0
     }}
@@ -451,37 +510,54 @@ case "$TYPE" in
       echo SETUP ok=0 if=none ov= note="سشن L2TPv3 ناموفق"
       exit 0
     }}
-    ip addr add "$OV" dev jncmp
+    # L2TP iface often drops the address if assigned before up — replace after
     ip link set jncmp mtu "$MTU" up
+    sleep 0.4
+    ip addr replace "$OV" dev jncmp
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
-  wireguard|neoobfs)
+  eoip6)
+    ip link add jncmpsit type sit remote "$PEER" local "$LOCAL" ttl 255
+    ip link set jncmpsit up
+    ip -6 addr replace {ov6_local} dev jncmpsit
+    ip link add jncmp type ip6gretap remote {ov6_peer} local {ov6_local_ip} key 4042 \
+      || ip link add jncmp type ip6gretap remote {ov6_peer} local {ov6_local_ip} ikey 4042 okey 4042 || {{
+      echo SETUP ok=0 if=none ov= note="ساخت EoIPv6 ناموفق"
+      exit 0
+    }}
+    ip link set jncmp mtu "$MTU" up
+    ip addr replace "$OV" dev jncmp
+    echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
+    ;;
+  wireguard|jojocloak)
     command -v wg >/dev/null 2>&1 || {{ echo SETUP ok=0 if=none ov= note="wireguard-tools نیست"; exit 0; }}
     PRIV={wg_priv_q}
     PEERPUB={wg_pub_q}
     [[ -n "$PRIV" && -n "$PEERPUB" ]] || {{ echo SETUP ok=0 if=none ov= note="کلید WG ناقص"; exit 0; }}
-    ip link add jncmpwg type wireguard
-    echo "$PRIV" > /tmp/jncmp-wg.key
-    chmod 600 /tmp/jncmp-wg.key
-    wg set jncmpwg private-key /tmp/jncmp-wg.key peer "$PEERPUB" allowed-ips 10.66.200.0/30 endpoint "$PEER:$PORT" persistent-keepalive 15
-    ip addr add "$OV" dev jncmpwg
+    ip link add jncmpwg type wireguard || {{
+      echo SETUP ok=0 if=none ov= note="ساخت اینترفیس WireGuard ناموفق"
+      exit 0
+    }}
+    # Prefer /dev/stdin — on some hosts wg cannot fopen() keys under /run or /tmp (Permission denied)
+    if ! printf '%s\n' "$PRIV" | wg set jncmpwg private-key /dev/stdin; then
+      echo SETUP ok=0 if=none ov= note="کلید خصوصی WireGuard ست نشد"
+      exit 0
+    fi
+    wg set jncmpwg listen-port "$PORT" \
+      peer "$PEERPUB" allowed-ips 10.66.200.0/30 endpoint "$PEER:$PORT" persistent-keepalive 15 \
+      || {{ echo SETUP ok=0 if=none ov= note="پیکربندی WireGuard ناموفق"; exit 0; }}
     ip link set jncmpwg mtu "$MTU" up
+    ip addr replace "$OV" dev jncmpwg
     note=""
-    [[ "$TYPE" == neoobfs ]] && note="سنجش WG خام؛ مبهم‌سازی دائم در ساخت NeoObfs"
+    [[ "$TYPE" == jojocloak ]] && note="سنجش WG خام؛ مبهم‌سازی دائم در ساخت JojoCloak"
     echo SETUP ok=1 if=jncmpwg ov=${{OV%%/*}} note="$note"
     ;;
   tun_tcp)
-    # Lightweight TCP forwarder with socat/ncat if present; else fail soft
-    if command -v socat >/dev/null 2>&1; then
-      if [[ "$ROLE" == "kharej" ]]; then
-        pkill -f 'jncmp-tcp' >/dev/null 2>&1 || true
-        # expose iperf via TCP wrapper on public :15202 — measure still uses overlay-like path through public TCP
-        echo SETUP ok=1 if=tcp ov=$PEER note="سنجش TCP روی مسیر عمومی (سبک)"
-      else
-        echo SETUP ok=1 if=tcp ov=$PEER note="سنجش TCP روی مسیر عمومی (سبک)"
-      fi
+    # Measure target must be Kharej public IP (same as direct). Kharej advertises LOCAL.
+    if [[ "$ROLE" == "kharej" ]]; then
+      echo SETUP ok=1 if=tcp ov=$LOCAL note="سنجش TCP روی مسیر عمومی"
     else
-      echo SETUP ok=1 if=tcp ov=$PEER note="سنجش TCP مستقیم (socat نبود)"
+      echo SETUP ok=1 if=tcp ov=$PEER note="سنجش TCP روی مسیر عمومی"
     fi
     ;;
   *)
@@ -492,14 +568,26 @@ esac
 
 
 def parse_setup_line(text: str) -> dict[str, Any]:
+    """Parse SETUP lines. ``note=`` is always last and may contain spaces."""
     out: dict[str, Any] = {"ok": False, "if": "", "ov": "", "note": ""}
     for line in (text or "").splitlines():
         if not line.startswith("SETUP "):
             continue
-        for tok in line[6:].split():
+        rest = line[6:]
+        note = ""
+        # Prefer " note=" so we do not split an earlier field; fall back to leading note=
+        idx = rest.find(" note=")
+        if idx >= 0:
+            note = rest[idx + 6 :]
+            rest = rest[:idx]
+        elif rest.startswith("note="):
+            note = rest[5:]
+            rest = ""
+        for tok in rest.split():
             if "=" in tok:
                 k, v = tok.split("=", 1)
                 out[k] = v
+        out["note"] = note
         out["ok"] = str(out.get("ok", "0")) in ("1", "true", "True")
         return out
     return out

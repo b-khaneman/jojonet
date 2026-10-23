@@ -728,6 +728,9 @@ class Orchestrator:
     async def deploy_side(
         self, job: Job, sess: RemoteSession, row: dict[str, Any], role: str, mode: str, peer_ip: str, extra_env: str = "",
     ) -> dict[str, str]:
+        from .validators import canonical_mode
+
+        mode = canonical_mode(mode)
         flag = MODES[mode]["flag"]
         cmd = (
             "cd /root 2>/dev/null || cd /; "
@@ -809,6 +812,9 @@ class Orchestrator:
         for r in (iran, kharej):
             if not valid_ipv4(r["host"]):
                 raise StepFailed(f"IP سرور {r['name']} معتبر نیست")
+        from .validators import canonical_mode
+
+        mode = canonical_mode(mode)
         first_role = MODES[mode]["first"]
         first, second = (kharej, iran) if first_role == "kharej" else (iran, kharej)
         second_role = "iran" if first_role == "kharej" else "kharej"
@@ -1575,9 +1581,10 @@ class Orchestrator:
                 "modes": wanted,
             }))
 
-            # WireGuard keypair generated once on Kharej, public shared to Iran
+            # WireGuard keypair once for any WG-family compare mode (incl. JojoCloak)
             wg_kh_priv = wg_kh_pub = wg_ir_priv = wg_ir_pub = ""
-            if "wireguard" in wanted:
+            need_wg = any(m in wanted for m in ("wireguard", "jojocloak"))
+            if need_wg:
                 gen = await kharej_sess.run_root(
                     "command -v wg >/dev/null && umask 077 && "
                     "priv=$(wg genkey) && pub=$(printf '%s' \"$priv\" | wg pubkey) && "
@@ -1596,6 +1603,8 @@ class Orchestrator:
                 lines2 = [ln.strip() for ln in (gen2.stdout or "").splitlines() if ln.strip()]
                 if gen2.ok and len(lines2) >= 2:
                     wg_ir_priv, wg_ir_pub = lines2[0], lines2[1]
+                if not (wg_kh_priv and wg_kh_pub and wg_ir_priv and wg_ir_pub):
+                    await job.log("[compare] کلید WireGuard کامل ساخته نشد؛ حالت‌های WG/JojoCloak ممکن است رد شوند")
 
             udp_port = compare_mod.BASE_UDP_PORT
             port_pick = await kharej_sess.run_root(compare_mod.pick_udp_port_script(udp_port), timeout=20)
@@ -1619,6 +1628,7 @@ class Orchestrator:
                     "id": mid,
                     "label": meta["label"],
                     "create_mode": meta.get("create_mode"),
+                    "layer": compare_mod.compare_layer(mid),
                     "ok": False,
                     "download_mbps": 0.0,
                     "upload_mbps": 0.0,
@@ -1682,20 +1692,29 @@ class Orchestrator:
                         kh_info = compare_mod.parse_setup_line(kh_setup.stdout or "")
                         ir_info = compare_mod.parse_setup_line(ir_setup.stdout or "")
                         note_bits = [x for x in (kh_info.get("note"), ir_info.get("note"), row.get("note")) if x]
-                        if udp_port != compare_mod.BASE_UDP_PORT and mtype in ("vxlan", "sit_udp", "l2tpv3", "wireguard"):
+                        if udp_port != compare_mod.BASE_UDP_PORT and mtype in (
+                            "vxlan", "sit_udp", "l2tpv3", "wireguard", "jojocloak",
+                        ):
                             note_bits.append(f"پورت UDP {udp_port}")
                         row["note"] = "؛ ".join(dict.fromkeys(note_bits))
                         if not kh_info.get("ok") or not ir_info.get("ok"):
-                            row["error"] = (
-                                kh_info.get("note")
-                                or ir_info.get("note")
-                                or "بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد."
+                            # Only use notes from the side(s) that actually failed (avoid
+                            # treating the other side's soft success note as the error).
+                            err_bits = []
+                            if not kh_info.get("ok") and kh_info.get("note"):
+                                err_bits.append(str(kh_info["note"]))
+                            if not ir_info.get("ok") and ir_info.get("note"):
+                                err_bits.append(str(ir_info["note"]))
+                            row["error"] = "؛ ".join(dict.fromkeys(err_bits)) or (
+                                "بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد."
                             )
                             row["ok"] = False
                         else:
                             target = str(kh_info.get("ov") or "10.66.200.1")
                             await kharej_sess.run_root(compare_mod.start_iperf_server_script(), timeout=20)
-                            await asyncio.sleep(0.5)
+                            # WG handshake / L2TP session bring-up needs a beat before iperf
+                            settle = 1.2 if mtype in ("wireguard", "jojocloak", "l2tpv3") else 0.5
+                            await asyncio.sleep(settle)
                             meas = await iran_sess.run_root(
                                 compare_mod.measure_script(target=target),
                                 timeout=90,

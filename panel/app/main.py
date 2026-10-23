@@ -78,6 +78,8 @@ from .validators import (
     V6_MODES,
     XRAY_MODES,
     XRAY_NETS,
+    canonical_mode,
+    mode_label,
     valid_dnstt_domain,
     valid_dnstt_resolver,
     valid_host_port,
@@ -492,6 +494,7 @@ class TunnelIn(BaseModel):
     @field_validator("mode")
     @classmethod
     def _mode(cls, v: str) -> str:
+        v = canonical_mode(v)
         if v not in MODES:
             raise ValueError("نوع تانل نامعتبر است")
         return v
@@ -923,6 +926,7 @@ class OrderIn(BaseModel):
     @field_validator("mode")
     @classmethod
     def _mode(cls, v: str) -> str:
+        v = canonical_mode(v)
         if v not in MODES:
             raise ValueError("نوع تانل نامعتبر است")
         return v
@@ -2225,21 +2229,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not valid_ipv4(kharej["host"]):
                 raise HTTPException(422, "IP سرور خارج معتبر نیست")
             iran = kharej
-            title = f"ساخت {MODES[data.mode]['label']} مستقیم روی {kharej['name']}"
+            title = f"ساخت {mode_label(data.mode)} مستقیم روی {kharej['name']}"
         else:
             iran, kharej = server_pair(data.iran_id, data.kharej_id, sess)
             arrow = "ایران → خارج" if data.users == "iran" else "خارج → ایران"
-            title = f"ساخت تانل {MODES[data.mode]['label']} ({arrow}): {iran['name']} ↔ {kharej['name']}"
+            title = f"ساخت تانل {mode_label(data.mode)} ({arrow}): {iran['name']} ↔ {kharej['name']}"
         dup = db.one(
             "SELECT id, status FROM tunnels WHERE mode=? AND iran_id=? AND kharej_id=?", (data.mode, iran["id"], kharej["id"])
         )
         if dup:
             raise HTTPException(409, "همین تانل قبلاً ساخته شده است؛ از «استقرار مجدد» استفاده کنید")
         if data.mode in V6_MODES and db.one(
-            "SELECT id FROM tunnels WHERE iran_id=? AND kharej_id=? AND mode IN ('sit','gre6','ipip6')",
+            "SELECT id FROM tunnels WHERE iran_id=? AND kharej_id=? AND mode IN ('sit','gre6','ipip6','eoip6')",
             (iran["id"], kharej["id"]),
         ):
-            raise HTTPException(409, "برای هر جفت سرور فقط یک تانل IPv6 (6to4/GRE6/IPIP6) مجاز است؛ ابتدا تانل قبلی را حذف کنید")
+            raise HTTPException(409, "برای هر جفت سرور فقط یک تانل IPv6 (6to4/GRE6/IPIP6/EoIPv6) مجاز است؛ ابتدا تانل قبلی را حذف کنید")
         if data.mode == "spoof" and db.one(
             "SELECT id FROM tunnels WHERE mode='spoof' AND (iran_id=? OR kharej_id=?)", (iran["id"], kharej["id"])
         ):
@@ -2300,7 +2304,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def verify_tunnel(tunnel_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
         row = get_tunnel(tunnel_id, sess)
         tunnel_busy(row)
-        job_id = create_job(sess, "tunnel_verify", f"بررسی تانل #{tunnel_id} ({MODES[row['mode']]['label']})", VERIFY_STEPS,
+        job_id = create_job(sess, "tunnel_verify", f"بررسی تانل #{tunnel_id} ({mode_label(row['mode'])})", VERIFY_STEPS,
                              lambda job: orch.job_verify(job, tunnel_id), tunnel_id=tunnel_id)
         db.update("tunnels", tunnel_id, {"last_job_id": job_id})
         return {"job_id": job_id}
@@ -2309,7 +2313,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def redeploy_tunnel(tunnel_id: int, sess: dict = Depends(require_auth)) -> dict[str, Any]:
         row = get_tunnel(tunnel_id, sess)
         tunnel_busy(row)
-        return {"job_id": start_deploy(tunnel_id, f"استقرار مجدد تانل #{tunnel_id} ({MODES[row['mode']]['label']})", True, sess)}
+        return {"job_id": start_deploy(tunnel_id, f"استقرار مجدد تانل #{tunnel_id} ({mode_label(row['mode'])})", True, sess)}
 
     @app.delete("/api/tunnels/{tunnel_id}")
     async def delete_tunnel(tunnel_id: int, data: DeleteIn | None = None, sess: dict = Depends(require_auth)) -> dict[str, Any]:
@@ -2317,7 +2321,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         force = bool(data and data.force is True)
         if not force:
             tunnel_busy(row)
-        job_id = create_job(sess, "tunnel_delete", f"حذف تانل #{tunnel_id} ({MODES[row['mode']]['label']})", DELETE_STEPS,
+        job_id = create_job(sess, "tunnel_delete", f"حذف تانل #{tunnel_id} ({mode_label(row['mode'])})", DELETE_STEPS,
                              lambda job: orch.job_delete(job, tunnel_id, force), tunnel_id=tunnel_id,
                              on_finish=mark_failed(tunnel_id))
         db.update("tunnels", tunnel_id, {"status": "deleting", "last_job_id": job_id})
@@ -2440,7 +2444,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not force:
                 tunnel_busy(trow)
             job_id = create_job(
-                sess, "tunnel_delete", f"حذف تانل #{tid} ({MODES[trow['mode']]['label']})", DELETE_STEPS,
+                sess, "tunnel_delete", f"حذف تانل #{tid} ({mode_label(trow['mode'])})", DELETE_STEPS,
                 lambda job: orch.job_delete(job, tid, force), tunnel_id=tid,
                 on_finish=mark_failed(tid),
             )
@@ -2664,7 +2668,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "customer_username": names.get(row["customer_id"], "?"),
             "status": row["status"],
             "mode": row["mode"],
-            "mode_label": MODES.get(row["mode"], {}).get("label", row["mode"]),
+            "mode_label": mode_label(row["mode"]),
             "message": row.get("message"),
             "iran": _order_public_server(row.get("iran_json"), reveal=reveal),
             "kharej": _order_public_server(row.get("kharej_json"), reveal=reveal),
@@ -2938,7 +2942,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if payment_status == "awaiting" and data.payment is not None:
             note = (data.payment.note or "").strip()
             if not note:
-                note = f"واریز فاکتور سفارش #{oid} — {MODES[data.mode]['label']}"
+                note = f"واریز فاکتور سفارش #{oid} — {mode_label(data.mode)}"
             deposit_id = db.insert("deposit_requests", {
                 "user_id": sess["admin_id"],
                 "amount": int(payment_amount or price),
@@ -3175,10 +3179,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if dup:
             raise HTTPException(409, "همین تانل قبلاً برای مشتری ساخته شده است")
         if mode in V6_MODES and db.one(
-            "SELECT id FROM tunnels WHERE iran_id=? AND kharej_id=? AND mode IN ('sit','gre6','ipip6')",
+            "SELECT id FROM tunnels WHERE iran_id=? AND kharej_id=? AND mode IN ('sit','gre6','ipip6','eoip6')",
             (iran["id"], kharej["id"]),
         ):
-            raise HTTPException(409, "برای هر جفت سرور فقط یک تانل IPv6 (6to4/GRE6/IPIP6) مجاز است؛ ابتدا تانل قبلی را حذف کنید")
+            raise HTTPException(409, "برای هر جفت سرور فقط یک تانل IPv6 (6to4/GRE6/IPIP6/EoIPv6) مجاز است؛ ابتدا تانل قبلی را حذف کنید")
         if mode == "spoof" and db.one(
             "SELECT id FROM tunnels WHERE mode='spoof' AND (iran_id=? OR kharej_id=?)",
             (iran["id"], kharej["id"]),
@@ -3209,10 +3213,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             opts = dict(opts)
             opts["users"] = tunnel_data.users
         if tunnel_data.direct:
-            title = f"انجام سفارش #{order_id}: {MODES[mode]['label']} مستقیم روی {kharej['name']}"
+            title = f"انجام سفارش #{order_id}: {mode_label(mode)} مستقیم روی {kharej['name']}"
         else:
             arrow = "ایران → خارج" if tunnel_data.users == "iran" else "خارج → ایران"
-            title = f"انجام سفارش #{order_id}: {MODES[mode]['label']} ({arrow}) {iran['name']} ↔ {kharej['name']}"
+            title = f"انجام سفارش #{order_id}: {mode_label(mode)} ({arrow}) {iran['name']} ↔ {kharej['name']}"
         charge = wallet_mod.price_for(db, mode)
         if charge > 0:
             if wallet_mod.balance_of(db, customer_id) < charge:

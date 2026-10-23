@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from .db import Database, utcnow
-from .validators import MODES
+from .validators import MODES, canonical_mode, mode_label
 
 DEFAULT_CURRENCY = "تومان"
 
@@ -93,7 +93,7 @@ def balance_of(db: Database, user_id: int) -> int:
 def price_for(db: Database, mode: str) -> int:
     if not sell_enabled(db):
         return 0
-    return load_prices(db).get(mode, 0)
+    return load_prices(db).get(canonical_mode(mode), 0)
 
 
 def credit(
@@ -179,7 +179,7 @@ def charge_tunnel(db: Database, user_id: int, mode: str, tunnel_id: int) -> int:
     amount = price_for(db, mode)
     if amount <= 0:
         return 0
-    label = MODES.get(mode, {}).get("label", mode)
+    label = mode_label(mode)
     debit(
         db,
         user_id,
@@ -215,7 +215,7 @@ def refund_tunnel(db: Database, user_id: int, mode: str, tunnel_id: int) -> int:
         amount = price_for(db, mode)
     if amount <= 0:
         return 0
-    label = MODES.get(mode, {}).get("label", mode)
+    label = mode_label(mode)
     try:
         credit(
             db,

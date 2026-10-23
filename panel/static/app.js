@@ -53,15 +53,22 @@
   const walletState = { data: null, loading: false };
   const XRAY_TUNNEL_MODES = new Set(['dokodemo', 'xray_reverse']);
   const MODE_GROUPS = [
-    { id: 'classic', title: 'لایه ۲ / کلاسیک', ids: ['gre', 'tun_tcp', 'paqet', 'vxlan'] },
-    { id: 'wg', title: 'WireGuard', ids: ['wireguard', 'wg_icmp', 'wg_faketcp'] },
+    { id: 'classic', title: 'لایه ۳ کلاسیک', ids: ['gre', 'ipip', 'tun_tcp', 'paqet'] },
+    { id: 'l2', title: 'لایه ۲ / اترنت', ids: ['vxlan', 'geneve', 'l2tpv3', 'gretap', 'eoip'] },
+    { id: 'wg', title: 'WireGuard و مبهم', ids: ['wireguard', 'wg_icmp', 'wg_faketcp', 'jojocloak'] },
     { id: 'proxy', title: 'جریان و پروکسی', ids: ['hysteria2', 'rathole', 'wstunnel'] },
     { id: 'xray', title: 'Xray', ids: ['dokodemo', 'xray_reverse'] },
-    { id: 'v6', title: 'IPv6', ids: ['sit', 'gre6', 'ipip6'] },
+    { id: 'v6', title: 'IPv6', ids: ['sit', 'gre6', 'ipip6', 'eoip6'] },
     { id: 'direct', title: 'مستقیم / ضدسانسور', ids: ['dnstt', 'icmp', 'spoof'] },
   ];
   const MODE_PROTO = {
     gre: 'GRE',
+    ipip: 'IPIP',
+    gretap: 'TAP',
+    eoip: 'EoIP',
+    geneve: 'GEN',
+    l2tpv3: 'L2TP',
+    jojocloak: 'CLOAK',
     tun_tcp: 'TCP',
     paqet: 'KCP',
     vxlan: 'UDP',
@@ -76,6 +83,7 @@
     sit: 'SIT',
     gre6: 'GRE6',
     ipip6: 'IPIP',
+    eoip6: 'EoIP6',
     dnstt: 'DNS',
     icmp: 'ICMP',
     spoof: 'SPOOF',
@@ -145,7 +153,7 @@
     dns_set: 'تنظیم DNS',
     os_update: 'آپدیت سیستم',
     vpn_panel: 'نصب پنل VPN',
-    tunnel_compare: 'مقایسه تانل',
+    tunnel_compare: 'آزمایشگاه مسیر',
     server_ping: 'تست پینگ',
   };
 
@@ -157,7 +165,12 @@
     running: false,
     iranId: null,
     kharejId: null,
+    progress: null,
+    okOnly: false,
+    sort: 'score',
   };
+
+  const JNLAB_L2 = new Set(['vxlan', 'geneve', 'l2tpv3', 'gretap', 'eoip', 'eoip6']);
 
   const THEME_KEY = 'jojonet-theme-2';
   const THEMES = ['jojo', 'day', 'night'];
@@ -1912,21 +1925,50 @@
 
   function compareCatalog() {
     const fromInfo = state.info && Array.isArray(state.info.compare_modes) ? state.info.compare_modes : null;
-    return fromInfo || [
-      { id: 'direct', label: 'مسیر مستقیم', create_mode: null },
-      { id: 'sit', label: '6to4', create_mode: 'sit' },
-      { id: 'ipip', label: 'IPIP', create_mode: null },
-      { id: 'sit_udp', label: '6to4 روی UDP', create_mode: null },
-      { id: 'gre6', label: '6to4 + GRE6', create_mode: 'gre6' },
-      { id: 'vxlan', label: 'VXLAN', create_mode: 'vxlan' },
-      { id: 'geneve', label: 'GENEVE', create_mode: null },
-      { id: 'l2tpv3', label: 'L2TPv3', create_mode: null },
-      { id: 'wireguard', label: 'WireGuard', create_mode: 'wireguard' },
-      { id: 'tun_tcp', label: 'TCP', create_mode: 'tun_tcp' },
-      { id: 'gre', label: 'GRE', create_mode: 'gre' },
-      { id: 'gretap', label: 'GRETAP', create_mode: null },
-      { id: 'ipip6', label: 'IPIP6', create_mode: 'ipip6' },
+    const raw = fromInfo || [
+      { id: 'direct', label: 'مسیر مستقیم', create_mode: null, layer: 'bare' },
+      { id: 'sit', label: '6to4', create_mode: 'sit', layer: 'L3' },
+      { id: 'ipip', label: 'IPIP', create_mode: 'ipip', layer: 'L3' },
+      { id: 'sit_udp', label: '6to4 روی UDP', create_mode: null, layer: 'L3' },
+      { id: 'gre6', label: '6to4 + GRE6', create_mode: 'gre6', layer: 'L3' },
+      { id: 'vxlan', label: 'VXLAN', create_mode: 'vxlan', layer: 'L2' },
+      { id: 'geneve', label: 'GENEVE', create_mode: 'geneve', layer: 'L2' },
+      { id: 'l2tpv3', label: 'L2TPv3', create_mode: 'l2tpv3', layer: 'L2' },
+      { id: 'wireguard', label: 'WireGuard', create_mode: 'wireguard', layer: 'L3' },
+      { id: 'jojocloak', label: 'JojoCloak', create_mode: 'jojocloak', layer: 'L3' },
+      { id: 'tun_tcp', label: 'TCP', create_mode: 'tun_tcp', layer: 'L3' },
+      { id: 'gre', label: 'GRE', create_mode: 'gre', layer: 'L3' },
+      { id: 'gretap', label: 'GRETAP', create_mode: 'gretap', layer: 'L2' },
+      { id: 'eoip', label: 'EoIP', create_mode: 'eoip', layer: 'L2' },
+      { id: 'eoip6', label: 'EoIPv6', create_mode: 'eoip6', layer: 'L2' },
+      { id: 'ipip6', label: 'IPIP6', create_mode: 'ipip6', layer: 'L3' },
     ];
+    return raw.map((m) => ({
+      ...m,
+      layer: m.layer || (m.id === 'direct' ? 'bare' : (JNLAB_L2.has(m.id) ? 'L2' : 'L3')),
+    }));
+  }
+
+  function jnlabLayerMeta(m) {
+    const layer = m.layer || 'L3';
+    if (layer === 'bare') return 'مسیر خام';
+    const mtu = m.mtu != null ? ` · MTU ${m.mtu}` : '';
+    return `${layer}${mtu}`;
+  }
+
+  function jojoPathScore(r, maxDl, maxUl) {
+    if (!r || !r.ok) return 0;
+    const dl = Math.max(0, Number(r.download_mbps) || 0);
+    const ul = Math.max(0, Number(r.upload_mbps) || 0);
+    const ping = Number(r.ping);
+    const loss = Number(r.loss);
+    const jitter = Number(r.jitter);
+    const dlN = Math.min(100, (dl / Math.max(1, maxDl)) * 100);
+    const ulN = Math.min(100, (ul / Math.max(1, maxUl)) * 100);
+    const pingN = Number.isFinite(ping) ? Math.max(0, 100 - ping * 1.8) : 40;
+    const lossN = Number.isFinite(loss) ? Math.max(0, 100 - loss * 8) : 50;
+    const jitN = Number.isFinite(jitter) ? Math.max(0, 100 - jitter * 4) : 50;
+    return Math.round(dlN * 0.38 + ulN * 0.14 + pingN * 0.28 + lossN * 0.12 + jitN * 0.08);
   }
 
   function updateCompareForm() {
@@ -1939,8 +1981,8 @@
     const iran = servers.filter((s) => s.role === 'iran').map(opt);
     const kharej = servers.filter((s) => s.role === 'kharej').map(opt);
     const loaded = lists.servers.loaded;
-    fillSelect(iranSel, iran, !loaded ? 'در حال بارگذاری…' : iran.length ? 'انتخاب سرور ایران…' : 'سرور ایرانی ثبت نشده است');
-    fillSelect(kharejSel, kharej, !loaded ? 'در حال بارگذاری…' : kharej.length ? 'انتخاب سرور خارج…' : 'سرور خارجی ثبت نشده است');
+    fillSelect(iranSel, iran, !loaded ? 'در حال بارگذاری…' : iran.length ? 'سرور ایران…' : 'سرور ایرانی ثبت نشده است');
+    fillSelect(kharejSel, kharej, !loaded ? 'در حال بارگذاری…' : kharej.length ? 'سرور خارج…' : 'سرور خارجی ثبت نشده است');
     iranSel.disabled = !iran.length || compareState.running;
     kharejSel.disabled = !kharej.length || compareState.running;
     const catalog = compareCatalog();
@@ -1955,12 +1997,17 @@
       const checked = keepPrev ? prev.has(m.id) : true;
       const input = h('input', { type: 'checkbox', id, value: m.id, checked: checked || undefined });
       if (compareState.running) input.disabled = true;
-      return h('label', { class: 'compare-mode', for: id },
+      return h('label', { class: 'jnlab-tile', for: id },
         input,
-        h('span', null, m.label || m.id));
+        h('span', { class: 'jnlab-tile-name' }, m.label || m.id),
+        h('span', { class: 'jnlab-tile-meta' }, jnlabLayerMeta(m)));
     }));
     const runBtn = $('#cf-run');
     if (runBtn) runBtn.disabled = !iran.length || !kharej.length || compareState.running;
+    const allBtn = $('#cf-all');
+    const noneBtn = $('#cf-none');
+    if (allBtn) allBtn.disabled = compareState.running;
+    if (noneBtn) noneBtn.disabled = compareState.running;
   }
 
   function parseCompareLogLine(line) {
@@ -2000,34 +2047,82 @@
     return `${Math.min(100, Math.round((n / max) * 100))}%`;
   }
 
+  function sortedCompareRows(rows, maxDl, maxUl) {
+    const scored = rows.map((r) => ({ ...r, _score: jojoPathScore(r, maxDl, maxUl) }));
+    let list = compareState.okOnly ? scored.filter((r) => r.ok) : scored;
+    const key = compareState.sort || 'score';
+    list = list.slice().sort((a, b) => {
+      if (key === 'dl') return (Number(b.download_mbps) || 0) - (Number(a.download_mbps) || 0);
+      if (key === 'ping') {
+        const ap = Number.isFinite(Number(a.ping)) ? Number(a.ping) : 1e9;
+        const bp = Number.isFinite(Number(b.ping)) ? Number(b.ping) : 1e9;
+        return ap - bp;
+      }
+      if (key === 'loss') {
+        const al = Number.isFinite(Number(a.loss)) ? Number(a.loss) : 1e9;
+        const bl = Number.isFinite(Number(b.loss)) ? Number(b.loss) : 1e9;
+        return al - bl;
+      }
+      return (b._score || 0) - (a._score || 0);
+    });
+    return list;
+  }
+
   function renderCompareResults() {
     const box = $('#compare-results');
     const sum = $('#compare-summary');
+    const toolbar = $('#cf-toolbar');
+    const exportBtn = $('#cf-export');
     if (!box) return;
     const rows = compareState.results.slice();
     const maxDl = Math.max(1, ...rows.map((r) => Number(r.download_mbps) || 0));
+    const maxUl = Math.max(1, ...rows.map((r) => Number(r.upload_mbps) || 0));
+    const okRows = rows.filter((r) => r.ok);
+
+    if (toolbar) toolbar.hidden = !rows.length;
+    if (exportBtn) exportBtn.hidden = !rows.length;
+
     if (!rows.length && !compareState.running) {
-      box.replaceChildren(emptyState('هنوز سنجشی نیست.', 'سرورها را انتخاب کنید و «شروع مقایسه» را بزنید.'));
+      box.replaceChildren(emptyState('آزمایشگاهی هنوز خالی است.', 'سرورها را انتخاب کنید، پروتکل‌ها را تیک بزنید و «اجرای سنجش» را بزنید.'));
       if (sum) sum.hidden = true;
       return;
     }
-    const okRows = rows.filter((r) => r.ok);
+
+    const ranked = sortedCompareRows(rows, maxDl, maxUl);
+    const best = okRows.slice().sort((a, b) => jojoPathScore(b, maxDl, maxUl) - jojoPathScore(a, maxDl, maxUl))[0];
+    const bestScore = best ? jojoPathScore(best, maxDl, maxUl) : 0;
+    const peer = compareState.peer || 'همتا';
+
     if (sum) {
       sum.hidden = false;
-      const best = okRows.slice().sort((a, b) => (Number(b.download_mbps) || 0) - (Number(a.download_mbps) || 0))[0];
-      const peer = compareState.peer || 'همتا';
+      const prog = compareState.progress;
+      const title = compareState.running
+        ? (prog ? `سنجش ${prog.label || prog.id || ''}…` : 'سنجش در جریان…')
+        : (best ? `پیشنهاد Jojo: ${best.label || best.id}` : 'نتیجه آزمایشگاه');
+      const line = compareState.running && prog
+        ? `مرحله ${prog.index || '?'} از ${prog.total || '?'} · ${okRows.length} مسیر سالم تا الان`
+        : `${okRows.length} از ${rows.length || '…'} پروتکل به ${peer} سالم وصل شد`
+          + (best ? ` · دانلود ${fmtMbps(best.download_mbps)} Mbps · پینگ ${fmtMs(best.ping)} ms` : '');
       sum.replaceChildren(
-        h('div', { class: 'compare-sum-card' },
-          h('p', { class: 'compare-sum-title' }, compareState.running ? 'در حال سنجش…' : 'خلاصه مقایسه'),
-          h('p', { class: 'compare-sum-line' },
-            `${okRows.length} از ${rows.length || '…'} پروتکل به ${peer} وصل شد`),
-          best
-            ? h('p', { class: 'compare-sum-best' },
-              `پیشنهاد: ${best.label} — دانلود ${fmtMbps(best.download_mbps)} Mbps · پینگ ${fmtMs(best.ping)} ms`)
-            : (compareState.running ? null : h('p', { class: 'muted' }, 'هیچ مسیری با موفقیت سنجیده نشد.'))));
+        h('div', { class: 'jnlab-score-wrap', 'aria-hidden': best ? undefined : 'true' },
+          h('div', { class: 'jnlab-score-ring', style: `--p:${bestScore}` }),
+          h('span', { class: 'jnlab-score-num' }, best ? String(bestScore) : '—')),
+        h('div', { class: 'jnlab-verdict-body' },
+          h('p', { class: 'jnlab-verdict-kicker' }, 'امتیاز مسیر JojoNet'),
+          h('p', { class: 'jnlab-verdict-title' }, title),
+          h('p', { class: 'jnlab-verdict-line' }, line
+            || (compareState.running ? 'در حال آماده‌سازی اورلی موقت…' : 'هیچ مسیری با موفقیت سنجیده نشد.'))));
     }
-    box.replaceChildren(...rows.map((r) => {
+
+    if (!ranked.length) {
+      box.replaceChildren(emptyState('با این فیلتر چیزی نیست.', '«فقط مسیرهای سالم» را بردارید یا سنجش را دوباره اجرا کنید.'));
+      return;
+    }
+
+    box.replaceChildren(...ranked.map((r, i) => {
       const failed = !r.ok;
+      const isBest = !!(best && r.id === best.id && !failed);
+      const score = r._score || 0;
       const createMode = r.create_mode;
       const createBtn = createMode
         ? h('button', {
@@ -2035,36 +2130,77 @@
           class: 'btn btn-sm btn-primary',
           disabled: failed || undefined,
           onclick: () => jumpCreateTunnel(createMode),
-        }, 'ساخت همین تانل')
-        : h('span', { class: 'muted compare-no-create' }, r.note || (failed ? '' : 'فقط تست موقت'));
+        }, 'ساخت دائم')
+        : h('span', { class: 'jnlab-lane-note' }, r.note || (failed ? '' : 'فقط سنجش موقت'));
       const err = failed
-        ? h('p', { class: 'compare-err' }, r.error || r.note || 'بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد.')
-        : (r.note ? h('p', { class: 'hint' }, r.note) : null);
-      return h('article', { class: `compare-row${failed ? ' is-fail' : ' is-ok'}` },
-        h('div', { class: 'compare-row-head' },
-          h('h4', { class: 'compare-label' }, r.label || r.id),
-          h('span', { class: `compare-badge${failed ? ' bad' : ''}` }, failed ? 'ناموفق' : 'وصل')),
-        h('div', { class: 'compare-metrics' },
-          h('div', { class: 'compare-metric' },
-            h('span', { class: 'compare-k' }, 'دانلود'),
-            h('div', { class: 'compare-bar-track' },
-              h('div', { class: 'compare-bar', style: `width:${speedBarWidth(r.download_mbps, maxDl)}` })),
-            h('span', { class: 'compare-v' }, `${fmtMbps(r.download_mbps)} Mbps`)),
-          h('div', { class: 'compare-metric compare-metric-sm' },
-            h('span', { class: 'compare-k' }, 'آپلود'),
-            h('span', { class: 'compare-v' }, `${fmtMbps(r.upload_mbps)} Mbps`)),
-          h('div', { class: 'compare-metric compare-metric-sm' },
-            h('span', { class: 'compare-k' }, 'پینگ'),
-            h('span', { class: 'compare-v' }, `${fmtMs(r.ping)} ms`)),
-          h('div', { class: 'compare-metric compare-metric-sm' },
-            h('span', { class: 'compare-k' }, 'جیتر'),
-            h('span', { class: 'compare-v' }, `${fmtMs(r.jitter)} ms`)),
-          h('div', { class: 'compare-metric compare-metric-sm' },
-            h('span', { class: 'compare-k' }, 'از دست‌رفته'),
-            h('span', { class: 'compare-v' }, r.loss == null ? '—' : `${Number(r.loss)}%`))),
-        err,
-        h('div', { class: 'compare-row-actions' }, createBtn));
+        ? h('p', { class: 'jnlab-lane-err' }, r.error || r.note || 'بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد.')
+        : (r.note ? h('p', { class: 'jnlab-lane-note' }, r.note) : null);
+      const layer = r.layer || (JNLAB_L2.has(r.id) ? 'L2' : (r.id === 'direct' ? 'bare' : 'L3'));
+      return h('article', {
+        class: `jnlab-lane${failed ? ' is-fail' : ' is-ok'}${isBest ? ' is-best' : ''}`,
+      },
+        h('div', { class: 'jnlab-rank' }, String(i + 1)),
+        h('div', { class: 'jnlab-lane-main' },
+          h('div', { class: 'jnlab-lane-title' },
+            h('h4', null, r.label || r.id),
+            h('span', { class: `jnlab-chip${failed ? ' bad' : ' ok'}` }, failed ? 'قطع' : 'وصل'),
+            isBest ? h('span', { class: 'jnlab-chip best' }, 'بهترین') : null,
+            h('span', { class: 'jnlab-chip' }, layer === 'bare' ? 'خام' : layer),
+            h('span', { class: 'jnlab-chip' }, `Jojo ${score}`)),
+          h('div', { class: 'jnlab-stats' },
+            h('div', { class: 'jnlab-stat' },
+              h('span', { class: 'jnlab-stat-k' }, 'دانلود'),
+              h('span', { class: 'jnlab-stat-v' }, `${fmtMbps(r.download_mbps)} Mbps`)),
+            h('div', { class: 'jnlab-stat' },
+              h('span', { class: 'jnlab-stat-k' }, 'آپلود'),
+              h('span', { class: 'jnlab-stat-v' }, `${fmtMbps(r.upload_mbps)} Mbps`)),
+            h('div', { class: 'jnlab-stat' },
+              h('span', { class: 'jnlab-stat-k' }, 'پینگ'),
+              h('span', { class: 'jnlab-stat-v' }, `${fmtMs(r.ping)} ms`)),
+            h('div', { class: 'jnlab-stat' },
+              h('span', { class: 'jnlab-stat-k' }, 'از دست‌رفته'),
+              h('span', { class: 'jnlab-stat-v' }, r.loss == null ? '—' : `${Number(r.loss)}%`))),
+          h('div', { class: 'jnlab-spark', title: 'نسبت دانلود به بهترین' },
+            h('i', { style: `width:${speedBarWidth(r.download_mbps, maxDl)}` })),
+          err),
+        h('div', { class: 'jnlab-lane-side' }, createBtn));
     }));
+  }
+
+  function exportCompareJson() {
+    const rows = compareState.results;
+    if (!rows.length) return;
+    const maxDl = Math.max(1, ...rows.map((r) => Number(r.download_mbps) || 0));
+    const maxUl = Math.max(1, ...rows.map((r) => Number(r.upload_mbps) || 0));
+    const payload = {
+      product: 'JojoNet Path Lab',
+      peer: compareState.peer,
+      iran_id: compareState.iranId,
+      kharej_id: compareState.kharejId,
+      generated_at: new Date().toISOString(),
+      results: sortedCompareRows(rows, maxDl, maxUl).map((r) => ({
+        id: r.id,
+        label: r.label,
+        ok: !!r.ok,
+        jojo_score: r._score,
+        download_mbps: r.download_mbps,
+        upload_mbps: r.upload_mbps,
+        ping: r.ping,
+        jitter: r.jitter,
+        loss: r.loss,
+        create_mode: r.create_mode || null,
+        note: r.note || null,
+        error: r.error || null,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jojonet-pathlab-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('خروجی آزمایشگاه ذخیره شد.', 'success');
   }
 
   function applyCompareEvent(ev) {
@@ -2072,19 +2208,13 @@
     if (ev.type === 'start') {
       compareState.peer = ev.peer_label || '';
       compareState.results = [];
+      compareState.progress = null;
       renderCompareResults();
       return;
     }
     if (ev.type === 'progress') {
-      const sum = $('#compare-summary');
-      if (sum) {
-        sum.hidden = false;
-        sum.replaceChildren(
-          h('div', { class: 'compare-sum-card' },
-            h('p', { class: 'compare-sum-title' }, 'در حال سنجش…'),
-            h('p', { class: 'compare-sum-line' },
-              `${ev.label || ev.id || ''} (${ev.index || '?'}/${ev.total || '?'})`)));
-      }
+      compareState.progress = { id: ev.id, label: ev.label, index: ev.index, total: ev.total };
+      renderCompareResults();
       return;
     }
     if (ev.type === 'result') {
@@ -2099,6 +2229,7 @@
     if (ev.type === 'done') {
       if (Array.isArray(ev.results)) compareState.results = ev.results;
       compareState.peer = ev.peer_label || compareState.peer;
+      compareState.progress = null;
       renderCompareResults();
     }
   }
@@ -2142,16 +2273,17 @@
     compareState.running = true;
     compareState.results = [];
     compareState.peer = '';
+    compareState.progress = null;
     compareState.iranId = iranId;
     compareState.kharejId = kharejId;
     updateCompareForm();
     renderCompareResults();
     try {
       const r = await api('POST', '/api/compare', { iran_id: iranId, kharej_id: kharejId, modes });
-      if (!r || r.job_id == null) throw Object.assign(new Error('شروع مقایسه ناموفق بود.'), { status: 500 });
+      if (!r || r.job_id == null) throw Object.assign(new Error('شروع سنجش ناموفق بود.'), { status: 500 });
       compareState.jobId = r.job_id;
       trackJob(r.job_id);
-      toast('مقایسه شروع شد؛ نتایج همین‌جا زنده می‌آیند.', 'success');
+      toast('آزمایشگاه مسیر شروع شد؛ نتایج زنده می‌آیند.', 'success');
       const job = await api('GET', `/api/jobs/${enc(r.job_id)}`);
       ingestCompareLog(job && job.log);
       if (job && !isActive(job.status)) {
@@ -2168,7 +2300,7 @@
         updateCompareForm();
         renderCompareResults();
         stopCompareStream();
-        if (status) notifyDone(r.job_id, status, 'مقایسه تانل');
+        if (status) notifyDone(r.job_id, status, 'آزمایشگاه مسیر');
         load('jobs', true);
       };
       es.addEventListener('snapshot', (ev) => {
@@ -2195,6 +2327,7 @@
       load('jobs', true);
     } catch (err) {
       compareState.running = false;
+      compareState.progress = null;
       updateCompareForm();
       if (err && err.status !== 401) showErr(errBox, err.message || NET_ERR);
     }
@@ -7617,6 +7750,22 @@
           for (const c of document.querySelectorAll('#cf-modes input[type=checkbox]')) c.checked = false;
         });
       }
+      const okOnly = $('#cf-ok-only');
+      const sortSel = $('#cf-sort');
+      const exportBtn = $('#cf-export');
+      if (okOnly) {
+        okOnly.addEventListener('change', () => {
+          compareState.okOnly = !!okOnly.checked;
+          renderCompareResults();
+        });
+      }
+      if (sortSel) {
+        sortSel.addEventListener('change', () => {
+          compareState.sort = sortSel.value || 'score';
+          renderCompareResults();
+        });
+      }
+      if (exportBtn) exportBtn.addEventListener('click', exportCompareJson);
     }
     $('#relay-form').addEventListener('submit', onCreateRelay);
     for (const btn of document.querySelectorAll('.vpn-panel-card')) {

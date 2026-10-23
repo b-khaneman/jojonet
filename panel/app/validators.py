@@ -76,8 +76,10 @@ DNSTT_MODES: tuple[str, ...] = ("doh", "dot", "udp")
 SPOOF_UNIT = "jojonet-spoof.service"
 SPOOF_MARK = "spoof"
 
-WG_MODES: frozenset[str] = frozenset({"wireguard", "wg_icmp", "wg_faketcp", "neoobfs"})
-WG_OBFS: dict[str, str] = {"wg_icmp": "icmp", "wg_faketcp": "faketcp", "neoobfs": "faketcp"}
+WG_MODES: frozenset[str] = frozenset({"wireguard", "wg_icmp", "wg_faketcp", "jojocloak"})
+WG_OBFS: dict[str, str] = {"wg_icmp": "icmp", "wg_faketcp": "faketcp", "jojocloak": "faketcp"}
+# Internal only: map a retired mode id from early builds to JojoCloak (never shown in UI).
+MODE_ALIASES: dict[str, str] = {"neoobfs": "jojocloak"}
 SUBNET_KEYDIR_MODES: frozenset[str] = frozenset({"tun_tcp", "paqet"})
 XRAY_MODES: frozenset[str] = frozenset({"dokodemo", "xray_reverse"})
 V6_MODES: frozenset[str] = frozenset({"sit", "gre6", "ipip6", "eoip6"})
@@ -146,11 +148,11 @@ MODES: dict[str, dict[str, str]] = {
         "flag": "--l2tpv3",
         "desc": "L2TPv3 استاتیک لایه ۲ روی UDP — معادل MikroTik L2TPv3 Static.",
     },
-    "neoobfs": {
-        "label": "NeoObfs",
+    "jojocloak": {
+        "label": "JojoCloak",
         "first": "kharej",
-        "flag": "--neoobfs",
-        "desc": "تونل رمزنگاری‌شده + مبهم‌سازی روی UDP/TCPجعلی (WireGuard + udp2raw).",
+        "flag": "--jojocloak",
+        "desc": "پوشش اختصاصی JojoNet: WireGuard رمزنگاری‌شده داخل TCP جعلی (udp2raw) — برای مسیرهایی که UDP خام را می‌بندند.",
     },
     "tun_tcp": {
         "label": "TUN/TCP",
@@ -411,10 +413,19 @@ def valid_dnstt_resolver(mode: str, value: str) -> bool:
     return valid_ipv4(addr) or bool(DOMAIN_RE.fullmatch(addr)) or addr.count(".") >= 1
 
 
+def canonical_mode(mode: str | None) -> str:
+    """Map legacy/alias mode ids to the current JojoNet id."""
+    m = (mode or "").strip()
+    return MODE_ALIASES.get(m, m)
+
+
+def mode_label(mode: str | None) -> str:
+    m = canonical_mode(mode)
+    return MODES.get(m, {}).get("label", m or "?")
+
+
 def conf_mode(conf: dict[str, str]) -> str:
-    mode = (conf.get("TunnelMode") or "gre").strip()
-    if mode == "neoobfs":
-        return "neoobfs"
+    mode = canonical_mode((conf.get("TunnelMode") or "gre").strip())
     if mode == "wireguard":
         obfs = (conf.get("WgObfs") or "").strip()
         if obfs == "icmp":
