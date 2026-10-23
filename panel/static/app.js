@@ -12,7 +12,7 @@
   const POLL_MS = 5000;
   const JOB_POLL_MS = 2000;
   const IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-  const TABS = ['overview', 'servers', 'tunnels', 'relays', 'panels', 'outbounds', 'jobs', 'guide', 'orders', 'wallet', 'tickets', 'users'];
+  const TABS = ['overview', 'servers', 'tunnels', 'compare', 'relays', 'panels', 'outbounds', 'jobs', 'guide', 'orders', 'wallet', 'tickets', 'users'];
   const ORDER_STATUS = {
     pending: ['warn', 'در انتظار'],
     approved: ['info', 'تأیید شده'],
@@ -145,6 +145,18 @@
     dns_set: 'تنظیم DNS',
     os_update: 'آپدیت سیستم',
     vpn_panel: 'نصب پنل VPN',
+    tunnel_compare: 'مقایسه تانل',
+    server_ping: 'تست پینگ',
+  };
+
+  const compareState = {
+    jobId: null,
+    es: null,
+    results: [],
+    peer: '',
+    running: false,
+    iranId: null,
+    kharejId: null,
   };
 
   const THEME_KEY = 'jojonet-theme-2';
@@ -192,6 +204,20 @@
       if (Array.isArray(c)) addChildren(el, c);
       else el.append(c instanceof Node ? c : String(c));
     }
+  }
+
+  /** Like replaceChildren, but skips null/false (DOM would otherwise render the text "null"). */
+  function setChildren(el, ...children) {
+    const nodes = [];
+    const collect = (list) => {
+      for (const c of list) {
+        if (c == null || c === false || c === true) continue;
+        if (Array.isArray(c)) collect(c);
+        else nodes.push(c instanceof Node ? c : document.createTextNode(String(c)));
+      }
+    };
+    collect(children);
+    el.replaceChildren(...nodes);
   }
 
   function h(tag, attrs, ...children) {
@@ -630,7 +656,7 @@
   /* ---------- list loaders ---------- */
 
   const lists = {
-    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); } },
+    servers: { path: '/api/servers', el: '#servers-list', render: renderServers, after: () => { updateTunnelForm(); updateCompareForm(); updateRelayForm(); updateVpnPanelForm(); fillTermSelects(); } },
     tunnels: {
       path: '/api/tunnels',
       el: '#tunnels-list',
@@ -969,7 +995,7 @@
           h('p', null, 'می‌توانید وارد شوید، تیکت بزنید و کیف پول را شارژ کنید. ساخت سرور، تانل و رله بعد از تأیید مالک فعال می‌شود.'))
       : null;
 
-    box.replaceChildren(
+    setChildren(box,
       accessBanner,
       h('section', { class: `ov-hero is-${verdict.tone}` },
         h('div', { class: 'ov-copy' },
@@ -1171,16 +1197,17 @@
       startedJob(await api('POST', `/api/servers/${enc(s.id)}/test`));
     }));
 
-    const installBtn = h('button', { type: 'button', class: 'btn btn-sm' }, 'نصب پیش‌نیازها و اسکریپت');
+    const installBtn = h('button', { type: 'button', class: 'btn btn-sm btn-ghost' }, 'نصب دستی (اختیاری)');
+    installBtn.title = 'لازم نیست؛ موقع ساخت تانل خودکار نصب می‌شود. فقط اگر می‌خواهید از قبل آماده کنید.';
     installBtn.addEventListener('click', async () => {
       const ok = await confirmDialog({
-        title: 'نصب پیش‌نیازها',
-        message: `پیش‌نیازها و اسکریپت جوجونت روی سرور «${s.name}» نصب شود؟ این عملیات ممکن است چند دقیقه طول بکشد.`,
-        okText: 'شروع نصب',
+        title: 'نصب دستی پیش‌نیازها',
+        message: `معمولاً لازم نیست: با زدن «ساخت تانل» پیش‌نیاز و اسکریپت روی سرورهای جدید خودکار نصب می‌شود.\n\nاگر می‌خواهید از قبل روی «${s.name}» نصب کنید، تأیید کنید. ممکن است چند دقیقه طول بکشد.`,
+        okText: 'نصب از قبل',
       });
       if (!ok) return;
       act(installBtn, async () => {
-        startedJob(await api('POST', `/api/servers/${enc(s.id)}/install`), 'نصب آغاز شد.');
+        startedJob(await api('POST', `/api/servers/${enc(s.id)}/install`), 'نصب دستی آغاز شد.');
       });
     });
 
@@ -1474,7 +1501,10 @@
         try {
           if (edit) await api('PUT', `/api/servers/${enc(s.id)}`, payload);
           else await api('POST', '/api/servers', payload);
-          toast(edit ? 'تغییرات سرور ذخیره شد.' : 'سرور اضافه شد.', 'success');
+          toast(
+            edit ? 'تغییرات سرور ذخیره شد.' : 'سرور ثبت شد. پیش‌نیازها موقع ساخت تانل خودکار نصب می‌شوند.',
+            'success',
+          );
           m.close();
           load('servers');
         } catch (err) {
@@ -1878,6 +1908,296 @@
     updateModeDesc();
     updateModePriceHint();
     fillDepositModes();
+  }
+
+  function compareCatalog() {
+    const fromInfo = state.info && Array.isArray(state.info.compare_modes) ? state.info.compare_modes : null;
+    return fromInfo || [
+      { id: 'direct', label: 'مسیر مستقیم', create_mode: null },
+      { id: 'sit', label: '6to4', create_mode: 'sit' },
+      { id: 'ipip', label: 'IPIP', create_mode: null },
+      { id: 'sit_udp', label: '6to4 روی UDP', create_mode: null },
+      { id: 'gre6', label: '6to4 + GRE6', create_mode: 'gre6' },
+      { id: 'vxlan', label: 'VXLAN', create_mode: 'vxlan' },
+      { id: 'geneve', label: 'GENEVE', create_mode: null },
+      { id: 'l2tpv3', label: 'L2TPv3', create_mode: null },
+      { id: 'wireguard', label: 'WireGuard', create_mode: 'wireguard' },
+      { id: 'tun_tcp', label: 'TCP', create_mode: 'tun_tcp' },
+      { id: 'gre', label: 'GRE', create_mode: 'gre' },
+      { id: 'gretap', label: 'GRETAP', create_mode: null },
+      { id: 'ipip6', label: 'IPIP6', create_mode: 'ipip6' },
+    ];
+  }
+
+  function updateCompareForm() {
+    const iranSel = $('#cf-iran');
+    const kharejSel = $('#cf-kharej');
+    const modesBox = $('#cf-modes');
+    if (!iranSel || !kharejSel || !modesBox) return;
+    const servers = lists.servers.data || [];
+    const opt = (s) => ({ value: s.id, label: `${s.name} (${s.host})` });
+    const iran = servers.filter((s) => s.role === 'iran').map(opt);
+    const kharej = servers.filter((s) => s.role === 'kharej').map(opt);
+    const loaded = lists.servers.loaded;
+    fillSelect(iranSel, iran, !loaded ? 'در حال بارگذاری…' : iran.length ? 'انتخاب سرور ایران…' : 'سرور ایرانی ثبت نشده است');
+    fillSelect(kharejSel, kharej, !loaded ? 'در حال بارگذاری…' : kharej.length ? 'انتخاب سرور خارج…' : 'سرور خارجی ثبت نشده است');
+    iranSel.disabled = !iran.length || compareState.running;
+    kharejSel.disabled = !kharej.length || compareState.running;
+    const catalog = compareCatalog();
+    const prev = new Set(
+      Array.from(modesBox.querySelectorAll('input[type=checkbox]'))
+        .filter((c) => c.checked)
+        .map((c) => c.value),
+    );
+    const keepPrev = modesBox.childElementCount > 0;
+    modesBox.replaceChildren(...catalog.map((m) => {
+      const id = `cfm-${m.id}`;
+      const checked = keepPrev ? prev.has(m.id) : true;
+      const input = h('input', { type: 'checkbox', id, value: m.id, checked: checked || undefined });
+      if (compareState.running) input.disabled = true;
+      return h('label', { class: 'compare-mode', for: id },
+        input,
+        h('span', null, m.label || m.id));
+    }));
+    const runBtn = $('#cf-run');
+    if (runBtn) runBtn.disabled = !iran.length || !kharej.length || compareState.running;
+  }
+
+  function parseCompareLogLine(line) {
+    const m = /^JN_COMPARE:(.+)$/.exec((line || '').trim());
+    if (!m) return null;
+    try {
+      const data = JSON.parse(m[1]);
+      return data && typeof data === 'object' ? data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function stopCompareStream() {
+    if (compareState.es) {
+      try { compareState.es.close(); } catch { /* ignore */ }
+      compareState.es = null;
+    }
+  }
+
+  function fmtMbps(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    return n >= 100 ? String(Math.round(n)) : n.toFixed(1);
+  }
+
+  function fmtMs(v) {
+    if (v == null || v === '') return '—';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return n < 10 ? n.toFixed(1) : String(Math.round(n));
+  }
+
+  function speedBarWidth(mbps, maxMbps) {
+    const n = Math.max(0, Number(mbps) || 0);
+    const max = Math.max(1, Number(maxMbps) || 1);
+    return `${Math.min(100, Math.round((n / max) * 100))}%`;
+  }
+
+  function renderCompareResults() {
+    const box = $('#compare-results');
+    const sum = $('#compare-summary');
+    if (!box) return;
+    const rows = compareState.results.slice();
+    const maxDl = Math.max(1, ...rows.map((r) => Number(r.download_mbps) || 0));
+    if (!rows.length && !compareState.running) {
+      box.replaceChildren(emptyState('هنوز سنجشی نیست.', 'سرورها را انتخاب کنید و «شروع مقایسه» را بزنید.'));
+      if (sum) sum.hidden = true;
+      return;
+    }
+    const okRows = rows.filter((r) => r.ok);
+    if (sum) {
+      sum.hidden = false;
+      const best = okRows.slice().sort((a, b) => (Number(b.download_mbps) || 0) - (Number(a.download_mbps) || 0))[0];
+      const peer = compareState.peer || 'همتا';
+      sum.replaceChildren(
+        h('div', { class: 'compare-sum-card' },
+          h('p', { class: 'compare-sum-title' }, compareState.running ? 'در حال سنجش…' : 'خلاصه مقایسه'),
+          h('p', { class: 'compare-sum-line' },
+            `${okRows.length} از ${rows.length || '…'} پروتکل به ${peer} وصل شد`),
+          best
+            ? h('p', { class: 'compare-sum-best' },
+              `پیشنهاد: ${best.label} — دانلود ${fmtMbps(best.download_mbps)} Mbps · پینگ ${fmtMs(best.ping)} ms`)
+            : (compareState.running ? null : h('p', { class: 'muted' }, 'هیچ مسیری با موفقیت سنجیده نشد.'))));
+    }
+    box.replaceChildren(...rows.map((r) => {
+      const failed = !r.ok;
+      const createMode = r.create_mode;
+      const createBtn = createMode
+        ? h('button', {
+          type: 'button',
+          class: 'btn btn-sm btn-primary',
+          disabled: failed || undefined,
+          onclick: () => jumpCreateTunnel(createMode),
+        }, 'ساخت همین تانل')
+        : h('span', { class: 'muted compare-no-create' }, r.note || (failed ? '' : 'فقط تست موقت'));
+      const err = failed
+        ? h('p', { class: 'compare-err' }, r.error || r.note || 'بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد.')
+        : (r.note ? h('p', { class: 'hint' }, r.note) : null);
+      return h('article', { class: `compare-row${failed ? ' is-fail' : ' is-ok'}` },
+        h('div', { class: 'compare-row-head' },
+          h('h4', { class: 'compare-label' }, r.label || r.id),
+          h('span', { class: `compare-badge${failed ? ' bad' : ''}` }, failed ? 'ناموفق' : 'وصل')),
+        h('div', { class: 'compare-metrics' },
+          h('div', { class: 'compare-metric' },
+            h('span', { class: 'compare-k' }, 'دانلود'),
+            h('div', { class: 'compare-bar-track' },
+              h('div', { class: 'compare-bar', style: `width:${speedBarWidth(r.download_mbps, maxDl)}` })),
+            h('span', { class: 'compare-v' }, `${fmtMbps(r.download_mbps)} Mbps`)),
+          h('div', { class: 'compare-metric compare-metric-sm' },
+            h('span', { class: 'compare-k' }, 'آپلود'),
+            h('span', { class: 'compare-v' }, `${fmtMbps(r.upload_mbps)} Mbps`)),
+          h('div', { class: 'compare-metric compare-metric-sm' },
+            h('span', { class: 'compare-k' }, 'پینگ'),
+            h('span', { class: 'compare-v' }, `${fmtMs(r.ping)} ms`)),
+          h('div', { class: 'compare-metric compare-metric-sm' },
+            h('span', { class: 'compare-k' }, 'جیتر'),
+            h('span', { class: 'compare-v' }, `${fmtMs(r.jitter)} ms`)),
+          h('div', { class: 'compare-metric compare-metric-sm' },
+            h('span', { class: 'compare-k' }, 'از دست‌رفته'),
+            h('span', { class: 'compare-v' }, r.loss == null ? '—' : `${Number(r.loss)}%`))),
+        err,
+        h('div', { class: 'compare-row-actions' }, createBtn));
+    }));
+  }
+
+  function applyCompareEvent(ev) {
+    if (!ev || !ev.type) return;
+    if (ev.type === 'start') {
+      compareState.peer = ev.peer_label || '';
+      compareState.results = [];
+      renderCompareResults();
+      return;
+    }
+    if (ev.type === 'progress') {
+      const sum = $('#compare-summary');
+      if (sum) {
+        sum.hidden = false;
+        sum.replaceChildren(
+          h('div', { class: 'compare-sum-card' },
+            h('p', { class: 'compare-sum-title' }, 'در حال سنجش…'),
+            h('p', { class: 'compare-sum-line' },
+              `${ev.label || ev.id || ''} (${ev.index || '?'}/${ev.total || '?'})`)));
+      }
+      return;
+    }
+    if (ev.type === 'result') {
+      const row = { ...ev };
+      delete row.type;
+      const idx = compareState.results.findIndex((r) => r.id === row.id);
+      if (idx >= 0) compareState.results[idx] = row;
+      else compareState.results.push(row);
+      renderCompareResults();
+      return;
+    }
+    if (ev.type === 'done') {
+      if (Array.isArray(ev.results)) compareState.results = ev.results;
+      compareState.peer = ev.peer_label || compareState.peer;
+      renderCompareResults();
+    }
+  }
+
+  function ingestCompareLog(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    for (const line of lines) {
+      const ev = parseCompareLogLine(line);
+      if (ev) applyCompareEvent(ev);
+    }
+  }
+
+  function jumpCreateTunnel(mode) {
+    switchTab('tunnels');
+    updateTunnelForm();
+    const modeSel = $('#tf-mode');
+    const iranSel = $('#tf-iran');
+    const kharejSel = $('#tf-kharej');
+    if (modeSel && mode) {
+      modeSel.value = mode;
+      modeSel.dispatchEvent(new Event('change'));
+    }
+    if (iranSel && compareState.iranId != null) iranSel.value = String(compareState.iranId);
+    if (kharejSel && compareState.kharejId != null) kharejSel.value = String(compareState.kharejId);
+    updateTunnelForm();
+    toast(`نوع «${mode}» و سرورها در فرم ساخت تانل گذاشته شد.`, 'success');
+    const form = $('#tunnel-form');
+    if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function onCompareSubmit(e) {
+    e.preventDefault();
+    const errBox = $('#cf-err');
+    hideErr(errBox);
+    const iranId = Number($('#cf-iran').value);
+    const kharejId = Number($('#cf-kharej').value);
+    if (!iranId || !kharejId) return showErr(errBox, 'سرور ایران و خارج را انتخاب کنید.');
+    const modes = Array.from(document.querySelectorAll('#cf-modes input[type=checkbox]:checked')).map((c) => c.value);
+    if (!modes.length) return showErr(errBox, 'حداقل یک حالت را انتخاب کنید.');
+    stopCompareStream();
+    compareState.running = true;
+    compareState.results = [];
+    compareState.peer = '';
+    compareState.iranId = iranId;
+    compareState.kharejId = kharejId;
+    updateCompareForm();
+    renderCompareResults();
+    try {
+      const r = await api('POST', '/api/compare', { iran_id: iranId, kharej_id: kharejId, modes });
+      if (!r || r.job_id == null) throw Object.assign(new Error('شروع مقایسه ناموفق بود.'), { status: 500 });
+      compareState.jobId = r.job_id;
+      trackJob(r.job_id);
+      toast('مقایسه شروع شد؛ نتایج همین‌جا زنده می‌آیند.', 'success');
+      const job = await api('GET', `/api/jobs/${enc(r.job_id)}`);
+      ingestCompareLog(job && job.log);
+      if (job && !isActive(job.status)) {
+        compareState.running = false;
+        updateCompareForm();
+        renderCompareResults();
+        load('jobs', true);
+        return;
+      }
+      const es = new EventSource(withBase(`/api/jobs/${enc(r.job_id)}/stream`));
+      compareState.es = es;
+      const finishCompare = (status) => {
+        compareState.running = false;
+        updateCompareForm();
+        renderCompareResults();
+        stopCompareStream();
+        if (status) notifyDone(r.job_id, status, 'مقایسه تانل');
+        load('jobs', true);
+      };
+      es.addEventListener('snapshot', (ev) => {
+        const job = parseData(ev);
+        if (!job) return;
+        ingestCompareLog(job.log || '');
+        if (job.status === 'ok' || job.status === 'failed') finishCompare(job.status);
+      });
+      es.addEventListener('log', (ev) => {
+        const d = parseData(ev);
+        if (d && d.line != null) ingestCompareLog(d.line);
+      });
+      es.addEventListener('done', (ev) => {
+        const d = parseData(ev) || {};
+        finishCompare(d.status || 'ok');
+      });
+      es.onerror = async () => {
+        try {
+          const j = await api('GET', `/api/jobs/${enc(r.job_id)}`);
+          ingestCompareLog(j && j.log);
+          if (j && !isActive(j.status)) finishCompare(j.status);
+        } catch { /* ignore */ }
+      };
+      load('jobs', true);
+    } catch (err) {
+      compareState.running = false;
+      updateCompareForm();
+      if (err && err.status !== 401) showErr(errBox, err.message || NET_ERR);
+    }
   }
 
   /* Returns the spoof options object, or a Persian error message. */
@@ -2314,7 +2634,7 @@
     const note = liveState.scannedAt
       ? h('p', { class: 'muted live-scan-meta' }, `آخرین اسکن: ${fmtTime(liveState.scannedAt)}`)
       : null;
-    box.replaceChildren(note, h('div', { class: 'live-server-groups' }, groups));
+    setChildren(box, note, h('div', { class: 'live-server-groups' }, groups));
   }
 
   function serverById(id) {
@@ -5956,6 +6276,25 @@
     if (btn) btn.setAttribute('aria-expanded', 'false');
   }
 
+  function bindBrandReload() {
+    const brand = document.querySelector('.brand');
+    if (!brand || brand.dataset.reloadBound) return;
+    brand.dataset.reloadBound = '1';
+    brand.classList.add('brand-clickable');
+    brand.setAttribute('role', 'button');
+    brand.setAttribute('tabindex', '0');
+    brand.setAttribute('title', 'بارگذاری دوباره صفحه');
+    brand.setAttribute('aria-label', 'بارگذاری دوباره صفحه جوجونت');
+    const reload = (e) => {
+      e.preventDefault();
+      location.reload();
+    };
+    brand.addEventListener('click', reload);
+    brand.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') reload(e);
+    });
+  }
+
   function bindAccountMenu() {
     const root = $('#account-menu');
     const btn = $('#btn-account');
@@ -6247,6 +6586,11 @@
     if (state.loggedIn && name === 'tunnels') {
       load('tunnels', true);
       if (!liveState.data && !liveState.loading) loadLiveTunnels();
+    }
+    if (state.loggedIn && name === 'compare') {
+      load('servers', true);
+      updateCompareForm();
+      if (!$('#compare-results').childElementCount) renderCompareResults();
     }
     if (state.loggedIn && name === 'outbounds') {
       load('tunnels', true);
@@ -7060,6 +7404,7 @@
     bindListen();
     bindSsl();
     bindAccountMenu();
+    bindBrandReload();
     const termPolicy = $('#set-terms-enabled');
     if (termPolicy) {
       termPolicy.addEventListener('change', async () => {
@@ -7257,6 +7602,22 @@
     const ticketForm = $('#ticket-form');
     if (ticketForm) ticketForm.addEventListener('submit', onCreateTicket);
     $('#tunnel-form').addEventListener('submit', onCreateTunnel);
+    const compareForm = $('#compare-form');
+    if (compareForm) {
+      compareForm.addEventListener('submit', onCompareSubmit);
+      const allBtn = $('#cf-all');
+      const noneBtn = $('#cf-none');
+      if (allBtn) {
+        allBtn.addEventListener('click', () => {
+          for (const c of document.querySelectorAll('#cf-modes input[type=checkbox]')) c.checked = true;
+        });
+      }
+      if (noneBtn) {
+        noneBtn.addEventListener('click', () => {
+          for (const c of document.querySelectorAll('#cf-modes input[type=checkbox]')) c.checked = false;
+        });
+      }
+    }
     $('#relay-form').addEventListener('submit', onCreateRelay);
     for (const btn of document.querySelectorAll('.vpn-panel-card')) {
       btn.addEventListener('click', onInstallVpnPanel);

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.30 / panel 1.3.87
+- **Tunnel compare**: web panel tab «مقایسه» runs temporary overlays (direct, 6to4, IPIP, GRE/GRE6, VXLAN, GENEVE, L2TPv3, WireGuard, TCP, GRETAP, IPIP6) with iperf3/ping, live bars, and «ساخت همین تانل». CLI: `sudo jojonet --compare <PEER_IP>` (SSH to peer). API: `POST /api/compare`.
+
+## 1.6.29 / panel 1.3.86
+- **ENSURE_TOOLS**: correct dnf/yum package names (iproute/iputils) so auto-deps work on RHEL-like hosts.
+
+## 1.6.29 / panel 1.3.85
+- **Lazy server deps**: adding a server only registers SSH — no package install. Prerequisites + jojonet auto-install when you create any tunnel (or relay). Manual install button is optional. Guide text updated.
+
+## 1.6.29 / panel 1.3.84
+- **Status page**: stop rendering the literal text `null` above the overview card (DOM `replaceChildren(null, …)`). Clicking the JojoNet logo now reloads the page.
+
+## 1.6.29 / panel 1.3.83
+- **Auto tunnel deps**: when a server is added / any tunnel is deployed, the panel and `jojonet` auto-install missing base packages (`iproute2`, `nftables`, `iptables`, `curl`, `unzip`, …). Apt prefers install-without-update first so Iran mirrors that hang on `apt-get update` no longer block setup. Previously, if core tools already existed, apt was skipped and `iptables`/`unzip` stayed missing — GRE/NAT and zip-based modes could fail.
+
 ## 1.6.28 / panel 1.3.82
 - **Servers filter**: owner dropdown labels are «همه سرورها» and «سرورهای خودم (ادمین)», plus a live search box for name/IP/user/owner.
 

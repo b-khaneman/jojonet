@@ -29,7 +29,9 @@ from . import mail as mail_mod
 from . import wallet as wallet_mod
 from .db import Database, utcnow
 from .jobs import JobManager
+from . import compare as compare_mod
 from .orchestrator import (
+    COMPARE_STEPS,
     DELETE_STEPS,
     DEPLOY_STEPS,
     DNS_STEPS,
@@ -587,6 +589,23 @@ class DnsIn(BaseModel):
         if not self.dns1:
             raise ValueError("حداقل یک DNS لازم است")
         return self
+
+
+class CompareIn(BaseModel):
+    iran_id: int
+    kharej_id: int
+    modes: list[str] | None = None
+
+    @field_validator("modes")
+    @classmethod
+    def _modes(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        known = set(compare_mod.compare_mode_ids())
+        out = [m for m in v if m in known]
+        if not out:
+            raise ValueError("هیچ حالت معتبری برای مقایسه انتخاب نشده است")
+        return out
 
 
 class SpoofCheckIn(BaseModel):
@@ -1928,6 +1947,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "panel_version": PANEL_VERSION,
             "jojonet_version": bundle_version(settings.bundle_dir),
             "modes": [{"id": k, "label": v["label"], "first": v["first"], "desc": v["desc"]} for k, v in MODES.items()],
+            "compare_modes": compare_mod.compare_public_catalog(),
             "xray_nets": list(XRAY_NETS),
             "dnstt_modes": list(DNSTT_MODES),
             "relay_engines": list(RELAY_ENGINES),
@@ -1939,6 +1959,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
             "commerce": commerce_public(),
         }
+
+    @app.get("/api/compare/modes")
+    async def compare_modes(_: dict = Depends(require_auth)) -> dict[str, Any]:
+        return {"modes": compare_mod.compare_public_catalog()}
+
+    @app.post("/api/compare")
+    async def start_compare(data: CompareIn, sess: dict = Depends(require_auth)) -> dict[str, Any]:
+        iran = get_server(data.iran_id, sess)
+        kharej = get_server(data.kharej_id, sess)
+        if iran["role"] != "iran":
+            raise HTTPException(422, "سرور اول باید نقش ایران داشته باشد")
+        if kharej["role"] != "kharej":
+            raise HTTPException(422, "سرور دوم باید نقش خارج داشته باشد")
+        if not is_owner(sess) and iran.get("owner_id") != kharej.get("owner_id"):
+            raise HTTPException(403, "هر دو سرور باید متعلق به یک حساب باشند")
+        modes = data.modes or compare_mod.compare_mode_ids()
+        job_id = create_job(
+            sess,
+            "tunnel_compare",
+            f"مقایسه تانل: {iran['name']} ↔ {kharej['name']}",
+            COMPARE_STEPS,
+            lambda job: orch.job_compare(job, data.iran_id, data.kharej_id, modes),
+            server_id=data.iran_id,
+        )
+        return {"job_id": job_id}
 
     # ---------- servers ----------
     @app.get("/api/servers")

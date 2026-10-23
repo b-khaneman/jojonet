@@ -99,7 +99,7 @@ EOF
 
 missing_deps() {
     local need_download="${1:-0}"
-    local deps=(ip nft awk grep systemctl sysctl ping flock mktemp sha256sum)
+    local deps=(ip nft iptables awk grep systemctl sysctl ping flock mktemp sha256sum openssl tar unzip)
     local cmd
     for cmd in "${deps[@]}"; do
         command -v "$cmd" >/dev/null 2>&1 || printf '%s\n' "$cmd"
@@ -111,16 +111,22 @@ missing_deps() {
 }
 
 auto_install_deps() {
-    local pkgs="iproute2 nftables procps iputils-ping util-linux curl coreutils ca-certificates"
+    # iptables+unzip required for GRE/NAT and binary archives (TUN/TCP, Rathole, Xray, …).
+    local pkgs="iproute2 nftables iptables procps iputils-ping util-linux curl coreutils ca-certificates unzip tar openssl kmod"
+    local APT_FAST="-o DPkg::Lock::Timeout=60 -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
     if command -v apt-get >/dev/null 2>&1; then
         warn "Installing missing dependencies (apt)..."
-        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        # Prefer install without update first (mirrors often hang on apt-get update).
         # shellcheck disable=SC2086
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $pkgs >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get $APT_FAST install -y -qq --no-install-recommends $pkgs >/dev/null 2>&1 || {
+            DEBIAN_FRONTEND=noninteractive apt-get $APT_FAST update -qq >/dev/null 2>&1 || true
+            # shellcheck disable=SC2086
+            DEBIAN_FRONTEND=noninteractive apt-get $APT_FAST install -y -qq --no-install-recommends $pkgs >/dev/null 2>&1 || true
+        }
     elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
         local pm; pm=$(command -v dnf || command -v yum)
         warn "Installing missing dependencies ($(basename "$pm"))..."
-        "$pm" install -y -q iproute nftables procps-ng iputils util-linux curl coreutils ca-certificates >/dev/null 2>&1 || true
+        "$pm" install -y -q iproute nftables iptables procps-ng iputils util-linux curl coreutils ca-certificates unzip tar openssl kmod >/dev/null 2>&1 || true
     fi
 }
 
@@ -135,7 +141,7 @@ check_deps() {
     if (( ${#missing[@]} > 0 )); then
         warn "Missing: ${missing[*]}"
         command -v apt-get >/dev/null 2>&1 && \
-            hint="apt install -y iproute2 nftables procps iputils-ping util-linux curl coreutils"
+            hint="apt install -y iproute2 nftables iptables procps iputils-ping util-linux curl coreutils unzip openssl"
         [[ -n "$hint" ]] && warn "Try: $hint"
         fail "Install dependencies first."
     fi

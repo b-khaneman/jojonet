@@ -198,6 +198,7 @@
     <button type="button" class="tab is-active" role="tab" id="tabbtn-overview" data-tab="overview" aria-controls="tab-overview" aria-selected="true">وضعیت</button>
     <button type="button" class="tab" role="tab" id="tabbtn-servers" data-tab="servers" aria-controls="tab-servers" aria-selected="false" tabindex="-1">سرورها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-tunnels" data-tab="tunnels" aria-controls="tab-tunnels" aria-selected="false" tabindex="-1">تانل‌ها</button>
+    <button type="button" class="tab" role="tab" id="tabbtn-compare" data-tab="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1">مقایسه</button>
     <button type="button" class="tab" role="tab" id="tabbtn-relays" data-tab="relays" aria-controls="tab-relays" aria-selected="false" tabindex="-1">رله‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-panels" data-tab="panels" aria-controls="tab-panels" aria-selected="false" tabindex="-1">پنل‌ها</button>
     <button type="button" class="tab" role="tab" id="tabbtn-outbounds" data-tab="outbounds" aria-controls="tab-outbounds" aria-selected="false" tabindex="-1">اوتباند</button>
@@ -261,6 +262,43 @@
         </div>
       </div>
       <div id="servers-list" class="list-area"></div>
+    </section>
+
+    <section id="tab-compare" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-compare" hidden>
+      <div class="section-head">
+        <div>
+          <h2>مقایسه تانل‌ها</h2>
+          <p class="muted">بین یک سرور ایران و یک سرور خارج، همه پروتکل‌ها را موقت می‌سازد، سرعت و پینگ را می‌سنجد و بهترین گزینه را پیشنهاد می‌دهد.</p>
+        </div>
+      </div>
+      <div class="card create-card compare-setup">
+        <h3 class="card-title">شروع سنجش</h3>
+        <form id="compare-form" class="form" novalidate>
+          <div class="form-grid">
+            <div class="field">
+              <label for="cf-iran">سرور ایران</label>
+              <select id="cf-iran" required></select>
+            </div>
+            <div class="field">
+              <label for="cf-kharej">سرور خارج</label>
+              <select id="cf-kharej" required></select>
+            </div>
+          </div>
+          <div class="field field-wide">
+            <label>حالت‌ها</label>
+            <div id="cf-modes" class="compare-modes" role="group" aria-label="حالت‌های مقایسه"></div>
+            <p class="hint">روی سرورها تانل موقت ساخته می‌شود و بعد از سنجش پاک می‌شود. تانل‌های دائمی شما دست نمی‌خورند.</p>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-sm" id="cf-all">همه</button>
+            <button type="button" class="btn btn-sm" id="cf-none">هیچ‌کدام</button>
+            <button type="submit" class="btn btn-primary" id="cf-run">شروع مقایسه</button>
+          </div>
+          <div id="cf-err" class="form-error" hidden></div>
+        </form>
+      </div>
+      <div id="compare-summary" class="compare-summary" hidden></div>
+      <div id="compare-results" class="compare-results" aria-live="polite"></div>
     </section>
 
     <section id="tab-tunnels" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-tunnels" hidden>

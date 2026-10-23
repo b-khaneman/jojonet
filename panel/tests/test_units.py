@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
+from app import compare as compare_mod
 from app import orchestrator as orch
 from app.security import Vault, hash_password, verify_password
 from app.sshclient import resolve_connect_host
@@ -58,6 +59,20 @@ def test_resolve_connect_host_loopback_and_remote():
     assert resolve_connect_host("127.0.0.1") == "127.0.0.1"
     assert resolve_connect_host("localhost") == "127.0.0.1"
     assert resolve_connect_host("8.8.8.8") == "8.8.8.8"
+
+
+def test_compare_parsers_and_catalog():
+    assert "direct" in compare_mod.compare_mode_ids()
+    assert any(m["id"] == "wireguard" and m.get("create_mode") == "wireguard" for m in compare_mod.compare_public_catalog())
+    setup = compare_mod.parse_setup_line("noise\nSETUP ok=1 if=jncmp ov=10.66.200.1 note=پورت\n")
+    assert setup["ok"] is True and setup["ov"] == "10.66.200.1"
+    meas = compare_mod.parse_measure_line("MEASURE ok=1 loss=2.5 ping=12.3 jitter=0.4 dl=100.5 ul=80.1")
+    assert meas["ok"] is True and meas["download_mbps"] == 100.5 and meas["loss"] == 2.5
+    line = compare_mod.emit_result({"type": "result", "id": "gre", "ok": True})
+    assert line.startswith("JN_COMPARE:")
+    parsed = compare_mod.parse_compare_line(line)
+    assert parsed and parsed["id"] == "gre"
+    assert orch.COMPARE_STEPS and len(orch.COMPARE_STEPS) >= 3
 
 
 def test_vault_roundtrip(tmp_path):

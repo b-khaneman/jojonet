@@ -159,6 +159,8 @@ class FakeServer:
             return CmdResult(0, f"os=Ubuntu 24.04\nsrc={self.src}\njojonet={self.jojonet}\nsystemd=yes\n", "")
         if script == orch_mod.PREREQ_SCRIPT:
             return CmdResult(0, "prerequisites OK\n", "")
+        if script == orch_mod.ENSURE_TOOLS_SCRIPT:
+            return CmdResult(0, "tools_ok\n", "")
         if "bash install.sh" in script:
             with tarfile.open(fileobj=io.BytesIO(data)) as tar:
                 assert "jojonet" in tar.getnames()

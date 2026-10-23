@@ -14,6 +14,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
+from . import compare as compare_mod
 from .config import Settings
 from .db import Database, utcnow
 from .jobs import Job, JobManager, StepFailed
@@ -50,33 +51,42 @@ RETRY_DELAY = 5.0
 BUNDLE_FILES = ("jojonet", "install.sh", "uninstall.sh", "checksums.sha256", "CHANGELOG.md", "README.md", "LICENSE")
 VERSION_RE = re.compile(r'^readonly JOJONET_VERSION="([0-9A-Za-z.\-]+)"', re.MULTILINE)
 
+# Core commands every tunnel/relay path needs. Skip apt ONLY when all of these exist
+# (previously skipped when only ip/nft/ping/… existed, leaving iptables/unzip missing).
 PREREQ_SCRIPT = r"""
 set -u
 export DEBIAN_FRONTEND=noninteractive
 command -v systemctl >/dev/null 2>&1 || { echo "systemd is required"; exit 4; }
-# If core tools are already present, skip apt entirely (Iran VPS often has broken mirror DNS).
-missing0=""
-for c in ip nft ping openssl tar curl; do command -v "$c" >/dev/null 2>&1 || missing0="$missing0 $c"; done
-missing0=${missing0# }
-if [ -z "$missing0" ]; then
+CORE_CMDS="ip nft iptables ping openssl tar curl unzip ss"
+need=""
+for c in $CORE_CMDS; do command -v "$c" >/dev/null 2>&1 || need="$need $c"; done
+need=${need# }
+if [ -z "$need" ]; then
   echo "prerequisites OK (already present; skipping apt)"
   exit 0
 fi
+echo "prereq missing:$need — installing packages"
 apt_ok=1
-APT_FAST="-o DPkg::Lock::Timeout=60 -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+APT_FAST="-o DPkg::Lock::Timeout=60 -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::ftp::Timeout=15"
+APT_PKGS="curl ca-certificates iproute2 nftables iptables openssl procps iputils-ping util-linux tar gzip unzip coreutils kmod"
+DNF_PKGS="curl ca-certificates iproute nftables iptables openssl procps-ng iputils util-linux tar gzip unzip coreutils kmod"
 if command -v apt-get >/dev/null 2>&1; then
-    apt-get $APT_FAST update -qq || echo "apt update had errors (continuing)"
-    apt-get $APT_FAST install -y -qq --no-install-recommends \
-        curl ca-certificates iproute2 nftables iptables openssl procps iputils-ping util-linux tar gzip unzip coreutils kmod \
-        || { echo "apt install failed (will accept if core tools already present)"; apt_ok=0; }
+    # Prefer install without update first (Iran mirrors often hang on apt-get update).
+    apt-get $APT_FAST install -y -qq --no-install-recommends $APT_PKGS \
+      || {
+        echo "apt install without update failed; trying apt update then install"
+        apt-get $APT_FAST update -qq || echo "apt update had errors (continuing)"
+        apt-get $APT_FAST install -y -qq --no-install-recommends $APT_PKGS \
+          || { echo "apt install failed (will accept if core tools already present)"; apt_ok=0; }
+      }
 elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
     pm=$(command -v dnf || command -v yum)
-    "$pm" install -y -q curl ca-certificates iproute nftables iptables openssl procps-ng iputils util-linux tar gzip unzip coreutils kmod \
+    "$pm" install -y -q $DNF_PKGS \
         || { echo "$pm install failed (will accept if core tools already present)"; apt_ok=0; }
 else
     echo "unsupported package manager (need apt, dnf or yum)"; exit 3
 fi
-# Core tools required to upload/run jojonet; unzip is preferred but may be installed later by ENSURE_TOOLS.
+# Hard-required for upload/run; unzip/iptables strongly preferred for all tunnel modes.
 missing=""
 for c in ip nft ping openssl tar curl; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
 missing=${missing# }
@@ -84,33 +94,79 @@ if [ -n "$missing" ]; then
   echo "missing after install:$missing"
   exit 6
 fi
-if [ "$apt_ok" != "1" ]; then
+soft=""
+for c in iptables unzip ss; do command -v "$c" >/dev/null 2>&1 || soft="$soft $c"; done
+soft=${soft# }
+if [ -n "$soft" ]; then
+  echo "prerequisites OK (partial; still missing soft deps:$soft)"
+elif [ "$apt_ok" != "1" ]; then
   echo "prerequisites OK (partial apt; core tools present)"
 else
   echo "prerequisites OK"
 fi
 """
 
-# Lightweight: always run before deploy even when jojonet version already matches.
+# Always run before deploy even when jojonet version already matches.
+# Installs any missing base tools (iptables/unzip/…) without requiring a full jojonet reinstall.
 ENSURE_TOOLS_SCRIPT = r"""
 set -u
 export DEBIAN_FRONTEND=noninteractive
-need=""
-for c in unzip tar curl; do command -v "$c" >/dev/null 2>&1 || need="$need $c"; done
-need=${need# }
-if [ -n "$need" ]; then
+APT_FAST="-o DPkg::Lock::Timeout=90 -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+# Resolve distro package name for a command.
+pkg_for() {
+  cmd="$1"
   if command -v apt-get >/dev/null 2>&1; then
-    apt-get -o DPkg::Lock::Timeout=120 install -y -qq --no-install-recommends $need \
-      || { apt-get -o DPkg::Lock::Timeout=120 update -qq; apt-get -o DPkg::Lock::Timeout=120 install -y -qq --no-install-recommends $need; }
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y -q $need
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y -q $need
+    case "$cmd" in
+      ip|ss) echo iproute2 ;;
+      nft) echo nftables ;;
+      iptables) echo iptables ;;
+      ping) echo iputils-ping ;;
+      curl) echo curl ;;
+      openssl) echo openssl ;;
+      unzip) echo unzip ;;
+      tar) echo tar ;;
+      modprobe) echo kmod ;;
+      *) echo "$cmd" ;;
+    esac
   else
-    echo "unsupported package manager"; exit 3
+    case "$cmd" in
+      ip|ss) echo iproute ;;
+      nft) echo nftables ;;
+      iptables) echo iptables ;;
+      ping) echo iputils ;;
+      curl) echo curl ;;
+      openssl) echo openssl ;;
+      unzip) echo unzip ;;
+      tar) echo tar ;;
+      modprobe) echo kmod ;;
+      *) echo "$cmd" ;;
+    esac
   fi
-fi
-for c in unzip tar curl; do command -v "$c" >/dev/null 2>&1 || { echo "missing tool: $c"; exit 7; }; done
+}
+install_one() {
+  cmd="$1"
+  pkg=$(pkg_for "$cmd")
+  command -v "$cmd" >/dev/null 2>&1 && return 0
+  echo "ensuring $cmd ($pkg)"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get $APT_FAST install -y -qq --no-install-recommends "$pkg" \
+      || { apt-get $APT_FAST update -qq || true; apt-get $APT_FAST install -y -qq --no-install-recommends "$pkg"; }
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q "$pkg" || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q "$pkg" || true
+  else
+    return 1
+  fi
+  command -v "$cmd" >/dev/null 2>&1
+}
+# Hard tools (deploy fails without these)
+for cmd in tar curl unzip ip nft iptables ping openssl; do
+  install_one "$cmd" || { echo "missing tool: $cmd"; exit 7; }
+done
+# Soft extras
+install_one ss || true
+install_one modprobe || true
 echo "tools_ok"
 """
 
@@ -122,6 +178,8 @@ echo "src=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++)
 echo "jojonet=$(command -v jojonet >/dev/null 2>&1 && jojonet --version 2>/dev/null | head -n1 | awk '{print $NF}')"
 echo "systemd=$(command -v systemctl >/dev/null 2>&1 && echo yes || echo no)"
 echo "unzip=$(command -v unzip >/dev/null 2>&1 && echo yes || echo no)"
+echo "iptables=$(command -v iptables >/dev/null 2>&1 && echo yes || echo no)"
+echo "nft=$(command -v nft >/dev/null 2>&1 && echo yes || echo no)"
 """
 
 DUMP_CONFS = 'for f in /etc/jojonet/instances/*.conf; do [ -f "$f" ] || continue; echo "==> $f <=="; cat "$f"; echo; done'
@@ -556,17 +614,26 @@ class Orchestrator:
         return info.get("jojonet", "")
 
     async def ensure_tools(self, job: Job, sess: RemoteSession, name: str, *, required: bool = True) -> None:
-        """Install unzip/tar/curl when missing — even if jojonet is already current."""
-        res = await sess.run_root(ENSURE_TOOLS_SCRIPT, timeout=300)
+        """Auto-install base net/tunnel tools when missing — even if jojonet is already current."""
+        res = await sess.run_root(ENSURE_TOOLS_SCRIPT, timeout=300, on_line=lambda l: job.log(f"[{name}] {l}"))
         if res.ok and "tools_ok" in (res.stdout or ""):
-            await job.log(f"[{name}] unzip/tar/curl آماده است")
+            await job.log(f"[{name}] ابزارهای پایه تانل آماده است (ip/nft/iptables/curl/unzip/…)")
             return
         detail = (res.stderr or res.stdout or "").strip()[:240]
         if required:
-            raise StepFailed(f"{name}: ابزارهای لازم نصب نشد ({detail or 'unzip/tar/curl'})")
-        await job.log(f"⚠ [{name}] ابزار اختیاری ناقص است ({detail or 'unzip'}) — ادامه با هسته موجود")
+            raise StepFailed(
+                f"{name}: ابزارهای لازم نصب نشد ({detail or 'ip/nft/iptables/curl/unzip'}). "
+                "اگر apt روی سرور گیر کرده، DNS/mirror را درست کنید یا پکیج‌ها را دستی نصب کنید."
+            )
+        await job.log(f"⚠ [{name}] برخی ابزارها ناقص ماند ({detail or 'deps'}) — ادامه با هسته موجود")
 
     async def ensure_ready(self, job: Job, sess: RemoteSession, row: dict[str, Any]) -> dict[str, str]:
+        """Lazy prepare: called from tunnel/relay deploy — NOT when merely adding a server row.
+
+        Fresh servers stay untouched until the user actually builds a tunnel (or relay).
+        Then we install packages + jojonet automatically so any mode works without a
+        separate «نصب پیش‌نیاز» click.
+        """
         name = row["name"]
         info = await self.sysinfo(sess)
         if info.get("systemd") != "yes":
@@ -574,16 +641,19 @@ class Orchestrator:
         want = bundle_version(self.settings.bundle_dir)
         have = info.get("jojonet", "")
         if have and want and have == want:
-            await job.log(f"[{name}] jojonet {have} نصب است")
-            await self.ensure_tools(job, sess, name, required=False)
+            await job.log(f"[{name}] jojonet {have} آماده است — تکمیل خودکار ابزارهای تانل")
+            # Re-check packages even when version matches (iptables/unzip often missing on old installs).
+            await self.ensure_tools(job, sess, name, required=True)
             return info
-        await job.log(f"[{name}] نصب پیش‌نیازها و jojonet {want or ''} (فعلی: {have or 'ندارد'})")
+        await job.log(
+            f"[{name}] سرور تازه/ناقص است — نصب خودکار پیش‌نیاز و jojonet {want or ''} "
+            f"(فعلی: {have or 'ندارد'}) هنگام ساخت تانل"
+        )
         await self.install_prereqs(job, sess, name)
         info["jojonet"] = await self.install_jojonet(job, sess, name)
         if want and info["jojonet"] != want:
             raise StepFailed(f"{name}: نسخه نصب‌شده ({info['jojonet'] or '?'}) با نسخه پنل ({want}) یکی نیست")
-        # unzip may be unavailable when apt mirrors/DNS are down; do not block jojonet upgrade.
-        await self.ensure_tools(job, sess, name, required=False)
+        await self.ensure_tools(job, sess, name, required=True)
         return info
 
     # ---------- server jobs ----------
@@ -1461,6 +1531,208 @@ class Orchestrator:
                 await job.log("----------------------")
                 await job.ok(3, f"گواهی روی {row['name']} نصب شد")
 
+    async def job_compare(
+        self,
+        job: Job,
+        iran_id: int,
+        kharej_id: int,
+        mode_ids: list[str] | None = None,
+    ) -> None:
+        """Temporary overlays between Iran and Kharej; stream JN_COMPARE JSON lines."""
+        iran = self.server(iran_id)
+        kharej = self.server(kharej_id)
+        if iran["role"] != "iran" or kharej["role"] != "kharej":
+            raise StepFailed("یک سرور ایران و یک سرور خارج انتخاب کنید")
+        catalog = {m["id"]: m for m in compare_mod.COMPARE_MODES}
+        wanted = [m for m in (mode_ids or compare_mod.compare_mode_ids()) if m in catalog]
+        if not wanted:
+            raise StepFailed("هیچ حالتی برای مقایسه انتخاب نشده است")
+
+        peer_label = kharej.get("name") or kharej["host"]
+        results: list[dict[str, Any]] = []
+
+        await job.start(0)
+        async with await self.open(job, iran) as iran_sess, await self.open(job, kharej) as kharej_sess:
+            await job.ok(0, f"{iran['name']} ↔ {kharej['name']}")
+            await job.start(1)
+            for label, sess in ((iran["name"], iran_sess), (kharej["name"], kharej_sess)):
+                res = await sess.run_root(
+                    compare_mod.ensure_tools_script(),
+                    timeout=180,
+                    on_line=lambda l, n=label: job.log(f"[{n}] {l}"),
+                )
+                if not res.ok:
+                    raise StepFailed(f"نصب ابزار سنجش روی {label} ناموفق بود")
+                await sess.run_root(compare_mod.cleanup_script(), timeout=60)
+            await job.ok(1, "iperf3 / iproute2 آماده")
+
+            await job.start(2)
+            await job.log(compare_mod.COMPARE_BEGIN)
+            await job.log(compare_mod.emit_result({
+                "type": "start",
+                "peer_label": peer_label,
+                "total": len(wanted),
+                "modes": wanted,
+            }))
+
+            # WireGuard keypair generated once on Kharej, public shared to Iran
+            wg_kh_priv = wg_kh_pub = wg_ir_priv = wg_ir_pub = ""
+            if "wireguard" in wanted:
+                gen = await kharej_sess.run_root(
+                    "command -v wg >/dev/null && umask 077 && "
+                    "priv=$(wg genkey) && pub=$(printf '%s' \"$priv\" | wg pubkey) && "
+                    "printf '%s\\n%s\\n' \"$priv\" \"$pub\"",
+                    timeout=30,
+                )
+                lines = [ln.strip() for ln in (gen.stdout or "").splitlines() if ln.strip()]
+                if gen.ok and len(lines) >= 2:
+                    wg_kh_priv, wg_kh_pub = lines[0], lines[1]
+                gen2 = await iran_sess.run_root(
+                    "command -v wg >/dev/null && umask 077 && "
+                    "priv=$(wg genkey) && pub=$(printf '%s' \"$priv\" | wg pubkey) && "
+                    "printf '%s\\n%s\\n' \"$priv\" \"$pub\"",
+                    timeout=30,
+                )
+                lines2 = [ln.strip() for ln in (gen2.stdout or "").splitlines() if ln.strip()]
+                if gen2.ok and len(lines2) >= 2:
+                    wg_ir_priv, wg_ir_pub = lines2[0], lines2[1]
+
+            udp_port = compare_mod.BASE_UDP_PORT
+            port_pick = await kharej_sess.run_root(compare_mod.pick_udp_port_script(udp_port), timeout=20)
+            try:
+                udp_port = int((port_pick.stdout or "").strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                udp_port = compare_mod.BASE_UDP_PORT
+
+            for idx, mid in enumerate(wanted, start=1):
+                meta = catalog[mid]
+                await job.log(compare_mod.emit_result({
+                    "type": "progress",
+                    "index": idx,
+                    "total": len(wanted),
+                    "id": mid,
+                    "label": meta["label"],
+                }))
+                await job.log(f"▶ سنجش {meta['label']} ({idx}/{len(wanted)})")
+
+                row: dict[str, Any] = {
+                    "id": mid,
+                    "label": meta["label"],
+                    "create_mode": meta.get("create_mode"),
+                    "ok": False,
+                    "download_mbps": 0.0,
+                    "upload_mbps": 0.0,
+                    "ping": None,
+                    "jitter": None,
+                    "loss": 100.0,
+                    "mtu": meta.get("mtu"),
+                    "note": meta.get("note") or "",
+                    "error": "",
+                }
+                try:
+                    await iran_sess.run_root(compare_mod.cleanup_script(), timeout=45)
+                    await kharej_sess.run_root(compare_mod.cleanup_script(), timeout=45)
+
+                    mtype = meta.get("type") or mid
+                    mtu = int(meta.get("mtu") or 1400)
+                    if mid == "direct":
+                        target = str(kharej["host"])
+                        await kharej_sess.run_root(compare_mod.start_iperf_server_script(), timeout=20)
+                        await asyncio.sleep(0.4)
+                        meas = await iran_sess.run_root(
+                            compare_mod.measure_script(target=target),
+                            timeout=90,
+                            on_line=lambda l: job.log(f"[iran] {l}"),
+                        )
+                        parsed = compare_mod.parse_measure_line(meas.stdout or "")
+                        row.update(parsed)
+                        if not row["ok"] and row["download_mbps"] <= 0:
+                            row["error"] = "مسیر مستقیم پاسخ نداد (فایروال/ICMP/iperf)"
+                        else:
+                            row["ok"] = True if row["download_mbps"] > 0 or (row.get("ping") is not None and row["loss"] < 100) else row["ok"]
+                    else:
+                        kh_setup = await kharej_sess.run_root(
+                            compare_mod.setup_overlay_script(
+                                mode_type=mtype,
+                                role="kharej",
+                                local_ip=str(kharej["host"]),
+                                peer_ip=str(iran["host"]),
+                                udp_port=udp_port,
+                                mtu=mtu,
+                                wg_priv=wg_kh_priv,
+                                wg_peer_pub=wg_ir_pub,
+                            ),
+                            timeout=60,
+                            on_line=lambda l: job.log(f"[kharej] {l}"),
+                        )
+                        ir_setup = await iran_sess.run_root(
+                            compare_mod.setup_overlay_script(
+                                mode_type=mtype,
+                                role="iran",
+                                local_ip=str(iran["host"]),
+                                peer_ip=str(kharej["host"]),
+                                udp_port=udp_port,
+                                mtu=mtu,
+                                wg_priv=wg_ir_priv,
+                                wg_peer_pub=wg_kh_pub,
+                            ),
+                            timeout=60,
+                            on_line=lambda l: job.log(f"[iran] {l}"),
+                        )
+                        kh_info = compare_mod.parse_setup_line(kh_setup.stdout or "")
+                        ir_info = compare_mod.parse_setup_line(ir_setup.stdout or "")
+                        note_bits = [x for x in (kh_info.get("note"), ir_info.get("note"), row.get("note")) if x]
+                        if udp_port != compare_mod.BASE_UDP_PORT and mtype in ("vxlan", "sit_udp", "l2tpv3", "wireguard"):
+                            note_bits.append(f"پورت UDP {udp_port}")
+                        row["note"] = "؛ ".join(dict.fromkeys(note_bits))
+                        if not kh_info.get("ok") or not ir_info.get("ok"):
+                            row["error"] = (
+                                kh_info.get("note")
+                                or ir_info.get("note")
+                                or "بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد."
+                            )
+                            row["ok"] = False
+                        else:
+                            target = str(kh_info.get("ov") or "10.66.200.1")
+                            await kharej_sess.run_root(compare_mod.start_iperf_server_script(), timeout=20)
+                            await asyncio.sleep(0.5)
+                            meas = await iran_sess.run_root(
+                                compare_mod.measure_script(target=target),
+                                timeout=90,
+                                on_line=lambda l: job.log(f"[iran] {l}"),
+                            )
+                            parsed = compare_mod.parse_measure_line(meas.stdout or "")
+                            row.update({k: parsed[k] for k in parsed})
+                            if not row["ok"] and row["download_mbps"] <= 0 and (row.get("loss") or 100) >= 100:
+                                row["error"] = "بسته از این مسیر عبور نکرد؛ مسیر یا فایروال این نوع ترافیک را می‌بندد."
+                            elif row["download_mbps"] > 0 or (row.get("ping") is not None and float(row.get("loss") or 100) < 100):
+                                row["ok"] = True
+                except Exception as exc:  # noqa: BLE001 — isolate per-mode failures
+                    row["ok"] = False
+                    row["error"] = str(exc)[:200]
+                    await job.log(f"[compare] {mid}: {exc}")
+                finally:
+                    await kharej_sess.run_root(compare_mod.stop_iperf_server_script(), timeout=15)
+                    await iran_sess.run_root(compare_mod.cleanup_script(), timeout=45)
+                    await kharej_sess.run_root(compare_mod.cleanup_script(), timeout=45)
+
+                results.append(row)
+                await job.log(compare_mod.emit_result({"type": "result", **row}))
+
+            summary = compare_mod.build_summary(results, peer_label)
+            await job.log(compare_mod.emit_result({"type": "done", **summary}))
+            await job.log(compare_mod.COMPARE_END)
+            await job.ok(2, f"{summary['connected']}/{summary['total']} وصل شد")
+
+            await job.start(3)
+            best = summary.get("best")
+            if best:
+                await job.log(
+                    f"بهترین گزینه: {best.get('label')} — "
+                    f"دانلود {best.get('download_mbps')} Mbps / پینگ {best.get('ping')} ms"
+                )
+            await job.ok(3, "مقایسه تمام شد")
+
     def match_panel_tunnel_id(self, server_id: int, name: str, tunnels: list[dict[str, Any]]) -> int | None:
         for t in tunnels:
             if t.get("iran_id") == server_id and t.get("iran_iface") == name:
@@ -1627,6 +1899,12 @@ RELAY_DELETE_STEPS = ["حذف از سرور", "حذف از پنل"]
 RELAY_STATS_STEPS = ["اتصال SSH", "خواندن آمار"]
 DNS_STEPS = ["اتصال SSH", "آماده‌سازی jojonet", "تنظیم DNS"]
 PING_TEST_STEPS = ["اتصال SSH", "تست پینگ"]
+COMPARE_STEPS = [
+    "اتصال SSH به ایران و خارج",
+    "نصب ابزار سنجش (iperf3 / iproute2)",
+    "سنجش حالت‌به‌حالت",
+    "جمع‌بندی و پیشنهاد",
+]
 OS_UPDATE_STEPS = ["اتصال SSH", "آپدیت بسته‌های سیستم"]
 ENABLE_BOOT_STEPS = ["اتصال SSH", "فعال‌سازی ماندگاری بعد از ریبوت"]
 REMOTE_DELETE_STEPS = ["حذف از سرور"]

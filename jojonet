@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.6"
+readonly JOJONET_VERSION="1.6.30"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -1627,6 +1627,7 @@ Usage:
   sudo jojonet --relay-list | --relay-remove <NAME> | --relay-stats [NAME]
   sudo jojonet --dns [DNS1 [DNS2]]     Set server DNS (menu when empty)
   sudo jojonet --ping-test             Ping GitHub / Google / Cloudflare
+  sudo jojonet --compare <PEER_IP>     Temp overlay speedtest (needs SSH to peer; full UI in panel)
   sudo jojonet --update-server         apt/dnf upgrade
   sudo jojonet --spoof-tunnel [PEER]   Spoof Tunnel standalone [--spoof]
   sudo jojonet --spoof-remove          Stop and remove the Spoof Tunnel service/config
@@ -1663,6 +1664,7 @@ What's new in v${JOJONET_VERSION}:
   • New: --xui-install / --xui-classic-install / --pasarguard-install — one-click VPN panels (menu 31)
   • New: --vpn-panel-creds — print VPN panel login after install
   • New: --dns / --ping-test / --update-server server tools
+  • New: --compare <PEER_IP> — temporary tunnel speedtest (panel تب مقایسه)
   • Web panel: all new tunnels and relays — sudo bash panel/install-panel.sh
   Full list:  sudo jojonet --changelog
 
@@ -1780,16 +1782,126 @@ if (( EUID != 0 )); then
     exit 1
 fi
 
-check_dependencies() {
-    local deps=(ip nft awk grep systemctl journalctl sysctl ping flock mktemp curl openssl)
-    local cmd optional=(unzip scp)
+# Package install helper (must be defined before check_dependencies runs at startup).
+# Prefer install without apt-get update first — Iran mirrors often hang on update.
+jojonet_pkg_install() {
+    local APT_FAST="-o DPkg::Lock::Timeout=60 -o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
+    local _run=()
+    if command -v timeout >/dev/null 2>&1; then
+        _run=(timeout 120)
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        "${_run[@]}" env DEBIAN_FRONTEND=noninteractive apt-get $APT_FAST install -y --no-install-recommends "$@" >/dev/null 2>&1 || \
+            {
+                if command -v timeout >/dev/null 2>&1; then
+                    timeout 90 apt-get $APT_FAST update >/dev/null 2>&1 || true
+                else
+                    apt-get $APT_FAST update >/dev/null 2>&1 || true
+                fi
+                "${_run[@]}" env DEBIAN_FRONTEND=noninteractive apt-get $APT_FAST install -y --no-install-recommends "$@" >/dev/null 2>&1
+            }
+    elif command -v dnf >/dev/null 2>&1; then
+        "${_run[@]}" dnf install -y "$@" >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        "${_run[@]}" yum install -y "$@" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+# Map common missing commands → package names (Debian / RHEL-ish).
+_jojonet_cmd_pkg() {
+    case "$1" in
+        ip|ss) echo "iproute2" ;;
+        nft) echo "nftables" ;;
+        iptables) echo "iptables" ;;
+        ping) echo "iputils-ping" ;;
+        curl) echo "curl" ;;
+        openssl) echo "openssl" ;;
+        unzip) echo "unzip" ;;
+        tar) echo "tar" ;;
+        awk) echo "gawk" ;;
+        flock|mktemp) echo "util-linux" ;;
+        journalctl|systemctl) echo "systemd" ;;
+        sysctl) echo "procps" ;;
+        modprobe) echo "kmod" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+ensure_runtime_deps() {
+    # Auto-install missing base tools so panel/CLI tunnel create does not fail on a fresh VPS.
+    local deps=(ip nft iptables awk grep systemctl journalctl sysctl ping flock mktemp curl openssl unzip tar ss)
+    local cmd missing=() pkgs=()
     for cmd in "${deps[@]}"; do
-        command -v "$cmd" >/dev/null 2>&1 || {
-            echo -e "${RED}[!] Missing dependency: $cmd${NC}" >&2
-            echo -e "${YELLOW}    apt install -y iproute2 nftables procps iputils-ping curl openssl util-linux${NC}" >&2
-            exit 1
-        }
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
+    ((${#missing[@]})) || return 0
+    echo -e "${YELLOW}[*] Missing tools: ${missing[*]} — auto-installing…${NC}" >&2
+    local m
+    for m in "${missing[@]}"; do
+        pkgs+=("$(_jojonet_cmd_pkg "$m")")
+    done
+    # Unique package list
+    local -A seen=()
+    local uniq=()
+    local p
+    for p in "${pkgs[@]}"; do
+        [[ -n "${seen[$p]:-}" ]] && continue
+        seen[$p]=1
+        uniq+=("$p")
+    done
+    jojonet_pkg_install "${uniq[@]}" || true
+    missing=()
+    for cmd in "${deps[@]}"; do
+        # Hard deps for startup (iptables/unzip/ss are soft at CLI start; enforced at deploy)
+        case "$cmd" in
+            iptables|unzip|ss) continue ;;
+        esac
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    if ((${#missing[@]})); then
+        echo -e "${RED}[!] Missing dependency after auto-install: ${missing[*]}${NC}" >&2
+        echo -e "${YELLOW}    apt install -y iproute2 nftables iptables procps iputils-ping curl openssl util-linux unzip${NC}" >&2
+        exit 1
+    fi
+}
+
+# Called at the start of every tunnel deploy (panel JOJONET_AUTO=1 and CLI).
+ensure_tunnel_base_tools() {
+    local need=(ip nft iptables curl openssl unzip tar ping ss)
+    local cmd missing=() pkgs=()
+    for cmd in "${need[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    ((${#missing[@]})) || return 0
+    log_warn "Tunnel deps missing (${missing[*]}); auto-installing…"
+    local m
+    for m in "${missing[@]}"; do
+        pkgs+=("$(_jojonet_cmd_pkg "$m")")
+    done
+    local -A seen=()
+    local uniq=() p
+    for p in "${pkgs[@]}"; do
+        [[ -n "${seen[$p]:-}" ]] && continue
+        seen[$p]=1
+        uniq+=("$p")
+    done
+    jojonet_pkg_install "${uniq[@]}" || true
+    missing=()
+    for cmd in "${need[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    if ((${#missing[@]})); then
+        log_error "Cannot deploy tunnel; missing tools after auto-install: ${missing[*]}"
+        return 1
+    fi
+    return 0
+}
+
+check_dependencies() {
+    ensure_runtime_deps
+    local cmd optional=(scp)
     for cmd in "${optional[@]}"; do
         command -v "$cmd" >/dev/null 2>&1 || true
     done
@@ -3547,6 +3659,7 @@ deploy_tunnel() {
     local rh_toml="" ws_cmd="" hy_tls_mode="insecure" hy_domain="" hy_acme_email="" hy_cert_path="" hy_key_path=""
     local wg_obfs="" obfs_port="" xray_json="" xray_net="" v6_iface="" v6_local="" v6_remote="" dns_domain="" dns_resolver="" dns_mode=""
 
+    ensure_tunnel_base_tools || return 1
     apply_global_sysctl || return 1
 
     if [[ "$role_conf" == "iran" ]]; then
@@ -7416,18 +7529,7 @@ quick_add_tunnel_wstunnel() {
 # v1.6.0 — Xray tunnels (dokodemo-door / reverse) and IPv6 tunnels (6to4 SIT, GRE6, IPIP6)
 # ==========================================
 
-jojonet_pkg_install() {
-    if command -v apt-get >/dev/null 2>&1; then
-        timeout 90 env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1 || \
-            { timeout 90 apt-get update >/dev/null 2>&1 && timeout 90 env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1; }
-    elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y "$@" >/dev/null 2>&1
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y "$@" >/dev/null 2>&1
-    else
-        return 1
-    fi
-}
+# jojonet_pkg_install is defined earlier (before check_dependencies) so startup can auto-install deps.
 
 gen_uuid() {
     local u=""
@@ -10556,6 +10658,242 @@ server_ping_test() {
     done
 }
 
+# Temporary overlay compare (CLI). Full live UI: web panel → تب «مقایسه».
+# Usage: sudo jojonet --compare <PEER_IP>
+# Needs passwordless SSH to root@PEER (or JOJONET_COMPARE_SSH=user@host).
+_jojonet_compare_ensure_tools() {
+    local need=()
+    command -v ip >/dev/null 2>&1 || need+=(iproute2)
+    command -v ping >/dev/null 2>&1 || need+=(iputils-ping)
+    command -v iperf3 >/dev/null 2>&1 || need+=(iperf3)
+    command -v jq >/dev/null 2>&1 || need+=(jq)
+    command -v wg >/dev/null 2>&1 || need+=(wireguard-tools)
+    ((${#need[@]})) || return 0
+    echo -e "${YELLOW}[*] Installing: ${need[*]}${NC}"
+    jojonet_pkg_install "${need[@]}" || true
+    command -v iperf3 >/dev/null 2>&1 || { echo -e "${RED}iperf3 missing${NC}"; return 1; }
+}
+
+_jojonet_compare_cleanup() {
+    pkill -f 'iperf3 -s -p 15201' >/dev/null 2>&1 || true
+    local d
+    for d in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^jncmp' || true); do
+        ip link del "$d" 2>/dev/null || true
+    done
+    ip l2tp show tunnel 2>/dev/null | awk '/Tunnel/{print $2}' | while read -r tid; do
+        [[ "$tid" =~ ^9[0-9]{3}$ ]] && ip l2tp del tunnel tunnel_id "$tid" 2>/dev/null || true
+    done
+    rm -f /tmp/jncmp-*.key 2>/dev/null || true
+}
+
+_jojonet_compare_remote() {
+    local ssh_target=$1
+    shift
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 \
+        "$ssh_target" "bash -s" -- "$@"
+}
+
+compare_tunnels_cli() {
+    local peer=${1:-}
+    local ssh_target=${JOJONET_COMPARE_SSH:-}
+    local local_ip modes mid label ov_peer port=40420
+    local wg_l_priv wg_l_pub wg_r_priv wg_r_pub
+    local dl ul loss ping_avg ok_n=0 total=0 best_label="" best_dl=0
+
+    [[ -n "$peer" ]] || { echo -e "${RED}Usage: jojonet --compare <PEER_IP>${NC}"; return 1; }
+    [[ "$peer" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo -e "${RED}PEER must be IPv4${NC}"; return 1; }
+    [[ -n "$ssh_target" ]] || ssh_target="root@$peer"
+
+    echo -e "${CYAN}=== JojoNet tunnel compare → ${peer} ===${NC}"
+    echo -e "${YELLOW}Tip: full UI with bars is in the web panel (مقایسه).${NC}"
+
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=8 "$ssh_target" "true" 2>/dev/null; then
+        echo -e "${RED}[!] Cannot SSH to ${ssh_target} (need key auth).${NC}"
+        echo "    Set JOJONET_COMPARE_SSH=user@host or use the panel compare tab."
+        echo -e "${CYAN}--- direct path only ---${NC}"
+        _jojonet_compare_ensure_tools || true
+        local out
+        out=$(ping -n -c 10 -W 2 "$peer" 2>&1 || true)
+        loss=$(grep -oE '[0-9.]+% packet loss' <<< "$out" | head -1 | tr -d '% ' | cut -d% -f1 || echo 100)
+        ping_avg=$(grep -oE '= [0-9.]+/[0-9.]+' <<< "$out" | head -1 | cut -d/ -f2 || echo "")
+        echo "  direct  ping ${ping_avg:-—} ms  loss ${loss:-100}%"
+        return 1
+    fi
+
+    _jojonet_compare_ensure_tools || return 1
+    _jojonet_compare_remote "$ssh_target" <<'EOS' || true
+set -e
+need=()
+command -v ip >/dev/null || need+=(iproute2)
+command -v iperf3 >/dev/null || need+=(iperf3)
+command -v jq >/dev/null || need+=(jq)
+command -v wg >/dev/null || need+=(wireguard-tools)
+if ((${#need[@]})); then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq </dev/null 2>/dev/null || true
+  apt-get install -y -qq "${need[@]}" </dev/null 2>/dev/null || true
+fi
+pkill -f 'iperf3 -s -p 15201' >/dev/null 2>&1 || true
+for d in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^jncmp' || true); do
+  ip link del "$d" 2>/dev/null || true
+done
+echo REMOTE_TOOLS_OK
+EOS
+
+    local_ip=$(ip -4 route get "$peer" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+    [[ -n "$local_ip" ]] || local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [[ -n "$local_ip" ]] || { echo -e "${RED}Cannot detect local IP${NC}"; return 1; }
+
+    wg_l_priv=$(wg genkey 2>/dev/null || true)
+    wg_l_pub=$(printf '%s' "$wg_l_priv" | wg pubkey 2>/dev/null || true)
+    wg_r_priv=$(_jojonet_compare_remote "$ssh_target" "umask 077; p=\$(wg genkey); printf '%s' \"\$p\"" 2>/dev/null || true)
+    wg_r_pub=$(printf '%s' "$wg_r_priv" | wg pubkey 2>/dev/null || true)
+
+    modes=(direct gre ipip sit gre6 vxlan geneve wireguard ipip6 gretap)
+    printf '%s\n' "===== JOJONET_COMPARE ====="
+    for mid in "${modes[@]}"; do
+        total=$((total + 1))
+        label=$mid
+        case "$mid" in
+            sit) label="6to4" ;;
+            gre6) label="6to4+GRE6" ;;
+            sit_udp) label="6to4-UDP" ;;
+        esac
+        echo -e "${CYAN}▶ ${label} (${total}/${#modes[@]})${NC}"
+        _jojonet_compare_cleanup
+        _jojonet_compare_remote "$ssh_target" "pkill -f 'iperf3 -s -p 15201' >/dev/null 2>&1 || true; for d in \$(ip -o link show 2>/dev/null | awk -F': ' '{print \$2}' | cut -d@ -f1 | grep -E '^jncmp' || true); do ip link del \"\$d\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
+
+        ov_peer=""
+        case "$mid" in
+            direct)
+                ov_peer=$peer
+                ;;
+            gre|ipip|gretap|vxlan|geneve)
+                _jojonet_compare_remote "$ssh_target" bash -s -- "$mid" "$peer" "$local_ip" "$port" <<'EOS' >/dev/null
+set -euo pipefail
+TYPE=$1; PEER=$2; LOCAL=$3; PORT=$4
+ip link del jncmp 2>/dev/null || true
+case "$TYPE" in
+  gre) ip link add jncmp type gre remote "$PEER" local "$LOCAL" ttl 255 ;;
+  ipip) ip link add jncmp type ipip remote "$PEER" local "$LOCAL" ttl 255 ;;
+  gretap) ip link add jncmp type gretap remote "$PEER" local "$LOCAL" ttl 255 ;;
+  vxlan) ip link add jncmp type vxlan id 4042 remote "$PEER" local "$LOCAL" dstport "$PORT" ;;
+  geneve) ip link add jncmp type geneve id 4042 remote "$PEER" || exit 0 ;;
+esac
+ip addr add 10.66.200.1/30 dev jncmp
+ip link set jncmp mtu 1400 up
+EOS
+                case "$mid" in
+                  gre) ip link add jncmp type gre remote "$peer" local "$local_ip" ttl 255 ;;
+                  ipip) ip link add jncmp type ipip remote "$peer" local "$local_ip" ttl 255 ;;
+                  gretap) ip link add jncmp type gretap remote "$peer" local "$local_ip" ttl 255 ;;
+                  vxlan) ip link add jncmp type vxlan id 4042 remote "$peer" local "$local_ip" dstport "$port" ;;
+                  geneve) ip link add jncmp type geneve id 4042 remote "$peer" || true ;;
+                esac
+                ip addr add 10.66.200.2/30 dev jncmp 2>/dev/null || true
+                ip link set jncmp mtu 1400 up 2>/dev/null || true
+                ov_peer=10.66.200.1
+                ;;
+            sit|gre6|ipip6)
+                _jojonet_compare_remote "$ssh_target" bash -s -- "$mid" "$peer" "$local_ip" <<'EOS' >/dev/null
+set -euo pipefail
+TYPE=$1; PEER=$2; LOCAL=$3
+ip link del jncmpsit 2>/dev/null || true
+ip link del jncmp 2>/dev/null || true
+ip link add jncmpsit type sit remote "$PEER" local "$LOCAL" ttl 255
+ip link set jncmpsit up
+ip -6 addr add fd6a:cmp::1/64 dev jncmpsit
+if [[ "$TYPE" == gre6 ]]; then
+  ip link add jncmp type ip6gre remote fd6a:cmp::2 local fd6a:cmp::1 ttl 64
+  ip addr add 10.66.200.1/30 dev jncmp
+  ip link set jncmp mtu 1400 up
+elif [[ "$TYPE" == ipip6 ]]; then
+  ip link add jncmp type ip6tnl mode ipip6 remote fd6a:cmp::2 local fd6a:cmp::1
+  ip addr add 10.66.200.1/30 dev jncmp
+  ip link set jncmp mtu 1400 up
+fi
+EOS
+                ip link del jncmpsit 2>/dev/null || true
+                ip link del jncmp 2>/dev/null || true
+                ip link add jncmpsit type sit remote "$peer" local "$local_ip" ttl 255
+                ip link set jncmpsit up
+                ip -6 addr add fd6a:cmp::2/64 dev jncmpsit
+                if [[ "$mid" == gre6 ]]; then
+                  ip link add jncmp type ip6gre remote fd6a:cmp::1 local fd6a:cmp::2 ttl 64
+                  ip addr add 10.66.200.2/30 dev jncmp
+                  ip link set jncmp mtu 1400 up
+                  ov_peer=10.66.200.1
+                elif [[ "$mid" == ipip6 ]]; then
+                  ip link add jncmp type ip6tnl mode ipip6 remote fd6a:cmp::1 local fd6a:cmp::2
+                  ip addr add 10.66.200.2/30 dev jncmp
+                  ip link set jncmp mtu 1400 up
+                  ov_peer=10.66.200.1
+                else
+                  ov_peer=fd6a:cmp::1
+                fi
+                ;;
+            wireguard)
+                [[ -n "$wg_l_priv" && -n "$wg_r_priv" ]] || { echo "  skip (no wg keys)"; continue; }
+                _jojonet_compare_remote "$ssh_target" bash -s -- "$wg_r_priv" "$wg_l_pub" "$local_ip" "$port" <<'EOS' >/dev/null
+set -euo pipefail
+PRIV=$1; PEERPUB=$2; PEER=$3; PORT=$4
+ip link del jncmpwg 2>/dev/null || true
+ip link add jncmpwg type wireguard
+printf '%s\n' "$PRIV" > /tmp/jncmp-wg.key
+chmod 600 /tmp/jncmp-wg.key
+wg set jncmpwg private-key /tmp/jncmp-wg.key peer "$PEERPUB" allowed-ips 10.66.200.0/30 endpoint "$PEER:$PORT" persistent-keepalive 15
+ip addr add 10.66.200.1/30 dev jncmpwg
+ip link set jncmpwg mtu 1420 up
+EOS
+                ip link del jncmpwg 2>/dev/null || true
+                ip link add jncmpwg type wireguard
+                printf '%s\n' "$wg_l_priv" > /tmp/jncmp-wg.key
+                chmod 600 /tmp/jncmp-wg.key
+                wg set jncmpwg private-key /tmp/jncmp-wg.key peer "$wg_r_pub" allowed-ips 10.66.200.0/30 endpoint "$peer:$port" persistent-keepalive 15
+                ip addr add 10.66.200.2/30 dev jncmpwg
+                ip link set jncmpwg mtu 1420 up
+                ov_peer=10.66.200.1
+                ;;
+        esac
+
+        [[ -n "$ov_peer" ]] || { echo "  fail  setup"; printf 'JN_COMPARE:%s\n' "{\"type\":\"result\",\"id\":\"$mid\",\"label\":\"$label\",\"ok\":false,\"download_mbps\":0,\"upload_mbps\":0,\"ping\":null,\"loss\":100}"; continue; }
+
+        _jojonet_compare_remote "$ssh_target" "pkill -f 'iperf3 -s -p 15201' >/dev/null 2>&1 || true; iperf3 -s -p 15201 -D; sleep 0.3" >/dev/null 2>&1 || true
+        sleep 0.4
+        local ping_bin=(ping -n) iperf_fam=()
+        [[ "$ov_peer" == *:* ]] && { ping_bin=(ping -6 -n); iperf_fam=(-6); }
+        local pout rtt
+        pout=$("${ping_bin[@]}" -c 12 -W 2 "$ov_peer" 2>&1 || true)
+        loss=$(sed -n 's/.*, \([0-9.]\+%\) packet loss.*/\1/p' <<< "$pout" | tr -d '%' | head -1)
+        rtt=$(sed -n 's/.*= \([0-9.]\+\)\/\([0-9.]\+\)\/.*/\1 \2/p' <<< "$pout" | tail -1)
+        ping_avg=$(awk '{print $2+0}' <<< "$rtt")
+        [[ -n "$loss" ]] || loss=100
+        dl=0; ul=0
+        if command -v jq >/dev/null 2>&1; then
+          dl=$(iperf3 "${iperf_fam[@]}" -c "$ov_peer" -p 15201 -t 5 -J -R 2>/dev/null | jq -r '.end.sum_received.bits_per_second // 0' || echo 0)
+          ul=$(iperf3 "${iperf_fam[@]}" -c "$ov_peer" -p 15201 -t 5 -J 2>/dev/null | jq -r '.end.sum_sent.bits_per_second // 0' || echo 0)
+          dl=$(awk -v b="$dl" 'BEGIN{printf "%.1f", (b+0)/1000000}')
+          ul=$(awk -v b="$ul" 'BEGIN{printf "%.1f", (b+0)/1000000}')
+        fi
+        local reachable=0
+        "${ping_bin[@]}" -c 1 -W 2 "$ov_peer" >/dev/null 2>&1 && reachable=1
+        if [[ "$reachable" == 1 || $(awk -v d="$dl" 'BEGIN{print (d>0)?1:0}') == 1 ]]; then
+          ok_n=$((ok_n + 1))
+          echo -e "  ${GREEN}ok${NC}  dl ${dl} Mbps  ul ${ul} Mbps  ping ${ping_avg:-—} ms  loss ${loss}%"
+          awk -v d="$dl" -v b="$best_dl" 'BEGIN{exit !(d>b)}' && { best_dl=$dl; best_label=$label; }
+        else
+          echo -e "  ${RED}fail${NC}  path blocked / no reply"
+        fi
+        printf 'JN_COMPARE:%s\n' "{\"type\":\"result\",\"id\":\"$mid\",\"label\":\"$label\",\"ok\":$([ "$reachable" = 1 ] && echo true || echo false),\"download_mbps\":$dl,\"upload_mbps\":$ul,\"ping\":${ping_avg:-null},\"loss\":$loss}"
+        _jojonet_compare_cleanup
+        _jojonet_compare_remote "$ssh_target" "pkill -f 'iperf3 -s -p 15201' >/dev/null 2>&1 || true; for d in \$(ip -o link show 2>/dev/null | awk -F': ' '{print \$2}' | cut -d@ -f1 | grep -E '^jncmp' || true); do ip link del \"\$d\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
+    done
+    printf '%s\n' "===== END_JOJONET_COMPARE ====="
+    echo -e "${GREEN}${ok_n}/${total} connected${NC}"
+    [[ -n "$best_label" ]] && echo -e "Best: ${best_label} (${best_dl} Mbps down)"
+    echo "Panel: use تب مقایسه for bars + «ساخت همین تانل»."
+}
+
 update_server_packages() {
     log_note "Updating OS packages (this can take a while)..."
     if command -v apt-get >/dev/null 2>&1; then
@@ -12859,6 +13197,10 @@ fi
 if [[ "${1:-}" == "--ping-test" ]]; then
     server_ping_test
     exit 0
+fi
+if [[ "${1:-}" == "--compare" ]]; then
+    compare_tunnels_cli "${2:-}"
+    exit $?
 fi
 if [[ "${1:-}" == "--update-server" ]]; then
     update_server_packages && exit 0
