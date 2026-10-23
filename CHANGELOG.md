@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.31 / panel 1.3.88
+- **New permanent tunnels** (CLI + panel, full deploy/NAT/boot): IPIP4, GRETAP, EoIP, GENEVE, L2TPv3, EoIPv6, NeoObfs (WG+udp2raw). Menu 32 / flags `--ipip --gretap --eoip --geneve --l2tpv3 --eoip6 --neoobfs`. Compare «ساخت همین تانل» maps to these modes.
+
 ## 1.6.30 / panel 1.3.87
 - **Tunnel compare**: web panel tab «مقایسه» runs temporary overlays (direct, 6to4, IPIP, GRE/GRE6, VXLAN, GENEVE, L2TPv3, WireGuard, TCP, GRETAP, IPIP6) with iperf3/ping, live bars, and «ساخت همین تانل». CLI: `sudo jojonet --compare <PEER_IP>` (SSH to peer). API: `POST /api/compare`.
 

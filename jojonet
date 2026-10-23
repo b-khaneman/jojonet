@@ -12,7 +12,7 @@ IFS=$'\n\t'
 # License: commercial monthly subscription (crypto / web checkout)
 # =========================================================
 
-readonly JOJONET_VERSION="1.6.30"
+readonly JOJONET_VERSION="1.6.31"
 readonly JOJONET_SUPPORT="@B_KHANEMAN"
 readonly JOJONET_REPO="https://github.com/b-khaneman/jojonet"
 JOJONET_GITHUB_USER="${JOJONET_GITHUB_USER:-b-khaneman}"
@@ -794,17 +794,17 @@ healthcheck_tunnel() {
         echo -e "  service: ${RED}inactive${NC}"
         fatal=1
     fi
-    if [[ "${TunnelMode:-}" == "wireguard" && -n "${WgObfs:-}" ]]; then
-        if systemctl is-active --quiet "jojonet-u2r@${name}.service"; then
-            echo -e "  udp2raw: ${GREEN}active${NC} (${WgObfs}, port ${ObfsPort:-?})"
-            ok=$((ok + 1))
-        else
-            echo -e "  udp2raw: ${RED}inactive${NC} (${WgObfs})"
-            fatal=1
-        fi
-    fi
     case "${TunnelMode:-gre}" in
-        gre|vxlan|wireguard)
+        gre|ipip|gretap|eoip|vxlan|geneve|l2tpv3|wireguard|neoobfs)
+            if [[ "${TunnelMode:-}" == "wireguard" || "${TunnelMode:-}" == "neoobfs" ]] && [[ -n "${WgObfs:-}" ]]; then
+                if systemctl is-active --quiet "jojonet-u2r@${name}.service"; then
+                    echo -e "  udp2raw: ${GREEN}active${NC} (${WgObfs}, port ${ObfsPort:-?})"
+                    ok=$((ok + 1))
+                else
+                    echo -e "  udp2raw: ${RED}inactive${NC} (${WgObfs})"
+                    fatal=1
+                fi
+            fi
             if ip link show "$name" >/dev/null 2>&1; then
                 echo -e "  iface:   ${GREEN}present${NC}"
                 ok=$((ok + 1))
@@ -1037,9 +1037,14 @@ tunnel_net_prefix_for_mode() {
     case "${1:-gre}" in
         tun_tcp) echo "$TUN_TCP_NET_PREFIX" ;;
         vxlan) echo "$VXLAN_NET_PREFIX" ;;
+        geneve) echo "172.26" ;;
+        l2tpv3) echo "172.27" ;;
+        ipip) echo "172.24" ;;
+        gretap|eoip) echo "172.25" ;;
         gre6) echo "$GRE6_NET_PREFIX" ;;
         ipip6) echo "$IPIP6_NET_PREFIX" ;;
-        wireguard) wg_obfs_net_prefix "${WG_OBFS:-}" ;;
+        eoip6) echo "172.28" ;;
+        wireguard|neoobfs) wg_obfs_net_prefix "${WG_OBFS:-}" ;;
         *) echo "$TUNNEL_NET_PREFIX" ;;
     esac
 }
@@ -1599,6 +1604,13 @@ Usage:
   sudo jojonet --tun-tcp <PEER_IP>     TUN/PrivateIP/TCP tunnel
   sudo jojonet --paqet <PEER_IP>       Paqet (Raw/KCP) tunnel
   sudo jojonet --vxlan <PEER_IP>       VXLAN tunnel
+  sudo jojonet --ipip <PEER_IP>        IPIP4 tunnel
+  sudo jojonet --gretap <PEER_IP>      GRETAP (L2 GRE)
+  sudo jojonet --eoip <PEER_IP>        EoIP (MikroTik-compatible tunnel-id)
+  sudo jojonet --geneve <PEER_IP>      GENEVE overlay (UDP 6081)
+  sudo jojonet --l2tpv3 <PEER_IP>      L2TPv3 static (UDP)
+  sudo jojonet --neoobfs <PEER_IP>     NeoObfs (WG + udp2raw FakeTCP)
+  sudo jojonet --eoip6 <PEER_IP>       EoIPv6 over 6to4
   sudo jojonet --wg <PEER_IP>          WireGuard tunnel (low latency)
   sudo jojonet --wg-icmp <PEER_IP>     WireGuard carried inside ICMP (udp2raw)
   sudo jojonet --wg-faketcp <PEER_IP>  WireGuard carried as fake TCP (udp2raw)
@@ -2527,7 +2539,7 @@ wait_for_tunnel_up() {
     local name="$1" mode="$2" max_wait="${3:-60}"
     local i
     for ((i = 1; i <= max_wait; i++)); do
-        if [[ "$mode" == "tun_tcp" || "$mode" == "wireguard" ]]; then
+        if [[ "$mode" == "tun_tcp" || "$mode" == "wireguard" || "$mode" == "neoobfs" ]]; then
             ip link show "$name" >/dev/null 2>&1 && return 0
         elif [[ "$mode" == "paqet" ]]; then
             pgrep -f "paqet run -c.*/${name}\\.yaml" >/dev/null 2>&1 && return 0
@@ -2830,6 +2842,12 @@ show_existing_tunnels_summary() {
 tunnel_mode_label() {
     case "${1:-gre}" in
         gre)           printf '%s' "GRE" ;;
+        ipip)          printf '%s' "IPIP" ;;
+        gretap)        printf '%s' "GRETAP" ;;
+        eoip)          printf '%s' "EoIP" ;;
+        geneve)        printf '%s' "GENEVE" ;;
+        l2tpv3)        printf '%s' "L2TPv3" ;;
+        neoobfs)       printf '%s' "NeoObfs" ;;
         tun_tcp)       printf '%s' "TUN/TCP" ;;
         paqet)         printf '%s' "Paqet" ;;
         vxlan)         printf '%s' "VXLAN" ;;
@@ -2848,6 +2866,7 @@ tunnel_mode_label() {
         sit)           printf '%s' "6to4 (SIT IPv6)" ;;
         gre6)          printf '%s' "GRE6 over 6to4" ;;
         ipip6)         printf '%s' "IPIP6 over 6to4" ;;
+        eoip6)         printf '%s' "EoIPv6" ;;
         dnstt)         printf '%s' "DNSTT (DNS tunnel)" ;;
         icmp)          printf '%s' "ICMP (pingtunnel)" ;;
         *)             printf '%s' "${1:-?}" ;;
@@ -3664,7 +3683,7 @@ deploy_tunnel() {
 
     if [[ "$role_conf" == "iran" ]]; then
         case "$tunnel_mode" in
-            gre|vxlan|tun_tcp|wireguard|gre6|ipip6)
+            gre|ipip|gretap|eoip|vxlan|geneve|l2tpv3|tun_tcp|wireguard|neoobfs|gre6|ipip6|eoip6)
                 fwd_port=$(resolve_iran_forward_port "443" "${fwd_port:-}")
                 ;;
             paqet|hysteria2|rathole|wstunnel|ws|dnstt|icmp)
@@ -3675,23 +3694,45 @@ deploy_tunnel() {
     preflight_tunnel_check "$tunnel_mode" "$role_conf" "$loc_ip" "$rem_ip" \
         "${subnet_byte:-}" "${tun_ip:-}" "${tcp_port:-}" "${fwd_port:-}" || return 1
 
-    if [[ "$tunnel_mode" == "gre" ]]; then
+    if [[ "$tunnel_mode" == "gre" || "$tunnel_mode" == "ipip" || "$tunnel_mode" == "gretap" || "$tunnel_mode" == "eoip" ]]; then
         gre_key=""
+        if [[ "$tunnel_mode" == "eoip" ]]; then
+            # MikroTik-compatible tunnel-id derived from the peer pair
+            gre_key=$(compute_vxlan_vni "$loc_ip" "$rem_ip")
+            gre_key=$(( gre_key % 65535 + 1 ))
+        fi
         if [[ -z "$subnet_byte" ]]; then
             subnet_byte=$(allocate_gre_subnet_byte "$loc_ip" "$rem_ip" "$role_conf") || return 1
         elif gre_subnet_taken_locally "$subnet_byte" "$rem_ip"; then
-            log_error "GRE subnet $subnet_byte already used by another peer on this server."
+            log_error "Overlay subnet $subnet_byte already used by another peer on this server."
             return 1
         fi
-        resolve_tunnel_ips "$role_conf" "$subnet_byte" "gre"
+        resolve_tunnel_ips "$role_conf" "$subnet_byte" "$tunnel_mode"
         tun_ip="$Tun_IP"
         tun_server_ip="$Tun_Server_IP"
         tun_client_ip="$Tun_Client_IP"
         [[ "$role_conf" == "iran" ]] && tun_remote="$Tun_Remote_IP_Raw"
-        [[ "$ins_mtu" == "1310" || "$ins_mtu" == "$DEFAULT_MTU_FALLBACK" ]] && ins_mtu="$DEFAULT_GRE_MTU"
-    elif [[ "$tunnel_mode" == "vxlan" ]]; then
+        case "$tunnel_mode" in
+            gretap|eoip) [[ "$ins_mtu" == "1310" || "$ins_mtu" == "$DEFAULT_MTU_FALLBACK" ]] && ins_mtu=1400 ;;
+            ipip) [[ "$ins_mtu" == "1310" || "$ins_mtu" == "$DEFAULT_MTU_FALLBACK" ]] && ins_mtu=1480 ;;
+            *) [[ "$ins_mtu" == "1310" || "$ins_mtu" == "$DEFAULT_MTU_FALLBACK" ]] && ins_mtu="$DEFAULT_GRE_MTU" ;;
+        esac
+    elif [[ "$tunnel_mode" == "vxlan" || "$tunnel_mode" == "geneve" || "$tunnel_mode" == "l2tpv3" ]]; then
         vxlan_vni=$(compute_vxlan_vni "$loc_ip" "$rem_ip")
-        vxlan_port="${tcp_port:-$DEFAULT_VXLAN_PORT}"
+        case "$tunnel_mode" in
+            geneve) vxlan_port="${tcp_port:-6081}" ;;
+            l2tpv3) vxlan_port="${tcp_port:-1701}" ;;
+            *) vxlan_port="${tcp_port:-$DEFAULT_VXLAN_PORT}" ;;
+        esac
+        if [[ -z "$subnet_byte" ]]; then
+            subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+        fi
+        resolve_tunnel_ips "$role_conf" "$subnet_byte" "$tunnel_mode"
+        tun_ip="$Tun_IP"
+        tun_server_ip="$Tun_Server_IP"
+        tun_client_ip="$Tun_Client_IP"
+        [[ "$role_conf" == "iran" ]] && tun_remote="$Tun_Remote_IP_Raw"
+        [[ "$ins_mtu" == "1310" || "$ins_mtu" == "$DEFAULT_MTU_FALLBACK" ]] && ins_mtu=1400
     fi
 
     if [[ "$tunnel_mode" == "tun_tcp" ]]; then
@@ -3706,15 +3747,18 @@ deploy_tunnel() {
         build_paqet_runtime_config "$ins_name" "$role_conf" "$rem_ip" "$tcp_port" "$key_dir" \
             "$fwd_port" "${forward_proto:-tcp}" || return 1
         svc_unit="jojonet-paqet@${ins_name}.service"
-    elif [[ "$tunnel_mode" == "vxlan" ]]; then
+    elif [[ "$tunnel_mode" == "vxlan" || "$tunnel_mode" == "geneve" || "$tunnel_mode" == "l2tpv3" ]]; then
         create_vxlan_runner_script || return 1
         create_vxlan_service || return 1
         svc_unit="jojonet-vxlan@${ins_name}.service"
-    elif [[ "$tunnel_mode" == "wireguard" ]]; then
+    elif [[ "$tunnel_mode" == "wireguard" || "$tunnel_mode" == "neoobfs" ]]; then
         install_wireguard_tools || return 1
         create_wg_runner_script || return 1
         create_wg_service || return 1
         svc_unit="jojonet-wg@${ins_name}.service"
+        if [[ "$tunnel_mode" == "neoobfs" ]]; then
+            WG_OBFS="${WG_OBFS:-faketcp}"
+        fi
         wg_obfs="${WG_OBFS:-}"
         if [[ -n "$wg_obfs" ]]; then
             [[ "$wg_obfs" == icmp || "$wg_obfs" == faketcp ]] || { log_error "Invalid WgObfs: $wg_obfs"; return 1; }
@@ -3833,6 +3877,10 @@ deploy_tunnel() {
             log_error "Invalid forward ports: $fwd_port"
             return 1
         fi
+        if [[ "$tunnel_mode" == "eoip6" ]]; then
+            gre_key=$(compute_vxlan_vni "$loc_ip" "$rem_ip")
+            gre_key=$(( gre_key % 65535 + 1 ))
+        fi
         if ip link show "$v6_iface" >/dev/null 2>&1 && [[ ! -f "$conf_file" ]]; then
             log_error "Interface $v6_iface already exists (another IPv6 tunnel to $rem_ip?)"
             return 1
@@ -3899,7 +3947,7 @@ deploy_tunnel() {
         svc_unit="jojonet@${ins_name}.service"
     fi
 
-    if [[ "$tunnel_mode" == "wireguard" && -n "$key_dir" ]]; then
+    if [[ ( "$tunnel_mode" == "wireguard" || "$tunnel_mode" == "neoobfs" ) && -n "$key_dir" ]]; then
         wg_priv="$key_dir/wg_private.key"
         wg_pub="$key_dir/wg_public.key"
         wg_peer="$key_dir/wg_peer_public.key"
@@ -4631,6 +4679,137 @@ quick_add_tunnel_vxlan() {
     return 1
 }
 
+quick_add_tunnel_neoobfs() {
+    local peer_ip="${1:-}"
+    WG_OBFS=faketcp
+    local peer_from_cli=0
+    [[ -n "$peer_ip" ]] && peer_from_cli=1
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local fwd_port="" key_dir="" obfs_port="" wg_port="" existing=""
+
+    set +e
+    clear_screen; logo
+    print_banner "NeoObfs — encrypted + obfuscated (WG + udp2raw FakeTCP)"
+    install_wireguard_tools || { sleep 2; set -e; return 1; }
+    install_udp2raw_binary || { sleep 2; set -e; return 1; }
+    create_u2r_runner_script || { set -e; return 1; }
+    create_u2r_service || { set -e; return 1; }
+    create_wg_runner_script || { set -e; return 1; }
+    create_wg_service || { set -e; return 1; }
+    auto_detect_network || { sleep 2; set -e; return 1; }
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+    [[ -z "$peer_ip" ]] && read -r -p "Peer server IP: " peer_ip
+    peer_ip="${peer_ip// /}"
+    validate_ipv4 "$peer_ip" || { sleep 2; set -e; return 1; }
+    rem_ip="$peer_ip"
+    if existing=$(find_tunnel_for_peer "$rem_ip" "neoobfs"); then
+        restart_tunnel "$existing" || true
+        sleep 2; set -e; return 0
+    fi
+    role_conf=$(resolve_server_role "$loc_ip") || { sleep 2; set -e; return 1; }
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "neoobfs") || { set -e; return 1; }
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+    obfs_port="${JOJONET_WG_OBFS_PORT:-$(wg_obfs_default_port faketcp "$subnet_byte")}"
+    WG_OBFS_PORT="$obfs_port"
+    wg_port=$(wg_obfs_wg_port "$obfs_port")
+    resolve_tunnel_ips "$role_conf" "$subnet_byte" "neoobfs"
+    local pair_id
+    pair_id=$(printf '%s' "$rem_ip" | tr '.' '_')
+    key_dir=$(ensure_wg_keys "$pair_id" "$rem_ip" "$role_conf") || { set -e; return 1; }
+    ensure_udp2raw_key "$pair_id" "$rem_ip" >/dev/null || { set -e; return 1; }
+    [[ "$role_conf" == "iran" ]] && fwd_port=$(allocate_iran_forward_port "443") || fwd_port=""
+    echo -e "${CYAN}NeoObfs${NC} udp2raw=$obfs_port WG=$wg_port overlay=$Tun_IP"
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$Tun_IP" "$Tun_Remote_IP_Raw" "$DEFAULT_WG_OBFS_MTU" "$fwd_port" "neoobfs" "$wg_port" "$key_dir" \
+        "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] NeoObfs [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --neoobfs $loc_ip"
+        sleep 2; set -e; return 0
+    fi
+    sleep 3; set -e; return 1
+}
+
+# Unified quick-add for kernel overlays: ipip | gretap | eoip | geneve | l2tpv3
+quick_add_overlay_tunnel() {
+    local mode="$1" peer_ip="${2:-}"
+    local peer_from_cli=0 use_auto=0
+    [[ -n "$peer_ip" ]] && peer_from_cli=1
+    local ins_name="" role_conf="" loc_ip="" rem_ip="" subnet_byte=""
+    local tun_ip="" tun_remote="" ins_mtu="$DEFAULT_MTU_FALLBACK" fwd_port=""
+    local udp_port="" existing="" label=""
+
+    case "$mode" in
+        ipip) label="IPIP"; ins_mtu=1480 ;;
+        gretap) label="GRETAP"; ins_mtu=1400 ;;
+        eoip) label="EoIP"; ins_mtu=1400 ;;
+        geneve) label="GENEVE"; ins_mtu=1400; udp_port=6081 ;;
+        l2tpv3) label="L2TPv3"; ins_mtu=1400; udp_port=1701 ;;
+        *) log_error "Unknown overlay mode: $mode"; return 1 ;;
+    esac
+
+    set +e
+    clear_screen
+    logo
+    print_banner "${label} Tunnel Setup"
+
+    if ! auto_detect_network; then
+        echo -e "${RED}[!] Cannot detect network.${NC}"
+        sleep 2; set -e; return 1
+    fi
+    loc_ip="$DETECTED_IP"
+    show_existing_tunnels_summary
+    [[ -z "$peer_ip" ]] && read -r -p "Peer server IP: " peer_ip
+    peer_ip="${peer_ip// /}"
+    if [[ -z "$peer_ip" ]] || ! validate_ipv4 "$peer_ip"; then
+        sleep 2; set -e; return 1
+    fi
+    [[ "$peer_ip" == "$loc_ip" ]] && { echo -e "${RED}[!] Same IP.${NC}"; sleep 2; set -e; return 1; }
+    rem_ip="$peer_ip"
+
+    if existing=$(find_tunnel_for_peer "$rem_ip" "$mode"); then
+        echo -e "${YELLOW}[!] ${label} to $rem_ip exists [$existing]. Restarting...${NC}"
+        local _rrc=0
+        restart_tunnel "$existing" || _rrc=$?
+        sleep 2; set -e; return "$_rrc"
+    fi
+    if ! role_conf=$(resolve_server_role "$loc_ip"); then
+        echo -e "${RED}[!] Set JOJONET_ROLE=iran|kharej${NC}"
+        sleep 2; set -e; return 1
+    fi
+    echo -e "${GREEN}[*] Role:${NC} $role_conf"
+    jojonet_use_auto_defaults "$peer_from_cli" && use_auto=1
+
+    ins_name=$(allocate_tunnel_name "$rem_ip" "$role_conf" "$mode") || { set -e; return 1; }
+    if [[ "$role_conf" == "iran" ]]; then
+        fwd_port=$(allocate_iran_forward_port "443")
+    else
+        fwd_port=""
+    fi
+    subnet_byte=$(compute_pair_subnet_byte "$loc_ip" "$rem_ip")
+    resolve_tunnel_ips "$role_conf" "$subnet_byte" "$mode"
+    tun_ip="$Tun_IP"
+    tun_remote="$Tun_Remote_IP_Raw"
+
+    echo -e "\n${CYAN}--- ${label} plan ---${NC}"
+    echo -e "  Mode:      $mode"
+    echo -e "  Interface: $ins_name"
+    echo -e "  Role:      $role_conf"
+    echo -e "  Tunnel IP: $tun_ip"
+    [[ -n "$udp_port" ]] && echo -e "  UDP port:  $udp_port"
+    [[ -n "$fwd_port" ]] && echo -e "  Forward:   $fwd_port"
+    [[ "$role_conf" == "kharej" ]] && hint "Now run on Iran: sudo jojonet --${mode} $loc_ip"
+
+    if deploy_tunnel "$ins_name" "$role_conf" "$loc_ip" "$rem_ip" "$subnet_byte" \
+        "$tun_ip" "$tun_remote" "$ins_mtu" "$fwd_port" "$mode" "${udp_port:-}" "" \
+        "$Tun_Server_IP" "$Tun_Client_IP"; then
+        echo -e "${GREEN}[+] ${label} [$ins_name] is up.${NC}"
+        [[ "$role_conf" == "kharej" ]] && hint "Run on Iran: sudo jojonet --${mode} $loc_ip"
+        sleep 2; set -e; return 0
+    fi
+    sleep 3; set -e; return 1
+}
+
 create_template_script() {
     if ! cat << 'EOF' > "$TEMPLATE_SCRIPT"
 #!/usr/bin/env bash
@@ -4714,17 +4893,44 @@ case "$ACTION" in
 
         log() { echo "[jojonet:${Name}] $*"; }
 
-        log "Starting plain GRE tunnel (manual-compatible)..."
+        local _kind="${TunnelMode:-gre}"
+        log "Starting ${_kind} tunnel..."
         modprobe ip_gre 2>/dev/null || true
+        modprobe ipip 2>/dev/null || true
 
         if ip link show "$Name" >/dev/null 2>&1; then
             log "Removing stale interface $Name"
             ip link delete "$Name" || { log "ERROR: failed to delete old interface"; exit 1; }
         fi
 
-        log "ip tunnel add $Name mode gre remote $Remote_IP local $Local_IP"
-        ip tunnel add "$Name" mode gre remote "$Remote_IP" local "$Local_IP" \
-            || { log "ERROR: GRE creation failed"; exit 1; }
+        case "$_kind" in
+            ipip)
+                log "ip tunnel add $Name mode ipip remote $Remote_IP local $Local_IP"
+                ip tunnel add "$Name" mode ipip remote "$Remote_IP" local "$Local_IP" \
+                    || { log "ERROR: IPIP creation failed"; exit 1; }
+                ;;
+            gretap)
+                log "ip link add $Name type gretap remote $Remote_IP local $Local_IP"
+                ip link add "$Name" type gretap remote "$Remote_IP" local "$Local_IP" ttl 255 \
+                    || { log "ERROR: GRETAP creation failed"; exit 1; }
+                ;;
+            eoip)
+                # MikroTik EoIP ≈ GRETAP with identical tunnel-id (key) on both sides
+                local _tid="${GreKey:-${Subnet_Byte:-10}}"
+                [[ "$_tid" =~ ^[0-9]+$ ]] || _tid=10
+                log "ip link add $Name type gretap (EoIP id=$_tid) remote $Remote_IP local $Local_IP"
+                ip link add "$Name" type gretap remote "$Remote_IP" local "$Local_IP" ttl 255 \
+                    key "$_tid" \
+                    || ip link add "$Name" type gretap remote "$Remote_IP" local "$Local_IP" ttl 255 \
+                        ikey "$_tid" okey "$_tid" \
+                    || { log "ERROR: EoIP/GRETAP creation failed"; exit 1; }
+                ;;
+            gre|*)
+                log "ip tunnel add $Name mode gre remote $Remote_IP local $Local_IP"
+                ip tunnel add "$Name" mode gre remote "$Remote_IP" local "$Local_IP" \
+                    || { log "ERROR: GRE creation failed"; exit 1; }
+                ;;
+        esac
 
         _want_ip="${Tun_IP%%/*}"
         _busy=$(ip -o -4 addr show 2>/dev/null | awk -v ip="$_want_ip" '$4 ~ "^" ip "(/|$)" { print $2; exit }')
@@ -4784,7 +4990,7 @@ case "$ACTION" in
             log "Kharej: GRE only (no NAT)"
         fi
 
-        log "SUCCESS: tunnel $Name is UP with $Tun_IP"
+        log "SUCCESS: ${_kind} tunnel $Name is UP with $Tun_IP"
         ;;
     stop)
         echo "[jojonet:${Name:-?}] Stopping tunnel..."
@@ -5271,6 +5477,10 @@ table_name="jojonet_$Name"
 cleanup() {
     trap - ERR
     ip link delete "$Name" >/dev/null 2>&1 || true
+    if [[ "${TunnelMode:-}" == "l2tpv3" && "${VxlanVni:-}" =~ ^[0-9]+$ ]]; then
+        ip l2tp del session name "$Name" 2>/dev/null || true
+        ip l2tp del tunnel tunnel_id "$VxlanVni" 2>/dev/null || true
+    fi
     nft delete table ip "$table_name" >/dev/null 2>&1 || true
 }
 
@@ -5279,19 +5489,27 @@ case "$ACTION" in
         trap cleanup ERR
         log() { echo "[jojonet-vxlan:${Name}] $*"; }
 
-        log "Starting VXLAN tunnel..."
+        local _kind="${TunnelMode:-vxlan}"
+        log "Starting ${_kind} tunnel..."
         modprobe vxlan 2>/dev/null || true
+        modprobe geneve 2>/dev/null || true
+        modprobe l2tp_eth 2>/dev/null || true
+        modprobe l2tp_netlink 2>/dev/null || true
 
         DEFAULT_IFACE=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
         [[ -n "$DEFAULT_IFACE" ]] || { log "ERROR: default interface not found"; exit 1; }
 
         if ! [[ "${VxlanVni:-}" =~ ^[0-9]+$ ]] || (( VxlanVni < 1 || VxlanVni > 16777215 )); then
-            log "ERROR: VxlanVni missing or invalid"
+            log "ERROR: VxlanVni/id missing or invalid"
             exit 1
         fi
-        VxlanPort="${VxlanPort:-$DEFAULT_VXLAN_PORT}"
+        case "$_kind" in
+            geneve) VxlanPort="${VxlanPort:-6081}" ;;
+            l2tpv3) VxlanPort="${VxlanPort:-1701}" ;;
+            *) VxlanPort="${VxlanPort:-$DEFAULT_VXLAN_PORT}" ;;
+        esac
         if ! [[ "$VxlanPort" =~ ^[0-9]+$ ]]; then
-            log "ERROR: VxlanPort invalid"
+            log "ERROR: UDP port invalid"
             exit 1
         fi
 
@@ -5299,13 +5517,40 @@ case "$ACTION" in
             log "Removing stale interface $Name"
             ip link delete "$Name" || { log "ERROR: failed to delete old interface"; exit 1; }
         fi
+        # drop leftover L2TP tunnels with our id range
+        if [[ "$_kind" == "l2tpv3" ]]; then
+            ip l2tp del tunnel tunnel_id "$VxlanVni" 2>/dev/null || true
+            ip l2tp del session name "$Name" 2>/dev/null || true
+        fi
 
-        log "VXLAN add: vni=$VxlanVni remote=$Remote_IP local=$Local_IP udp=$VxlanPort dev=$DEFAULT_IFACE"
-        # iproute2 on Ubuntu 24+/26 requires srcport MIN MAX (not a single port).
-        ip link add "$Name" type vxlan id "$VxlanVni" dev "$DEFAULT_IFACE" \
-            remote "$Remote_IP" local "$Local_IP" dstport "$VxlanPort" \
-            srcport "$VxlanPort" "$VxlanPort" \
-            || { log "ERROR: VXLAN creation failed"; exit 1; }
+        case "$_kind" in
+            geneve)
+                log "GENEVE add: id=$VxlanVni remote=$Remote_IP udp=$VxlanPort"
+                ip link add "$Name" type geneve id "$VxlanVni" remote "$Remote_IP" dstport "$VxlanPort" \
+                    || ip link add "$Name" type geneve id "$VxlanVni" remote "$Remote_IP" \
+                    || { log "ERROR: GENEVE creation failed (kernel/module?)"; exit 1; }
+                ;;
+            l2tpv3)
+                local _tid="$VxlanVni" _sid=1 _psid=2
+                if [[ "${Role:-}" == "iran" ]]; then _sid=2; _psid=1; fi
+                log "L2TPv3 add: tunnel_id=$_tid session=$_sid peer_session=$_psid udp=$VxlanPort"
+                ip l2tp add tunnel tunnel_id "$_tid" peer_tunnel_id "$_tid" \
+                    remote "$Remote_IP" local "$Local_IP" encap udp \
+                    udp_sport "$VxlanPort" udp_dport "$VxlanPort" \
+                    || { log "ERROR: L2TPv3 tunnel failed"; exit 1; }
+                ip l2tp add session name "$Name" tunnel_id "$_tid" \
+                    session_id "$_sid" peer_session_id "$_psid" \
+                    || { log "ERROR: L2TPv3 session failed"; exit 1; }
+                ;;
+            vxlan|*)
+                log "VXLAN add: vni=$VxlanVni remote=$Remote_IP local=$Local_IP udp=$VxlanPort dev=$DEFAULT_IFACE"
+                # iproute2 on Ubuntu 24+/26 requires srcport MIN MAX (not a single port).
+                ip link add "$Name" type vxlan id "$VxlanVni" dev "$DEFAULT_IFACE" \
+                    remote "$Remote_IP" local "$Local_IP" dstport "$VxlanPort" \
+                    srcport "$VxlanPort" "$VxlanPort" \
+                    || { log "ERROR: VXLAN creation failed"; exit 1; }
+                ;;
+        esac
 
         ip addr flush dev "$Name" >/dev/null 2>&1
         log "Assign IP $Tun_IP on $Name"
@@ -5372,7 +5617,7 @@ case "$ACTION" in
             log "Foreign role: VXLAN only (no NAT)"
         fi
 
-        log "SUCCESS: VXLAN $Name is UP with $Tun_IP (VNI $VxlanVni)"
+        log "SUCCESS: ${_kind} $Name is UP with $Tun_IP (id $VxlanVni)"
         ;;
     stop)
         echo "[jojonet-vxlan:${Name:-?}] Stopping tunnel..."
@@ -7556,7 +7801,7 @@ tcp_port_listening() {
 }
 
 xray_mode() { [[ "${1:-}" == "dokodemo" || "${1:-}" == "xray_reverse" ]]; }
-v6_mode() { [[ "${1:-}" == "sit" || "${1:-}" == "gre6" || "${1:-}" == "ipip6" ]]; }
+v6_mode() { [[ "${1:-}" == "sit" || "${1:-}" == "gre6" || "${1:-}" == "ipip6" || "${1:-}" == "eoip6" ]]; }
 valid_xray_net() { [[ "${1:-}" == "tcp" || "${1:-}" == "ws" || "${1:-}" == "grpc" ]]; }
 
 xray_default_ctrl_port() {
@@ -8121,7 +8366,7 @@ v6_plan() {
 # One SIT underlay per IPv4 pair: only one 6to4/GRE6/IPIP6 tunnel per peer.
 v6_tunnel_for_peer() {
     local peer="$1" m n
-    for m in sit gre6 ipip6; do
+    for m in sit gre6 ipip6 eoip6; do
         if n=$(find_tunnel_for_peer "$peer" "$m"); then
             printf '%s %s' "$n" "$m"
             return 0
@@ -8227,7 +8472,7 @@ fail() {
 case "$ACTION" in
     start)
         case "$TunnelMode" in
-            sit|gre6|ipip6) ;;
+            sit|gre6|ipip6|eoip6) ;;
             *) fail "unsupported mode: $TunnelMode" ;;
         esac
         [[ -d /proc/sys/net/ipv6 ]] || fail "IPv6 is disabled in the kernel (ipv6.disable=1) — enable it and reboot"
@@ -8241,7 +8486,7 @@ case "$ACTION" in
             umtu=1480
         fi
         modprobe sit >/dev/null 2>&1 || true
-        [[ "$TunnelMode" == "gre6" ]] && { modprobe ip6_gre >/dev/null 2>&1 || true; }
+        [[ "$TunnelMode" == "gre6" || "$TunnelMode" == "eoip6" ]] && { modprobe ip6_gre >/dev/null 2>&1 || true; }
         [[ "$TunnelMode" == "ipip6" ]] && { modprobe ip6_tunnel >/dev/null 2>&1 || true; }
         cleanup
 
@@ -8256,10 +8501,21 @@ case "$ACTION" in
 
         if [[ "$TunnelMode" != "sit" ]]; then
             [[ -n "$Tun_IP" ]] || fail "overlay IPv4 missing in config"
-            if [[ "$TunnelMode" == "gre6" ]]; then mode6="ip6gre"; else mode6="ipip6"; fi
-            log "ip -6 tunnel add $Name mode $mode6 remote $V6Remote local ${V6Local%%/*}"
-            ip -6 tunnel add "$Name" mode "$mode6" remote "$V6Remote" local "${V6Local%%/*}" \
-                hoplimit 255 encaplimit none || fail "$mode6 creation failed"
+            if [[ "$TunnelMode" == "eoip6" ]]; then
+                local _tid="${GreKey:-${Subnet_Byte:-10}}"
+                [[ "$_tid" =~ ^[0-9]+$ ]] || _tid=10
+                log "ip link add $Name type ip6gretap (EoIPv6 id=$_tid) remote $V6Remote local ${V6Local%%/*}"
+                ip link add "$Name" type ip6gretap remote "$V6Remote" local "${V6Local%%/*}" \
+                    key "$_tid" \
+                    || ip link add "$Name" type ip6gretap remote "$V6Remote" local "${V6Local%%/*}" \
+                        ikey "$_tid" okey "$_tid" \
+                    || fail "EoIPv6/ip6gretap creation failed"
+            else
+                if [[ "$TunnelMode" == "gre6" ]]; then mode6="ip6gre"; else mode6="ipip6"; fi
+                log "ip -6 tunnel add $Name mode $mode6 remote $V6Remote local ${V6Local%%/*}"
+                ip -6 tunnel add "$Name" mode "$mode6" remote "$V6Remote" local "${V6Local%%/*}" \
+                    hoplimit 255 encaplimit none || fail "$mode6 creation failed"
+            fi
             ip addr add "$Tun_IP" dev "$Name" || fail "cannot add $Tun_IP to $Name"
             ip link set "$Name" mtu "$mtu" || fail "cannot set MTU on $Name"
             ip link set "$Name" up || fail "cannot bring $Name up"
@@ -8294,7 +8550,7 @@ create_v6_service() {
     tmp_file=$(mktemp /tmp/jojonet_v6_svc.XXXXXX) || return 1
     if ! cat << 'EOF' > "$tmp_file"
 [Unit]
-Description=JojoNet IPv6 Tunnel (6to4/GRE6/IPIP6): %i
+Description=JojoNet IPv6 Tunnel (6to4/GRE6/IPIP6/EoIPv6): %i
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -10945,14 +11201,15 @@ for conf in "$INSTANCES_DIR"/*.conf; do
     case "$mode" in
         tun_tcp)   svc="jojonet-tcptun@${name}.service" ;;
         paqet)     svc="jojonet-paqet@${name}.service" ;;
-        vxlan)     svc="jojonet-vxlan@${name}.service" ;;
-        wireguard) svc="jojonet-wg@${name}.service" ;;
+        vxlan|geneve|l2tpv3) svc="jojonet-vxlan@${name}.service" ;;
+        wireguard|neoobfs) svc="jojonet-wg@${name}.service" ;;
         hysteria2) svc="jojonet-hy2@${name}.service" ;;
         rathole)   svc="jojonet-rathole@${name}.service" ;;
         wstunnel|ws) svc="jojonet-wstunnel@${name}.service" ;;
         dokodemo|xray_reverse) svc="jojonet-xray@${name}.service" ;;
-        sit|gre6|ipip6) svc="jojonet-v6@${name}.service" ;;
+        sit|gre6|ipip6|eoip6) svc="jojonet-v6@${name}.service" ;;
         dnstt|icmp) svc="jojonet-stream@${name}.service" ;;
+        gre|ipip|gretap|eoip) svc="jojonet@${name}.service" ;;
         *)         svc="jojonet@${name}.service" ;;
     esac
     echo "[jojonet-boot] Ensuring $svc"
@@ -10961,7 +11218,7 @@ for conf in "$INSTANCES_DIR"/*.conf; do
         systemctl start "$svc" >/dev/null 2>&1 || \
             echo "[jojonet-boot] WARN: failed to start $svc" >&2
     fi
-    if [[ "$mode" == "wireguard" ]] && grep -qE '^WgObfs="(icmp|faketcp)"' "$conf" 2>/dev/null; then
+    if [[ "$mode" == "wireguard" || "$mode" == "neoobfs" ]] && grep -qE '^WgObfs="(icmp|faketcp)"' "$conf" 2>/dev/null; then
         systemctl enable "jojonet-u2r@${name}.service" >/dev/null 2>&1 || true
         systemctl is-active --quiet "jojonet-u2r@${name}.service" || \
             systemctl start "jojonet-u2r@${name}.service" >/dev/null 2>&1 || \
@@ -11015,14 +11272,15 @@ tunnel_service_unit() {
     case "$mode" in
         tun_tcp)    echo "jojonet-tcptun@${name}.service" ;;
         paqet)      echo "jojonet-paqet@${name}.service" ;;
-        vxlan)      echo "jojonet-vxlan@${name}.service" ;;
-        wireguard)  echo "jojonet-wg@${name}.service" ;;
+        vxlan|geneve|l2tpv3) echo "jojonet-vxlan@${name}.service" ;;
+        wireguard|neoobfs) echo "jojonet-wg@${name}.service" ;;
         hysteria2)  echo "jojonet-hy2@${name}.service" ;;
         rathole)    echo "jojonet-rathole@${name}.service" ;;
         wstunnel|ws) echo "jojonet-wstunnel@${name}.service" ;;
         dokodemo|xray_reverse) echo "jojonet-xray@${name}.service" ;;
-        sit|gre6|ipip6) echo "jojonet-v6@${name}.service" ;;
+        sit|gre6|ipip6|eoip6) echo "jojonet-v6@${name}.service" ;;
         dnstt|icmp) echo "jojonet-stream@${name}.service" ;;
+        gre|ipip|gretap|eoip) echo "jojonet@${name}.service" ;;
         *)          echo "jojonet@${name}.service" ;;
     esac
 }
@@ -12820,7 +13078,7 @@ main_menu() {
         menu_line "21) WireGuard over ICMP / FakeTCP (udp2raw, anti-DPI)"
         menu_line "22) Xray Dokodemo-door (Iran dials Kharej, VLESS)"
         menu_line "23) Xray Reverse (Kharej dials Iran — Iran-access servers)"
-        menu_line "24) IPv6 tunnels: 6to4 / GRE6 / IPIP6"
+        menu_line "24) IPv6 tunnels: 6to4 / GRE6 / IPIP6 / EoIPv6"
         menu_line "25) Relays — single server (iptables/GOST/HAProxy/Socat/Xray)"
         menu_line "26) Server tools (DNS / ping test / OS update)"
         menu_line "27) License / اشتراک ماهانه (وضعیت و فعال‌سازی)"
@@ -12828,6 +13086,7 @@ main_menu() {
         menu_line "29) ICMP — pingtunnel (ChaCha20 over ping; not WireGuard/udp2raw)"
         menu_line "30) Direct Kharej — DNSTT/ICMP/relay on one foreign server (no Iran VPS)"
         menu_line "31) VPN panels — 3x-ui Sanaei / X-UI classic / PasarGuard"
+        menu_line "32) Kernel overlays — IPIP / GRETAP / EoIP / GENEVE / L2TPv3 / NeoObfs"
         menu_line "0) Exit"
         echo ""
         read -r -p "  Select: " choice || break
@@ -12906,11 +13165,31 @@ main_menu() {
                 echo "  1) 6to4 (SIT) — private IPv6 between the servers"
                 echo "  2) GRE6 over 6to4 — IPv4 overlay + port forward"
                 echo "  3) IPIP6 over 6to4 — IPv4 overlay + port forward (lighter)"
-                read -r -p "Choose [1-3]: " _vc || true
+                echo "  4) EoIPv6 — SIT + ip6gretap (MikroTik-compatible tunnel-id)"
+                read -r -p "Choose [1-4]: " _vc || true
                 case "${_vc:-}" in
                     1) quick_add_tunnel_v6 sit || true ;;
                     2) quick_add_tunnel_v6 gre6 || true ;;
                     3) quick_add_tunnel_v6 ipip6 || true ;;
+                    4) quick_add_tunnel_v6 eoip6 || true ;;
+                    *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
+                esac
+                ;;
+            32)
+                echo "  1) IPIP4"
+                echo "  2) GRETAP (L2)"
+                echo "  3) EoIP (MikroTik-compatible)"
+                echo "  4) GENEVE"
+                echo "  5) L2TPv3"
+                echo "  6) NeoObfs (encrypted + obfuscated)"
+                read -r -p "Choose [1-6]: " _oc2 || true
+                case "${_oc2:-}" in
+                    1) quick_add_overlay_tunnel ipip || true ;;
+                    2) quick_add_overlay_tunnel gretap || true ;;
+                    3) quick_add_overlay_tunnel eoip || true ;;
+                    4) quick_add_overlay_tunnel geneve || true ;;
+                    5) quick_add_overlay_tunnel l2tpv3 || true ;;
+                    6) quick_add_tunnel_neoobfs || true ;;
                     *) echo -e "${RED}Invalid option.${NC}"; sleep 1 ;;
                 esac
                 ;;
@@ -13103,6 +13382,34 @@ if [[ "${1:-}" == "--gre6" && -n "${2:-}" ]]; then
 fi
 if [[ "${1:-}" == "--ipip6" && -n "${2:-}" ]]; then
     quick_add_tunnel_v6 ipip6 "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--eoip6" && -n "${2:-}" ]]; then
+    quick_add_tunnel_v6 eoip6 "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--ipip" && -n "${2:-}" ]]; then
+    quick_add_overlay_tunnel ipip "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--gretap" && -n "${2:-}" ]]; then
+    quick_add_overlay_tunnel gretap "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--eoip" && -n "${2:-}" ]]; then
+    quick_add_overlay_tunnel eoip "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--geneve" && -n "${2:-}" ]]; then
+    quick_add_overlay_tunnel geneve "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--l2tpv3" && -n "${2:-}" ]]; then
+    quick_add_overlay_tunnel l2tpv3 "$2" && exit 0
+    exit $?
+fi
+if [[ "${1:-}" == "--neoobfs" ]]; then
+    quick_add_tunnel_neoobfs "${2:-}" && exit 0
     exit $?
 fi
 if [[ "${1:-}" == "--xui-install" ]]; then

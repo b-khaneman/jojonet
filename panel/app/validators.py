@@ -76,11 +76,15 @@ DNSTT_MODES: tuple[str, ...] = ("doh", "dot", "udp")
 SPOOF_UNIT = "jojonet-spoof.service"
 SPOOF_MARK = "spoof"
 
-WG_MODES: frozenset[str] = frozenset({"wireguard", "wg_icmp", "wg_faketcp"})
-WG_OBFS: dict[str, str] = {"wg_icmp": "icmp", "wg_faketcp": "faketcp"}
+WG_MODES: frozenset[str] = frozenset({"wireguard", "wg_icmp", "wg_faketcp", "neoobfs"})
+WG_OBFS: dict[str, str] = {"wg_icmp": "icmp", "wg_faketcp": "faketcp", "neoobfs": "faketcp"}
 SUBNET_KEYDIR_MODES: frozenset[str] = frozenset({"tun_tcp", "paqet"})
 XRAY_MODES: frozenset[str] = frozenset({"dokodemo", "xray_reverse"})
-V6_MODES: frozenset[str] = frozenset({"sit", "gre6", "ipip6"})
+V6_MODES: frozenset[str] = frozenset({"sit", "gre6", "ipip6", "eoip6"})
+# Kernel L3 overlays sharing GRE-style subnet allocation + jojonet@.service
+GRE_FAMILY_MODES: frozenset[str] = frozenset({"gre", "ipip", "gretap", "eoip"})
+# UDP L2 overlays sharing VXLAN-style VNI/port + jojonet-vxlan@.service
+UDP_L2_MODES: frozenset[str] = frozenset({"vxlan", "geneve", "l2tpv3"})
 STREAM_MODES: frozenset[str] = frozenset({"dnstt", "icmp"})
 IP_KEYDIR_MODES: frozenset[str] = (
     WG_MODES
@@ -110,13 +114,49 @@ MODES: dict[str, dict[str, str]] = {
         "label": "GRE",
         "first": "kharej",
         "flag": "--peer",
-        "desc": "تونل GRE کلاسیک با فوروارد پورت روی ایران.",
+        "desc": "تونل GRE کلاسیک (لایه ۳) با فوروارد پورت روی ایران — معادل میکروتیک GRE.",
+    },
+    "gretap": {
+        "label": "GRETAP",
+        "first": "kharej",
+        "flag": "--gretap",
+        "desc": "GRE لایه ۲ (Ethernet) روی IPv4؛ برای بریج و ترافیک L2.",
+    },
+    "ipip": {
+        "label": "IPIP",
+        "first": "kharej",
+        "flag": "--ipip",
+        "desc": "تونل IPIP4 کلاسیک (لایه ۳ روی IPv4) — سبک‌تر از GRE.",
+    },
+    "eoip": {
+        "label": "EoIP",
+        "first": "kharej",
+        "flag": "--eoip",
+        "desc": "EoIP سازگار با میکروتیک (GRETAP + tunnel-id یکسان دو طرف).",
+    },
+    "geneve": {
+        "label": "GENEVE",
+        "first": "kharej",
+        "flag": "--geneve",
+        "desc": "اورلی GENEVE لایه ۲ روی UDP (پیش‌فرض ۶۰۸۱).",
+    },
+    "l2tpv3": {
+        "label": "L2TPv3",
+        "first": "kharej",
+        "flag": "--l2tpv3",
+        "desc": "L2TPv3 استاتیک لایه ۲ روی UDP — معادل MikroTik L2TPv3 Static.",
+    },
+    "neoobfs": {
+        "label": "NeoObfs",
+        "first": "kharej",
+        "flag": "--neoobfs",
+        "desc": "تونل رمزنگاری‌شده + مبهم‌سازی روی UDP/TCPجعلی (WireGuard + udp2raw).",
     },
     "tun_tcp": {
         "label": "TUN/TCP",
         "first": "kharej",
         "flag": "--tun-tcp",
-        "desc": "تونل TUN روی TCP (سبک Backhaul).",
+        "desc": "تونل TUN روی TCP — آخرین راه وقتی UDP بسته است.",
     },
     "paqet": {
         "label": "Paqet",
@@ -188,13 +228,19 @@ MODES: dict[str, dict[str, str]] = {
         "label": "GRE6",
         "first": "kharej",
         "flag": "--gre6",
-        "desc": "GRE روی 6to4 با اورلی IPv4 و فوروارد پورت.",
+        "desc": "6to4-GRE: SIT + GRE6 با اورلی IPv4 و فوروارد پورت.",
     },
     "ipip6": {
         "label": "IPIP6",
         "first": "kharej",
         "flag": "--ipip6",
-        "desc": "IPIP روی 6to4 با اورلی IPv4 و فوروارد پورت.",
+        "desc": "6to4+IPIP6: SIT + IPIP6 با اورلی IPv4 و فوروارد پورت.",
+    },
+    "eoip6": {
+        "label": "EoIPv6",
+        "first": "kharej",
+        "flag": "--eoip6",
+        "desc": "EoIP روی IPv6 (SIT + ip6gretap با tunnel-id) — سازگار با MikroTik EoIPv6.",
     },
     "dnstt": {
         "label": "DNSTT",
@@ -367,8 +413,14 @@ def valid_dnstt_resolver(mode: str, value: str) -> bool:
 
 def conf_mode(conf: dict[str, str]) -> str:
     mode = (conf.get("TunnelMode") or "gre").strip()
+    if mode == "neoobfs":
+        return "neoobfs"
     if mode == "wireguard":
         obfs = (conf.get("WgObfs") or "").strip()
+        if obfs == "icmp":
+            return "wg_icmp"
+        if obfs == "faketcp":
+            return "wg_faketcp"
         if obfs:
             return f"wg_{obfs}"
     return mode or "gre"

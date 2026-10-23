@@ -36,11 +36,10 @@ COMPARE_MODES: list[dict[str, Any]] = [
     {
         "id": "ipip",
         "label": "IPIP",
-        "create_mode": None,
+        "create_mode": "ipip",
         "kind": "overlay",
         "type": "ipip",
         "mtu": 1480,
-        "note": "تست موقت کرنل؛ ساخت دائم در پنل هنوز IPIP4 ندارد (نزدیک‌ترین: IPIP6)",
     },
     {
         "id": "sit_udp",
@@ -69,20 +68,18 @@ COMPARE_MODES: list[dict[str, Any]] = [
     {
         "id": "geneve",
         "label": "GENEVE",
-        "create_mode": None,
+        "create_mode": "geneve",
         "kind": "overlay",
         "type": "geneve",
         "mtu": 1400,
-        "note": "تست موقت؛ ساخت دائم در پنل فعلاً نیست",
     },
     {
         "id": "l2tpv3",
         "label": "L2TPv3",
-        "create_mode": None,
+        "create_mode": "l2tpv3",
         "kind": "overlay",
         "type": "l2tpv3",
         "mtu": 1400,
-        "note": "تست موقت؛ ساخت دائم در پنل فعلاً نیست",
     },
     {
         "id": "wireguard",
@@ -91,6 +88,15 @@ COMPARE_MODES: list[dict[str, Any]] = [
         "kind": "overlay",
         "type": "wireguard",
         "mtu": 1420,
+    },
+    {
+        "id": "neoobfs",
+        "label": "NeoObfs",
+        "create_mode": "neoobfs",
+        "kind": "overlay",
+        "type": "neoobfs",
+        "mtu": 1200,
+        "note": "رمزنگاری + مبهم‌سازی (WG + udp2raw)",
     },
     {
         "id": "tun_tcp",
@@ -111,11 +117,26 @@ COMPARE_MODES: list[dict[str, Any]] = [
     {
         "id": "gretap",
         "label": "GRETAP",
-        "create_mode": None,
+        "create_mode": "gretap",
         "kind": "overlay",
         "type": "gretap",
         "mtu": 1400,
-        "note": "تست موقت؛ ساخت دائم در پنل فعلاً نیست",
+    },
+    {
+        "id": "eoip",
+        "label": "EoIP",
+        "create_mode": "eoip",
+        "kind": "overlay",
+        "type": "eoip",
+        "mtu": 1400,
+    },
+    {
+        "id": "eoip6",
+        "label": "EoIPv6",
+        "create_mode": "eoip6",
+        "kind": "overlay",
+        "type": "eoip6",
+        "mtu": 1400,
     },
     {
         "id": "ipip6",
@@ -338,11 +359,17 @@ case "$TYPE" in
     ip link set jncmp mtu "$MTU" up
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
-  gretap)
-    ip link add jncmp type gretap remote "$PEER" local "$LOCAL" ttl 255
+  gretap|eoip)
+    if [[ "$TYPE" == eoip ]]; then
+      ip link add jncmp type gretap remote "$PEER" local "$LOCAL" ttl 255 key 4042 \
+        || ip link add jncmp type gretap remote "$PEER" local "$LOCAL" ttl 255
+      note="EoIP-style key 4042"
+    else
+      ip link add jncmp type gretap remote "$PEER" local "$LOCAL" ttl 255
+    fi
     ip addr add "$OV" dev jncmp
     ip link set jncmp mtu "$MTU" up
-    echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
+    echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note="$note"
     ;;
   ipip)
     ip link add jncmp type ipip remote "$PEER" local "$LOCAL" ttl 255
@@ -428,7 +455,7 @@ case "$TYPE" in
     ip link set jncmp mtu "$MTU" up
     echo SETUP ok=1 if=jncmp ov=${{OV%%/*}} note=
     ;;
-  wireguard)
+  wireguard|neoobfs)
     command -v wg >/dev/null 2>&1 || {{ echo SETUP ok=0 if=none ov= note="wireguard-tools نیست"; exit 0; }}
     PRIV={wg_priv_q}
     PEERPUB={wg_pub_q}
@@ -439,7 +466,9 @@ case "$TYPE" in
     wg set jncmpwg private-key /tmp/jncmp-wg.key peer "$PEERPUB" allowed-ips 10.66.200.0/30 endpoint "$PEER:$PORT" persistent-keepalive 15
     ip addr add "$OV" dev jncmpwg
     ip link set jncmpwg mtu "$MTU" up
-    echo SETUP ok=1 if=jncmpwg ov=${{OV%%/*}} note=
+    note=""
+    [[ "$TYPE" == neoobfs ]] && note="سنجش WG خام؛ مبهم‌سازی دائم در ساخت NeoObfs"
+    echo SETUP ok=1 if=jncmpwg ov=${{OV%%/*}} note="$note"
     ;;
   tun_tcp)
     # Lightweight TCP forwarder with socat/ncat if present; else fail soft
