@@ -1,0 +1,753 @@
+#!/usr/bin/env python3
+# JojoNet Reality scanners — JojoSNI / JojoCF / JojoFastly
+# Stdlib only. Safe concurrent TLS/TCP probes over official CDN ranges.
+from __future__ import annotations
+
+import argparse
+import asyncio
+import ipaddress
+import json
+import os
+import re
+import socket
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+VERSION = "1.0.0"
+TOOL = "jojonet-scan"
+
+CF_IPV4_URL = "https://www.cloudflare.com/ips-v4"
+CF_IPV6_URL = "https://www.cloudflare.com/ips-v6"
+FASTLY_URL = "https://api.fastly.com/public-ip-list"
+
+# Built-in Reality-oriented SNI candidates (public sites; TLS1.3 / H2 friendly).
+DEFAULT_SNI_LIST = [
+    "www.microsoft.com",
+    "microsoft.com",
+    "www.apple.com",
+    "apple.com",
+    "www.samsung.com",
+    "www.asus.com",
+    "www.sony.com",
+    "www.nvidia.com",
+    "www.intel.com",
+    "www.amd.com",
+    "dl.google.com",
+    "www.google.com",
+    "googleapis.com",
+    "www.gstatic.com",
+    "www.cloudflare.com",
+    "cloudflare.com",
+    "www.fastly.com",
+    "www.amazon.com",
+    "aws.amazon.com",
+    "www.amazon.co.uk",
+    "www.ebay.com",
+    "www.github.com",
+    "github.com",
+    "www.gitlab.com",
+    "www.wikipedia.org",
+    "en.wikipedia.org",
+    "www.bing.com",
+    "www.office.com",
+    "login.microsoftonline.com",
+    "www.msftconnecttest.com",
+    "www.yahoo.com",
+    "www.tiktok.com",
+    "www.speedtest.net",
+    "www.cloudfront.net",
+    "cdnjs.cloudflare.com",
+    "ajax.googleapis.com",
+    "fonts.gstatic.com",
+    "www.paypal.com",
+    "www.adidas.com",
+    "www.nike.com",
+    "www.spotify.com",
+    "www.twitch.tv",
+    "www.discord.com",
+    "gateway.icloud.com",
+    "www.icloud.com",
+    "swcdn.apple.com",
+    "updates.cdn-apple.com",
+]
+
+# ASN → Persian label for Iranian access networks (local vantage point).
+IRAN_ASN: dict[int, str] = {
+    44244: "همراه‌اول (MCI)",
+    197207: "ایرانسل (MTN)",
+    50810: "شاتل",
+    56402: "آسیاتک",
+    12880: "مخابرات ایران (ITC)",
+    58224: "تبیان/TCI",
+    57218: "رایتل",
+    31549: "آریا شاتل",
+    43754: "آسیاتک",
+    25184: "افرانت",
+    39501: "پارس‌آنلاین",
+    16322: "پارس‌آنلاین",
+    42337: "رسپینا",
+    49100: "ایرانسل",
+    49666: "تلکام",
+    60631: "پارس‌ارتباطات",
+    24631: "آریان‌تلیا",
+    39074: "های‌وب",
+    44889: "مبین‌نت",
+    51074: "فن‌آوا",
+}
+
+
+@dataclass
+class ProbeResult:
+    target: str
+    kind: str
+    ok: bool
+    rtt_ms: float | None = None
+    tls_ms: float | None = None
+    tls13: bool = False
+    alpn: str = ""
+    cert_ok: bool = False
+    cert_cn: str = ""
+    error: str = ""
+    sni: str = ""
+    ip: str = ""
+    port: int = 443
+    isp_from: str = ""
+    asn_from: int | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+def _utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _http_get(url: str, timeout: float = 30.0) -> str:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"JojoNet-Scan/{VERSION}", "Accept": "application/json,text/plain,*/*"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed CDN endpoints
+        return resp.read().decode("utf-8", "replace")
+
+
+def detect_vantage() -> dict[str, Any]:
+    """Detect public IP / ASN of THIS host (the network we measure FROM)."""
+    out: dict[str, Any] = {
+        "public_ip": "",
+        "asn": None,
+        "isp": "نامشخص",
+        "org": "",
+        "country": "",
+        "note": "پینگ/تأخیر از همین سرور اندازه‌گیری می‌شود؛ برای همراه‌اول/ایرانسل/... اسکنر را روی همان شبکه اجرا کنید.",
+    }
+    # Prefer ipapi.co then bgpview fallbacks
+    for url in (
+        "https://ipapi.co/json/",
+        "https://ifconfig.co/json",
+    ):
+        try:
+            data = json.loads(_http_get(url, timeout=12))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            continue
+        ip = str(data.get("ip") or data.get("ip_addr") or "").strip()
+        asn_raw = data.get("asn") or data.get("org") or ""
+        org = str(data.get("org") or data.get("asn_org") or data.get("asn_name") or "")
+        country = str(data.get("country") or data.get("country_code") or "")
+        asn = None
+        if isinstance(asn_raw, int):
+            asn = asn_raw
+        else:
+            m = re.search(r"AS?(\d+)", str(asn_raw), re.I)
+            if m:
+                asn = int(m.group(1))
+            else:
+                m = re.search(r"AS?(\d+)", org, re.I)
+                if m:
+                    asn = int(m.group(1))
+        if ip:
+            out["public_ip"] = ip
+        if asn:
+            out["asn"] = asn
+            out["isp"] = IRAN_ASN.get(asn, org or f"AS{asn}")
+        elif org:
+            out["isp"] = org
+        out["org"] = org
+        out["country"] = country
+        if out["public_ip"]:
+            break
+    if out["public_ip"] and not out["asn"]:
+        try:
+            data = json.loads(_http_get(f"https://api.bgpview.io/ip/{out['public_ip']}", timeout=12))
+            prefixes = (((data.get("data") or {}).get("prefixes")) or [])
+            if prefixes:
+                asn_meta = (prefixes[0].get("asn") or {})
+                asn = asn_meta.get("asn")
+                if asn is not None:
+                    out["asn"] = int(asn)
+                    out["org"] = str(asn_meta.get("name") or asn_meta.get("description") or out["org"])
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, TypeError, ValueError):
+            pass
+    if out["asn"] and out["asn"] in IRAN_ASN:
+        out["isp"] = IRAN_ASN[out["asn"]]
+    elif out["asn"] and not out["isp"].startswith("AS") and out["isp"] == "نامشخص":
+        out["isp"] = out["org"] or f"AS{out['asn']}"
+    return out
+
+
+def parse_cidrs(text: str) -> list[ipaddress._BaseNetwork]:
+    nets: list[ipaddress._BaseNetwork] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Fastly JSON uses addresses arrays
+        if line.startswith("{") or line.startswith("["):
+            continue
+        try:
+            nets.append(ipaddress.ip_network(line, strict=False))
+        except ValueError:
+            continue
+    return nets
+
+
+def fetch_cloudflare_cidrs(*, ipv6: bool = False) -> list[ipaddress._BaseNetwork]:
+    text = _http_get(CF_IPV4_URL)
+    nets = parse_cidrs(text)
+    if ipv6:
+        try:
+            nets.extend(parse_cidrs(_http_get(CF_IPV6_URL)))
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass
+    if not nets:
+        raise RuntimeError("لیست رنج Cloudflare خالی بود")
+    return nets
+
+
+def fetch_fastly_cidrs(*, ipv6: bool = False) -> list[ipaddress._BaseNetwork]:
+    raw = json.loads(_http_get(FASTLY_URL))
+    nets: list[ipaddress._BaseNetwork] = []
+    keys = ["addresses"]
+    if ipv6:
+        keys.append("ipv6_addresses")
+    for key in keys:
+        for item in raw.get(key) or []:
+            try:
+                nets.append(ipaddress.ip_network(str(item), strict=False))
+            except ValueError:
+                continue
+    uniq: dict[str, ipaddress._BaseNetwork] = {str(n): n for n in nets}
+    nets = list(uniq.values())
+    if not nets:
+        raise RuntimeError("لیست رنج Fastly خالی بود")
+    return nets
+
+
+def iter_hosts(nets: Iterable[ipaddress._BaseNetwork], *, limit: int | None) -> Iterable[str]:
+    """Round-robin across CIDRs so --limit samples the whole space, not only the first prefix."""
+    iterators: list[Any] = []
+    for net in nets:
+        try:
+            iterators.append(iter(net.hosts()))
+        except ValueError:
+            iterators.append(iter([net.network_address]))
+    n = 0
+    while iterators:
+        next_iters: list[Any] = []
+        for it in iterators:
+            try:
+                yield str(next(it))
+                n += 1
+                next_iters.append(it)
+                if limit is not None and n >= limit:
+                    return
+            except StopIteration:
+                continue
+        iterators = next_iters
+
+
+def count_hosts(nets: list[ipaddress._BaseNetwork], *, limit: int | None) -> int:
+    total = 0
+    for net in nets:
+        try:
+            total += net.num_addresses
+            # subtract network+broadcast for IPv4 > /31
+            if net.version == 4 and net.prefixlen < 31:
+                total -= 2
+        except Exception:
+            total += 1
+    if limit is not None:
+        return min(total, limit)
+    return max(total, 0)
+
+
+async def tcp_connect_rtt(host: str, port: int, timeout: float) -> tuple[float | None, Any]:
+    loop = asyncio.get_running_loop()
+    t0 = time.perf_counter()
+    try:
+        fut = asyncio.open_connection(host, port)
+        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
+        rtt = (time.perf_counter() - t0) * 1000.0
+        return rtt, (reader, writer)
+    except Exception:
+        return None, None
+
+
+async def probe_tls(
+    host: str,
+    *,
+    port: int,
+    sni: str,
+    timeout: float,
+    verify: bool = False,
+) -> ProbeResult:
+    """TCP + TLS probe. host may be IP or hostname."""
+    res = ProbeResult(target=host, kind="tls", ok=False, sni=sni, port=port, ip=host)
+    t0 = time.perf_counter()
+    writer = None
+    try:
+        # Resolve if hostname
+        if not _is_ip(host):
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+            )
+            if not infos:
+                res.error = "resolve-failed"
+                return res
+            res.ip = infos[0][4][0]
+
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.set_alpn_protocols(["h2", "http/1.1"])
+        if verify:
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.load_default_certs()
+        else:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        server_hostname = sni or (None if _is_ip(host) else host)
+
+        conn = asyncio.open_connection(res.ip or host, port, ssl=ctx, server_hostname=server_hostname)
+        reader, writer = await asyncio.wait_for(conn, timeout=timeout)
+        tls_ms = (time.perf_counter() - t0) * 1000.0
+        res.tls_ms = round(tls_ms, 2)
+        res.rtt_ms = res.tls_ms  # end-to-end until handshake done
+        sslobj = writer.get_extra_info("ssl_object")
+        if sslobj is not None:
+            ver = sslobj.version() or ""
+            res.tls13 = ver == "TLSv1.3"
+            try:
+                res.alpn = sslobj.selected_alpn_protocol() or ""
+            except Exception:
+                res.alpn = ""
+            try:
+                cert = sslobj.getpeercert()
+                if cert:
+                    res.cert_ok = True
+                    sub = dict(x[0] for x in cert.get("subject", ()) if x)
+                    res.cert_cn = sub.get("commonName", "")
+            except Exception:
+                # CERT_NONE often yields empty dict — still mark handshake OK
+                res.cert_ok = True
+        res.ok = True
+        return res
+    except asyncio.TimeoutError:
+        res.error = "timeout"
+        return res
+    except ssl.SSLError as exc:
+        res.error = f"tls:{exc}"
+        return res
+    except OSError as exc:
+        res.error = f"net:{exc.errno or exc}"
+        return res
+    except Exception as exc:  # noqa: BLE001
+        res.error = type(exc).__name__
+        return res
+    finally:
+        if writer is not None:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+async def probe_sni_domain(domain: str, *, port: int, timeout: float) -> ProbeResult:
+    res = await probe_tls(domain, port=port, sni=domain, timeout=timeout, verify=False)
+    res.kind = "sni"
+    res.target = domain
+    # Reality-friendly score hints
+    score = 0
+    if res.ok:
+        score += 40
+    if res.tls13:
+        score += 25
+    if res.alpn == "h2":
+        score += 20
+    if res.tls_ms is not None:
+        if res.tls_ms < 80:
+            score += 15
+        elif res.tls_ms < 150:
+            score += 10
+        elif res.tls_ms < 250:
+            score += 5
+    res.extra["score"] = score
+    res.extra["reality_hint"] = (
+        "مناسب Reality" if score >= 70 else ("قابل‌قبول" if score >= 45 else "ضعیف")
+    )
+    return res
+
+
+class Progress:
+    def __init__(self, total: int):
+        self.total = max(total, 1)
+        self.done = 0
+        self.ok = 0
+        self.t0 = time.perf_counter()
+        self._lock = asyncio.Lock()
+
+    async def tick(self, success: bool) -> None:
+        async with self._lock:
+            self.done += 1
+            if success:
+                self.ok += 1
+            if self.done == 1 or self.done == self.total or self.done % 50 == 0:
+                self._print()
+
+    def _print(self) -> None:
+        elapsed = max(time.perf_counter() - self.t0, 0.001)
+        rate = self.done / elapsed
+        left = self.total - self.done
+        eta = left / rate if rate > 0 else 0
+        pct = 100.0 * self.done / self.total
+        print(
+            f"\r  [{pct:5.1f}%] {self.done}/{self.total}  ok={self.ok}  "
+            f"{rate:.0f}/s  ETA {eta/60:.1f}m   ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+async def run_pool(
+    items: list[Any],
+    workers: int,
+    handler,
+    progress: Progress | None = None,
+) -> list[Any]:
+    q: asyncio.Queue = asyncio.Queue()
+    for it in items:
+        q.put_nowait(it)
+    results: list[Any] = []
+    lock = asyncio.Lock()
+
+    async def worker() -> None:
+        while True:
+            try:
+                item = q.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                r = await handler(item)
+                async with lock:
+                    results.append(r)
+                if progress is not None:
+                    await progress.tick(bool(getattr(r, "ok", False)))
+            finally:
+                q.task_done()
+
+    ws = [asyncio.create_task(worker()) for _ in range(max(1, workers))]
+    await asyncio.gather(*ws)
+    if progress is not None:
+        print(file=sys.stderr)
+    return results
+
+
+def load_resume(path: Path) -> set[str]:
+    done: set[str] = set()
+    if not path.is_file():
+        return done
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = str(row.get("ip") or row.get("target") or "")
+            if key:
+                done.add(key)
+    return done
+
+
+def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def result_dict(r: ProbeResult, vantage: dict[str, Any]) -> dict[str, Any]:
+    d = asdict(r)
+    d["isp_from"] = vantage.get("isp") or r.isp_from
+    d["asn_from"] = vantage.get("asn")
+    d["vantage_ip"] = vantage.get("public_ip")
+    d["scanned_at"] = _utc()
+    return d
+
+
+async def cmd_sni(args: argparse.Namespace) -> int:
+    vantage = detect_vantage()
+    print(f"JojoSNI — اسکنر SNI مخصوص Reality | JojoNet-scan {VERSION}")
+    print(f"  از شبکه: {vantage.get('isp')}  AS{vantage.get('asn') or '?'}  IP={vantage.get('public_ip') or '?'}")
+    print(f"  نکته: {vantage.get('note')}")
+    domains = list(DEFAULT_SNI_LIST)
+    if args.file:
+        extra = Path(args.file).read_text(encoding="utf-8").splitlines()
+        for line in extra:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                domains.append(line)
+    # unique preserve order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for d in domains:
+        d = d.strip().lower().rstrip(".")
+        if d and d not in seen:
+            seen.add(d)
+            uniq.append(d)
+    domains = uniq
+    print(f"  دامنه‌ها: {len(domains)} | workers={args.workers} | timeout={args.timeout}s")
+
+    async def handle(domain: str) -> ProbeResult:
+        return await probe_sni_domain(domain, port=args.port, timeout=args.timeout)
+
+    prog = Progress(len(domains))
+    results: list[ProbeResult] = await run_pool(domains, args.workers, handle, prog)
+    ok_rows = [r for r in results if r.ok]
+    ok_rows.sort(key=lambda r: (r.extra.get("score", 0) * -1, r.tls_ms or 9e9))
+
+    out_path = Path(args.out) if args.out else Path(f"/tmp/jojonet-sni-{int(time.time())}.json")
+    payload = {
+        "scanner": "JojoSNI",
+        "version": VERSION,
+        "vantage": vantage,
+        "count": len(results),
+        "ok": len(ok_rows),
+        "results": [result_dict(r, vantage) for r in sorted(results, key=lambda x: -(x.extra.get("score") or 0))],
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print()
+    print(f"  سالم: {len(ok_rows)}/{len(results)}")
+    print(f"  خروجی: {out_path}")
+    print()
+    print(f"  {'SNI':<34} {'ms':>7} {'TLS':<8} {'ALPN':<8} {'امتیاز':>6}  وضعیت")
+    print("  " + "-" * 78)
+    for r in ok_rows[: args.top]:
+        print(
+            f"  {r.target:<34} {r.tls_ms or 0:7.1f} {'1.3' if r.tls13 else 'other':<8} "
+            f"{(r.alpn or '-'):<8} {r.extra.get('score', 0):6d}  {r.extra.get('reality_hint', '')}"
+        )
+    if not ok_rows:
+        print("  هیچ SNI سالمی پیدا نشد.")
+    return 0
+
+
+async def cmd_cdn(args: argparse.Namespace, *, provider: str) -> int:
+    title = "JojoCF" if provider == "cf" else "JojoFastly"
+    vantage = detect_vantage()
+    print(f"{title} — اسکنر IP تمیز {('Cloudflare' if provider == 'cf' else 'Fastly')} | JojoNet-scan {VERSION}")
+    print(f"  از شبکه: {vantage.get('isp')}  AS{vantage.get('asn') or '?'}  IP={vantage.get('public_ip') or '?'}")
+    print(f"  نکته: {vantage.get('note')}")
+
+    print("  دریافت رنج رسمی…", flush=True)
+    if provider == "cf":
+        nets = fetch_cloudflare_cidrs(ipv6=args.ipv6)
+        default_sni = args.sni or "www.cloudflare.com"
+    else:
+        nets = fetch_fastly_cidrs(ipv6=args.ipv6)
+        default_sni = args.sni or "www.fastly.com"
+
+    total_est = count_hosts(nets, limit=args.limit)
+    print(f"  رنج‌ها: {len(nets)} | تخمین IP: {total_est:,} | SNI={default_sni} | workers={args.workers}")
+
+    out_path = Path(args.out) if args.out else Path(f"/tmp/jojonet-{provider}-{int(time.time())}.jsonl")
+    done = load_resume(out_path) if args.resume else set()
+    if done:
+        print(f"  ادامه از فایل قبلی: {len(done):,} مورد رد شد")
+
+    # Stream hosts in chunks to avoid holding millions of strings at once
+    chunk_size = max(args.workers * 4, 500)
+    scanned = 0
+    ok_n = 0
+    best: list[dict[str, Any]] = []
+    t0 = time.perf_counter()
+
+    async def handle(ip: str) -> ProbeResult:
+        r = await probe_tls(ip, port=args.port, sni=default_sni, timeout=args.timeout, verify=False)
+        r.kind = provider
+        r.target = ip
+        r.ip = ip
+        return r
+
+    host_iter = iter_hosts(nets, limit=args.limit)
+    prog_done = 0
+    while True:
+        chunk: list[str] = []
+        while len(chunk) < chunk_size:
+            try:
+                ip = next(host_iter)
+            except StopIteration:
+                break
+            if ip in done:
+                continue
+            chunk.append(ip)
+        if not chunk:
+            break
+
+        results = await run_pool(chunk, args.workers, handle, progress=None)
+        rows = []
+        for r in results:
+            prog_done += 1
+            scanned += 1
+            d = result_dict(r, vantage)
+            rows.append(d)
+            if r.ok:
+                ok_n += 1
+                best.append(d)
+        append_jsonl(out_path, rows)
+
+        # keep top by tls_ms
+        best = [b for b in best if b.get("ok")]
+        best.sort(key=lambda x: x.get("tls_ms") or 9e9)
+        best = best[: max(args.top * 3, 50)]
+
+        elapsed = max(time.perf_counter() - t0, 0.001)
+        rate = scanned / elapsed
+        eta = (total_est - scanned) / rate if rate > 0 and args.limit is None else 0
+        # when limit set, total_est already capped
+        remain = max(total_est - scanned, 0)
+        eta = remain / rate if rate > 0 else 0
+        print(
+            f"\r  [{100.0 * scanned / max(total_est, 1):5.1f}%] scanned={scanned:,}/{total_est:,}  "
+            f"ok={ok_n:,}  {rate:.0f}/s  ETA {eta/60:.1f}m  out={out_path.name}   ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    print(file=sys.stderr)
+    summary = {
+        "scanner": title,
+        "provider": provider,
+        "version": VERSION,
+        "vantage": vantage,
+        "sni": default_sni,
+        "port": args.port,
+        "cidrs": [str(n) for n in nets],
+        "scanned": scanned,
+        "ok": ok_n,
+        "jsonl": str(out_path),
+        "finished_at": _utc(),
+        "top": best[: args.top],
+    }
+    summary_path = out_path.with_suffix(".summary.json")
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print()
+    print(f"  تمام شد. اسکن‌شده: {scanned:,} | سالم: {ok_n:,}")
+    print(f"  جزئیات JSONL: {out_path}")
+    print(f"  خلاصه: {summary_path}")
+    print()
+    print(f"  پینگ/تأخیر TLS از دیدگاه: {vantage.get('isp')} (AS{vantage.get('asn') or '?'})")
+    print(f"  {'IP':<42} {'ms':>8}  TLS  ALPN")
+    print("  " + "-" * 70)
+    for b in best[: args.top]:
+        print(
+            f"  {b.get('ip',''):<42} {b.get('tls_ms') or 0:8.1f}  "
+            f"{'1.3' if b.get('tls13') else '-':<4} {b.get('alpn') or '-'}"
+        )
+    if not best:
+        print("  هیچ IP سالمی پیدا نشد (فایروال/مسیر یا SNI را چک کنید).")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog=TOOL,
+        description="JojoNet Reality scanners: JojoSNI / JojoCF / JojoFastly",
+    )
+    p.add_argument("--version", action="version", version=f"{TOOL} {VERSION}")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add_common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--workers", type=int, default=200, help="concurrent probes (default 200)")
+        sp.add_argument("--timeout", type=float, default=2.5, help="per-target seconds")
+        sp.add_argument("--port", type=int, default=443)
+        sp.add_argument("--top", type=int, default=20, help="print top N results")
+        sp.add_argument("--out", type=str, default="", help="output path")
+
+    sni = sub.add_parser("sni", help="JojoSNI — اسکن دامنه/SNI مناسب Reality")
+    add_common(sni)
+    sni.add_argument("--file", type=str, default="", help="extra domains file (one per line)")
+    sni.set_defaults(func=lambda a: asyncio.run(cmd_sni(a)))
+
+    cf = sub.add_parser("cf", help="JojoCF — اسکن تمام رنج رسمی Cloudflare")
+    add_common(cf)
+    cf.add_argument("--sni", type=str, default="", help="SNI used against CF IPs")
+    cf.add_argument("--limit", type=int, default=None, help="scan only first N IPs (test)")
+    cf.add_argument("--resume", action="store_true", help="skip IPs already in --out jsonl")
+    cf.add_argument("--ipv6", action="store_true", help="include IPv6 ranges")
+    cf.set_defaults(func=lambda a: asyncio.run(cmd_cdn(a, provider="cf")))
+
+    fy = sub.add_parser("fastly", help="JojoFastly — اسکن تمام رنج رسمی Fastly")
+    add_common(fy)
+    fy.add_argument("--sni", type=str, default="", help="SNI used against Fastly IPs")
+    fy.add_argument("--limit", type=int, default=None, help="scan only first N IPs (test)")
+    fy.add_argument("--resume", action="store_true")
+    fy.add_argument("--ipv6", action="store_true")
+    fy.set_defaults(func=lambda a: asyncio.run(cmd_cdn(a, provider="fastly")))
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 9):
+        print("Python 3.9+ required", file=sys.stderr)
+        return 2
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.workers < 1:
+        args.workers = 1
+    if args.workers > 2000:
+        args.workers = 2000
+    try:
+        return int(args.func(args) or 0)
+    except KeyboardInterrupt:
+        print("\nلغو شد.", file=sys.stderr)
+        return 130
+    except Exception as exc:  # noqa: BLE001
+        print(f"خطا: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

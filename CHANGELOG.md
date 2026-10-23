@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.37 / panel 1.3.98
+- **Reality scanners**: `jojonet-scan` / منوی ۳۳ — **JojoSNI** (اسکن SNI)، **JojoCF** (تمام رنج رسمی Cloudflare)، **JojoFastly** (تمام رنج رسمی Fastly). تأخیر TLS از همین سرور؛ ISP مبدأ (همراه‌اول/ایرانسل/…) خودکار برچسب می‌شود. فلگ‌ها: `--scan-sni` / `--scan-cf` / `--scan-fastly` با `--resume` و `--limit`.
+
 ## 1.6.36 / panel 1.3.98
 - **JojoCloak**: نام و پرچم‌های خارجی حذف شد؛ فقط `jojocloak` / `--jojocloak` و برچسب JojoCloak در CLI و پنل.
 - **Path Lab**: رفع ریشه‌ای سنجش (کلید WG، IPv6 نامعتبر، GRE تداخل، `pkill -f` که bash را می‌کشت و iperf صفر می‌شد، هدف SIT/TCP، timeout روی L2TPv3) — QA زنده ۱۶/۱۶ با پهنای باند واقعی.

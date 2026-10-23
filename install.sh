@@ -173,6 +173,12 @@ install_extras_from_dir() {
         install -m755 "$dir/uninstall.sh" /usr/local/bin/jojonet-uninstall
         log "Uninstaller: /usr/local/bin/jojonet-uninstall"
     fi
+    if [[ -f "$dir/jojonet-scan" ]]; then
+        install -d -m755 "$SHARE_DIR"
+        install -m755 "$dir/jojonet-scan" /usr/local/bin/jojonet-scan
+        install -m755 "$dir/jojonet-scan" "$SHARE_DIR/jojonet-scan"
+        log "Reality scanners: /usr/local/bin/jojonet-scan"
+    fi
 }
 
 install_extras_from_github() {
@@ -186,6 +192,12 @@ install_extras_from_github() {
     if download_with_mirrors "uninstall.sh" "$tmp"; then
         install -m755 "$tmp" /usr/local/bin/jojonet-uninstall
         log "Uninstaller downloaded"
+    fi
+    if download_with_mirrors "jojonet-scan" "$tmp"; then
+        install -d -m755 "$SHARE_DIR"
+        install -m755 "$tmp" /usr/local/bin/jojonet-scan
+        install -m755 "$tmp" "$SHARE_DIR/jojonet-scan"
+        log "Reality scanners downloaded"
     fi
     rm -f "$tmp"
 }

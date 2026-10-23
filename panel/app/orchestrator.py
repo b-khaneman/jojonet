@@ -48,7 +48,7 @@ from .validators import (
 )
 
 RETRY_DELAY = 5.0
-BUNDLE_FILES = ("jojonet", "install.sh", "uninstall.sh", "checksums.sha256", "CHANGELOG.md", "README.md", "LICENSE")
+BUNDLE_FILES = ("jojonet", "jojonet-scan", "install.sh", "uninstall.sh", "checksums.sha256", "CHANGELOG.md", "README.md", "LICENSE")
 VERSION_RE = re.compile(r'^readonly JOJONET_VERSION="([0-9A-Za-z.\-]+)"', re.MULTILINE)
 
 # Core commands every tunnel/relay path needs. Skip apt ONLY when all of these exist
